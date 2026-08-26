@@ -1,4 +1,4 @@
-/* Restaurant / lounge POS — UI */
+/* OpenPOS — responsive retail UI with isolated legacy hospitality styles */
 :root{
   --bg:#0d1117; --panel:#151b23; --panel2:#1b232d; --line:#263140;
   --txt:#e6edf3; --dim:#8b98a5; --dim2:#5d6b7a;
@@ -413,7 +413,7 @@ table.tbl tr:last-child td{border-bottom:0}
   .tline.total b{font-size:17px}
 
   /* --- grids collapse to one column --- */
-  .grid{gap:10px}
+  .grid{gap:10px;grid-template-columns:1fr!important}
   .grid2,.grid3{grid-template-columns:1fr;gap:10px}
   .card-h{padding:11px 12px;flex-wrap:wrap;gap:8px}
   .card-b{padding:12px}
@@ -512,6 +512,8 @@ table.tbl tr:last-child td{border-bottom:0}
   .delivery-line{grid-template-columns:1fr}
   .delivery-line>[data-remove]{width:100%}
   #countWizard .card-b{padding:16px!important}
+  #countWizard .count-jump{display:block}
+  #countWizard .count-jump label{display:block;margin-bottom:6px!important}
   #countWizard h2{font-size:20px!important;overflow-wrap:anywhere}
   #countWizard>.row:last-child{display:grid;grid-template-columns:1fr 1fr}
   #countWizard>.row:last-child .grow{display:none}

@@ -146,6 +146,7 @@ function printZReport(z) {
     tables: [{ title: 'Takings by payment method', head: ['Method', 'Count', 'Total'], right: [1, 2],
       rows: z.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]) }],
     summary: [
-      ['Net sales', (z.net / 100).toFixed(2)], ['Receipts closed', String(z.orders)], ['Covers', String(z.covers)],
+      ['Net sales', (z.net / 100).toFixed(2)], ['Receipts closed', String(z.orders)],
+      ...(s.business_type === 'wines_spirits' ? [] : [['Covers', String(z.covers)]]),
       ['Voids', String(z.voids)], ['Discounts', (z.discounts / 100).toFixed(2)], ['Tips', (z.tips / 100).toFixed(2)] ] });
 }

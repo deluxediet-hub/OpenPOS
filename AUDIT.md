@@ -38,7 +38,8 @@ The workspace now has a focused bottle-shop workflow: barcode/SKU products, live
 - Duplicate M-Pesa confirmation references are rejected.
 - VAT-inclusive KES defaults and no restaurant service charge: an entered KSh 200 price remains KSh 200 while VAT is extracted for reporting.
 - Product selling price, unit cost and gross-margin visibility for management.
-- Product volume, barcode, SKU and KRA item-classification fields.
+- Guided product creation puts standard bottle/can size, retail category and selling unit directly after the product name, followed by barcode/SKU, VAT-inclusive price, cost and stock controls.
+- Retail categories and products use a neutral internal `retail` route; kitchen/bar preparation fields, docket actions and station columns are suppressed throughout retail screens and reports.
 
 ### Alcohol controls
 
@@ -60,7 +61,7 @@ A 2025 national policy proposed raising the threshold to 21, but reporting descr
 - Delivery lines capture quantity, unit cost, optional batch and expiry.
 - Receiving updates quantity, latest cost, stock movement history and audit history transactionally.
 - Supplier directory stores contact/address/KRA details.
-- End-of-day stocktake freezes sales and presents one item at a time. The operator enters unrecorded added stock and physical stock at hand, or explicitly skips an unchanged item.
+- End-of-day stocktake freezes sales and presents one item at a time. The operator can jump through a product dropdown, move previous/next, and all entered values auto-save while the active quantity remains auto-selected.
 - Full stocktakes calculate variance, post all corrections together and audit the operator. Direct quick corrections remain owner-only.
 - Low-stock and stock-value reporting remains available.
 
@@ -237,6 +238,6 @@ This is an environment limitation, **not a passing test result**. A network-enab
 
 ## 9. Final assessment
 
-This codebase is now materially adapted to a small Kenyan wines and spirits shop rather than merely relabelled restaurant software. The core retail, inventory, receiving, stocktake, age gate, roles, receipt and audit workflows are credible for a supervised pilot.
+This codebase is now materially adapted to a small Kenyan wines and spirits shop rather than merely relabelled restaurant software. The core retail, inventory, receiving, stocktake, responsible-retail notice, roles, receipt and audit workflows are credible for a supervised pilot.
 
 It is **not yet a complete statutory invoicing product** because live eTIMS is absent, and manual M-Pesa references are not equivalent to Daraja confirmation. Resolve the P0 list, run hardware and restore drills, and have the actual deployment reviewed against the shop's current national law, Nairobi County requirements and licence conditions before relying on it for production compliance.

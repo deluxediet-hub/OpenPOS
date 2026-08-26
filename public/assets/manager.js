@@ -80,7 +80,7 @@ const Manager = (() => {
         ${retail ? stat('Units sold', items.reduce((n, i) => n + i.qty, 0), 'products across completed sales') : stat('Per cover', fmt(s.avg_per_cover), 'guests served')}
         ${stat('Gross profit', fmt(s.gross_profit), s.margin + '% margin · COGS ' + fmt(s.cogs))}
         ${stat('VAT collected', fmt(s.vat_collected), `${State.settings.vat_rate}% (${State.settings.tax_mode})`)}
-        ${stat('Discounts & voids', fmt(s.discounts), s.orders_void + ' voided checks', 'warn')}
+        ${stat('Discounts & voids', fmt(s.discounts), s.orders_void + (retail ? ' voided sales' : ' voided checks'), 'warn')}
       </div>
       <div class="grid" style="grid-template-columns:1.25fr 1fr">
         <div class="card"><div class="card-h"><h3>Sales by hour — ${range.from}</h3></div>
@@ -108,14 +108,14 @@ const Manager = (() => {
         </div>
       </div>
       <div class="grid" style="grid-template-columns:1.25fr 1fr;margin-top:14px">
-        <div class="card"><div class="card-h"><h3>Top sellers today</h3></div>
+        <div class="card"><div class="card-h"><h3>${retail ? 'Top products today' : 'Top sellers today'}</h3></div>
           <div style="max-height:300px;overflow:auto">
-            <table class="tbl"><thead><tr><th>#</th><th>Item</th><th>Station</th><th class="right">Qty</th><th class="right">Revenue</th></tr></thead>
+            <table class="tbl"><thead><tr><th>#</th><th>Product</th>${retail ? '' : '<th>Station</th>'}<th class="right">Qty</th><th class="right">Revenue</th></tr></thead>
             <tbody>${items.slice(0, 12).map((i, n) => `<tr>
               <td class="muted">${n + 1}</td><td><b>${esc(i.name)}</b></td>
-              <td><span class="tag ${i.station}">${i.station}</span></td>
+              ${retail ? '' : `<td><span class="tag ${i.station}">${i.station}</span></td>`}
               <td class="right mono">${i.qty}</td><td class="right mono">${fmt(i.revenue)}</td></tr>`).join('')
-              || '<tr><td colspan="5" class="empty">No sales yet.</td></tr>'}</tbody></table>
+              || `<tr><td colspan="${retail ? 4 : 5}" class="empty">No sales yet.</td></tr>`}</tbody></table>
           </div>
         </div>
         <div class="card"><div class="card-h"><h3>Low stock alerts</h3></div>
@@ -159,14 +159,17 @@ const Manager = (() => {
           { title: 'Summary', head: ['Metric', 'Value'], right: [1], rows: [
             ['Net sales', fmt(sm.gross)], ['Gross takings', fmt(sm.paid)], ['Refunds', '-' + fmt(sm.refunded)],
             ['VAT collected', fmt(sm.vat_collected)], ['Tips', fmt(sm.tips)], ['Discounts', fmt(sm.discounts)],
-            ['Receipts closed', String(sm.orders_closed)], ['Covers', String(sm.covers)],
+            ['Receipts closed', String(sm.orders_closed)], [retail ? 'Units sold' : 'Covers', String(retail ? items.reduce((n, i) => n + Number(i.qty || 0), 0) : sm.covers)],
             ['Average ticket', fmt(sm.avg_ticket)] ] },
           { title: 'By payment method', head: ['Method', 'Txns', 'Total'], right: [1, 2],
             rows: sm.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]) },
           { title: 'Top items', head: ['Item', 'Qty', 'Revenue'], right: [1, 2],
             rows: items.slice(0, 25).map((i) => [i.name, String(i.qty), (i.revenue / 100).toFixed(2)]) },
-          { title: retail ? 'By seller' : 'By waiter', head: [retail ? 'Seller' : 'Waiter', retail ? 'Sales' : 'Checks', retail ? 'Orders' : 'Covers', 'Revenue'], right: [1, 2, 3],
-            rows: waiters.map((w) => [w.waiter || 'Unassigned', String(w.orders), String(w.covers), (w.revenue / 100).toFixed(2)]) },
+          retail
+            ? { title: 'By seller', head: ['Seller', 'Sales', 'Revenue'], right: [1, 2],
+                rows: waiters.map((w) => [w.waiter || 'Unassigned', String(w.orders), (w.revenue / 100).toFixed(2)]) }
+            : { title: 'By waiter', head: ['Waiter', 'Checks', 'Covers', 'Revenue'], right: [1, 2, 3],
+                rows: waiters.map((w) => [w.waiter || 'Unassigned', String(w.orders), String(w.covers), (w.revenue / 100).toFixed(2)]) },
           { title: 'By category', head: ['Category', 'Qty', 'Revenue'], right: [1, 2],
             rows: cats.map((c) => [c.category, String(c.qty), (c.revenue / 100).toFixed(2)]) }
         ]
@@ -192,33 +195,33 @@ const Manager = (() => {
           ${stat('Discounts', fmt(s.discounts), s.orders_void + ' voids')}
         </div>
         <div class="grid" style="grid-template-columns:1fr 1fr">
-          <div class="card"><div class="card-h"><h3>Sales by waiter</h3></div>
-            <table class="tbl"><thead><tr><th>${retail ? 'Seller' : 'Waiter'}</th><th class="right">${retail ? 'Sales' : 'Checks'}</th><th class="right">${retail ? 'Orders' : 'Covers'}</th><th class="right">Revenue</th></tr></thead>
+          <div class="card"><div class="card-h"><h3>Sales by ${retail ? 'seller' : 'waiter'}</h3></div>
+            <table class="tbl"><thead><tr><th>${retail ? 'Seller' : 'Waiter'}</th><th class="right">${retail ? 'Sales' : 'Checks'}</th>${retail ? '' : '<th class="right">Covers</th>'}<th class="right">Revenue</th></tr></thead>
             <tbody>${waiters.map((w) => `<tr><td><b>${esc(w.waiter || 'Unassigned')}</b></td>
-              <td class="right mono">${w.orders}</td><td class="right mono">${w.covers}</td>
-              <td class="right mono"><b>${fmt(w.revenue)}</b></td></tr>`).join('') || '<tr><td colspan="4" class="empty">No data.</td></tr>'}</tbody></table>
+              <td class="right mono">${w.orders}</td>${retail ? '' : `<td class="right mono">${w.covers}</td>`}
+              <td class="right mono"><b>${fmt(w.revenue)}</b></td></tr>`).join('') || `<tr><td colspan="${retail ? 3 : 4}" class="empty">No data.</td></tr>`}</tbody></table>
           </div>
           <div class="card"><div class="card-h"><h3>Sales by category</h3></div>
-            <table class="tbl"><thead><tr><th>Category</th><th>Station</th><th class="right">Qty</th><th class="right">Revenue</th></tr></thead>
+            <table class="tbl"><thead><tr><th>Category</th>${retail ? '' : '<th>Station</th>'}<th class="right">Qty</th><th class="right">Revenue</th></tr></thead>
             <tbody>${cats.map((c) => `<tr><td><b>${esc(c.category)}</b></td>
-              <td><span class="tag ${c.station}">${c.station}</span></td>
+              ${retail ? '' : `<td><span class="tag ${c.station}">${c.station}</span></td>`}
               <td class="right mono">${c.qty}</td><td class="right mono"><b>${fmt(c.revenue)}</b></td></tr>`).join('')
-              || '<tr><td colspan="4" class="empty">No data.</td></tr>'}</tbody></table>
+              || `<tr><td colspan="${retail ? 3 : 4}" class="empty">No data.</td></tr>`}</tbody></table>
           </div>
         </div>
         <div class="card" style="margin-top:14px"><div class="card-h"><h3>Item performance</h3>
           <span class="grow"></span><span class="muted tiny">${items.length} items sold</span></div>
           <div class="scroll-x"><table class="tbl">
-            <thead><tr><th>Item</th><th>Station</th><th class="right">Lines</th><th class="right">Qty</th>
+            <thead><tr><th>${retail ? 'Product' : 'Item'}</th>${retail ? '' : '<th>Station</th>'}<th class="right">Lines</th><th class="right">Qty</th>
             <th class="right">COGS</th><th class="right">Revenue</th><th class="right">Margin</th></tr></thead>
             <tbody>${items.map((i) => {
               const marg = i.revenue ? Math.round(((i.revenue - (i.cogs || 0)) / i.revenue) * 100) : 0;
-              return `<tr><td><b>${esc(i.name)}</b></td><td><span class="tag ${i.station}">${i.station}</span></td>
+              return `<tr><td><b>${esc(i.name)}</b></td>${retail ? '' : `<td><span class="tag ${i.station}">${i.station}</span></td>`}
                 <td class="right mono">${i.lines}</td><td class="right mono">${i.qty}</td>
                 <td class="right mono muted">${fmt(i.cogs || 0)}</td>
                 <td class="right mono"><b>${fmt(i.revenue)}</b></td>
                 <td class="right"><span class="tag ${marg >= 60 ? 'ok' : marg >= 40 ? 'warn' : 'bad'}">${marg}%</span></td></tr>`;
-            }).join('') || '<tr><td colspan="7" class="empty">No sales in this range.</td></tr>'}</tbody></table></div>
+            }).join('') || `<tr><td colspan="${retail ? 6 : 7}" class="empty">No sales in this range.</td></tr>`}</tbody></table></div>
         </div>`;
       window.__rptCsv = { s, items, waiters, cats, q, t };
     };
@@ -238,8 +241,9 @@ const Manager = (() => {
     body.querySelector('#rt').onchange = (e) => { range.to = e.target.value; go(); };
     body.querySelector('#exp').onclick = () => {
       const r = window.__rptCsv; if (!r) return toast('Load a report first', 'err');
-      const rows = [['Item', 'Station', 'Qty', 'Revenue', 'COGS'],
-        ...r.items.map((i) => [i.name, i.station, i.qty, (i.revenue / 100).toFixed(2), ((i.cogs || 0) / 100).toFixed(2)])];
+      const rows = retail
+        ? [['Product', 'Qty', 'Revenue', 'COGS'], ...r.items.map((i) => [i.name, i.qty, (i.revenue / 100).toFixed(2), ((i.cogs || 0) / 100).toFixed(2)])]
+        : [['Item', 'Station', 'Qty', 'Revenue', 'COGS'], ...r.items.map((i) => [i.name, i.station, i.qty, (i.revenue / 100).toFixed(2), ((i.cogs || 0) / 100).toFixed(2)])];
       const csv = rows.map((x) => x.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
@@ -249,9 +253,9 @@ const Manager = (() => {
   }
 
   /* ------------------------------ menu ------------------------------- */
-  let menuCat = null, menuSearch = '';
+  let menuCat = null, menuSearch = '', menuSearchTimer = null;
   function menu(body) {
-    const cats = State.categories;
+    const cats = State.categories, retail = State.settings.business_type === 'wines_spirits';
     if (menuCat === null && cats.length) menuCat = cats[0].id;
     const items = State.menu.filter((m) =>
       (menuCat === null || m.category_id === menuCat) &&
@@ -274,8 +278,8 @@ const Manager = (() => {
               ${esc(c.name)} <span class="muted tiny">${State.menu.filter((m) => m.category_id === c.id).length}</span></button>`).join('')}
           </div>
         </div>
-        <div class="card"><div class="card-h"><h3>${menuCat === null ? 'All items' : esc((cats.find((c) => c.id === menuCat) || {}).name)}</h3>
-          <span class="grow"></span><span class="muted tiny">${items.length} items</span></div>
+        <div class="card"><div class="card-h"><h3>${menuCat === null ? 'All products' : esc((cats.find((c) => c.id === menuCat) || {}).name)}</h3>
+          <span class="grow"></span><span class="muted tiny">${items.length} products</span></div>
           <div class="scroll-x"><table class="tbl">
             <thead><tr><th>Product / code</th><th>Category</th><th class="right">Stock</th><th class="right">Cost</th>
             <th class="right">Price</th><th class="right">Margin</th><th>Avail</th><th></th></tr></thead>
@@ -288,8 +292,8 @@ const Manager = (() => {
                 <td class="right mono muted">${fmt(m.cost)}</td>
                 <td class="right mono"><b>${fmt(m.price)}</b></td>
                 <td class="right"><span class="tag ${marg >= 60 ? 'ok' : marg >= 40 ? 'warn' : 'bad'}">${marg}%</span></td>
-                <td>${canEdit() ? `<button class="btn xs ${m.available ? 'green' : 'red'}" data-86="${m.id}">${m.available ? 'Available' : '86'}</button>`
-                  : `<span class="tag ${m.available ? 'ok' : 'bad'}">${m.available ? 'yes' : '86'}</span>`}</td>
+                <td>${canEdit() ? `<button class="btn xs ${m.available ? 'green' : 'red'}" data-avail="${m.id}">${m.available ? 'Available' : (retail ? 'Unavailable' : '86')}</button>`
+                  : `<span class="tag ${m.available ? 'ok' : 'bad'}">${m.available ? 'yes' : (retail ? 'unavailable' : '86')}</span>`}</td>
                 <td class="right nowrap">${canEdit() ? `<button class="btn xs ghost" data-e="${m.id}">Edit</button>
                   <button class="btn xs red" data-d="${m.id}">×</button>` : ''}</td>
               </tr>`;
@@ -297,17 +301,22 @@ const Manager = (() => {
         </div>
       </div>`;
 
-    body.querySelector('#ms').oninput = (e) => { menuSearch = e.target.value; menu(body); };
+    const menuSearchInput = body.querySelector('#ms');
+    menuSearchInput.oninput = (e) => {
+      menuSearch = e.target.value; clearTimeout(menuSearchTimer);
+      menuSearchTimer = setTimeout(() => menu(body), 120);
+    };
+    if (menuSearch) setTimeout(() => { const i = body.querySelector('#ms'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 0);
     body.querySelectorAll('[data-c]').forEach((b) => b.onclick = () => {
       menuCat = b.dataset.c === 'null' ? null : Number(b.dataset.c); menu(body);
     });
     if (canEdit()) {
       body.querySelector('#add').onclick = () => itemForm(null, body);
       body.querySelector('#addCat').onclick = () => catForm(body);
-      body.querySelectorAll('[data-86]').forEach((b) => b.onclick = async () => {
-        const m = State.menu.find((x) => x.id === Number(b.dataset[86]));
+      body.querySelectorAll('[data-avail]').forEach((b) => b.onclick = async () => {
+        const m = State.menu.find((x) => x.id === Number(b.dataset.avail));
         await api('/api/menu-items/' + m.id, { method: 'PUT', body: { available: m.available ? 0 : 1 } });
-        await reload(); menu(body); toast(m.available ? m.name + ' marked 86' : m.name + ' back available', 'ok');
+        await reload(); menu(body); toast(m.available ? m.name + ' marked unavailable' : m.name + ' is available again', 'ok');
       });
       body.querySelectorAll('[data-e]').forEach((b) => b.onclick = () =>
         itemForm(State.menu.find((x) => x.id === Number(b.dataset.e)), body));
@@ -322,83 +331,102 @@ const Manager = (() => {
   }
 
   function catForm(body) {
+    const retail = State.settings.business_type === 'wines_spirits';
     modal({
       title: 'New category',
-      body: `<label class="fld">Name</label><input class="inp" id="cn" placeholder="e.g. Weekend Brunch">
-        <div style="margin-top:12px"><label class="fld">Station</label>
-          <select class="inp" id="cs"><option value="kitchen">Kitchen</option><option value="bar">Bar</option></select></div>`,
-      footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Create</button>`
+      body: `<label class="fld">Category name</label><input class="inp" id="cn" placeholder="${retail ? 'e.g. Whisky, Wine, Beer & Cider' : 'e.g. Weekend Brunch'}">
+        ${retail ? '<p class="tiny muted" style="margin-top:10px">Categories group products on the till and in sales reports.</p>' : `<div style="margin-top:12px"><label class="fld">Preparation station</label>
+          <select class="inp" id="cs"><option value="kitchen">Kitchen</option><option value="bar">Bar</option></select></div>`}`,
+      footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Create category</button>`
     });
     const ov = document.querySelector('#modalRoot .ov');
     ov.querySelector('[data-no]').onclick = closeModal;
     ov.querySelector('[data-yes]').onclick = async () => {
+      const name = ov.querySelector('#cn').value.trim();
+      if (!name) return toast('Category name is required', 'err');
       try {
-        await api('/api/categories', { body: { name: ov.querySelector('#cn').value, station: ov.querySelector('#cs').value } });
+        await api('/api/categories', { body: { name, station: retail ? 'retail' : ov.querySelector('#cs').value } });
         closeModal(); await reload(); menu(body); toast('Category added', 'ok');
       } catch (e) { toast(e.message, 'err'); }
     };
   }
 
   function itemForm(m, body) {
-    const isNew = !m;
-    m = m || { name: '', price: 0, cost: 0, station: 'kitchen', available: 1, category_id: menuCat || State.categories[0].id };
+    const isNew = !m, retail = State.settings.business_type === 'wines_spirits';
+    if (!State.categories.length) return toast('Create a category before adding products', 'err');
+    m = m || { name: '', price: 0, cost: 0, station: retail ? 'retail' : 'kitchen', available: 1,
+      category_id: menuCat || State.categories[0].id, volume_ml: 750, stock_unit: 'bottle', stock_min_qty: 4 };
+    const sizes = [50, 100, 200, 250, 300, 330, 350, 375, 500, 700, 750, 1000, 1500, 2000, 3000, 4500, 5000];
+    const currentSize = Number(m.volume_ml) || 750;
+    const sizeOptions = [...(!sizes.includes(currentSize) ? [currentSize] : []), ...sizes]
+      .map((v) => `<option value="${v}" ${v === currentSize ? 'selected' : ''}>${v >= 1000 ? (v / 1000) + ' L' : v + ' ml'}</option>`).join('');
+    const unit = m.stock_unit || 'bottle';
+    const retailIdentity = `<div class="grid3" style="margin-top:12px">
+      <div><label class="fld">Size</label><select class="inp" id="ivol">${sizeOptions}</select></div>
+      <div><label class="fld">Category</label><select class="inp" id="icat">${State.categories.map((c) =>
+        `<option value="${c.id}" ${c.id === m.category_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
+      <div><label class="fld">Selling unit</label><select class="inp" id="iunit">${['bottle','can','pack','crate','carton','piece'].map((u) =>
+        `<option value="${u}" ${u === unit ? 'selected' : ''}>${u[0].toUpperCase() + u.slice(1)}</option>`).join('')}</select></div>
+    </div>`;
+    const legacyIdentity = `<div class="grid3" style="margin-top:12px">
+      <div><label class="fld">Category</label><select class="inp" id="icat">${State.categories.map((c) =>
+        `<option value="${c.id}" ${c.id === m.category_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
+      <div><label class="fld">Station</label><select class="inp" id="ist"><option value="kitchen" ${m.station === 'kitchen' ? 'selected' : ''}>Kitchen</option><option value="bar" ${m.station === 'bar' ? 'selected' : ''}>Bar</option></select></div>
+      <div><label class="fld">Volume (ml)</label><input class="inp" id="ivol" type="number" min="0" value="${m.volume_ml || ''}"></div>
+    </div>`;
     modal({
       title: isNew ? 'New product' : 'Edit — ' + m.name,
-      body: `<label class="fld">Product name</label><input class="inp" id="in" value="${esc(m.name)}" placeholder="Brand, variant and bottle size">
+      body: `<label class="fld">Product name</label><input class="inp" id="in" value="${esc(m.name)}" placeholder="e.g. Jameson Irish Whiskey">
+        ${retail ? retailIdentity : legacyIdentity}
         <div class="grid3" style="margin-top:12px">
-          <div><label class="fld">SKU / shop code</label><input class="inp mono" id="isku" value="${esc(m.sku || '')}" placeholder="e.g. WHI-JAM-750"></div>
+          <div><label class="fld">SKU / shop code</label><input class="inp mono" id="isku" value="${esc(m.sku || '')}" placeholder="WHI-JAM-750"></div>
           <div><label class="fld">Barcode</label><input class="inp mono" id="ibar" value="${esc(m.barcode || '')}" inputmode="numeric" placeholder="Scan or type EAN/UPC"></div>
-          <div><label class="fld">Volume (ml)</label><input class="inp" id="ivol" type="number" min="0" value="${m.volume_ml || ''}" placeholder="750"></div>
+          <div><label class="fld">KRA classification</label><input class="inp mono" id="ikra" value="${esc(m.kra_item_code || '')}" placeholder="For live eTIMS"></div>
         </div>
         <div class="grid3" style="margin-top:12px">
-          <div><label class="fld">Selling price (${sym()})</label><input class="inp" id="ip" type="number" step="0.01" value="${(m.price/100).toFixed(2)}"></div>
-          <div><label class="fld">Unit cost (${sym()})</label><input class="inp" id="ic" type="number" step="0.01" value="${(m.cost/100).toFixed(2)}"></div>
+          <div><label class="fld">Selling price (${sym()}, VAT incl.)</label><input class="inp" id="ip" type="number" min="0" step="0.01" value="${(m.price/100).toFixed(2)}"></div>
+          <div><label class="fld">Unit cost (${sym()})</label><input class="inp" id="ic" type="number" min="0" step="0.01" value="${(m.cost/100).toFixed(2)}"></div>
           <div><label class="fld">Gross margin</label><input class="inp" id="im" disabled></div>
         </div>
-        <div class="grid2" style="margin-top:12px">
-          <div><label class="fld">Category</label><select class="inp" id="icat">${State.categories.map((c) =>
-              `<option value="${c.id}" ${c.id === m.category_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
-          ${State.settings.business_type === 'wines_spirits'
-            ? `<div><label class="fld">KRA item classification code</label><input class="inp mono" id="ikra" value="${esc(m.kra_item_code || '')}" placeholder="Required for live eTIMS"></div>`
-            : `<div><label class="fld">Station</label><select class="inp" id="ist"><option value="kitchen" ${m.station === 'kitchen' ? 'selected' : ''}>Kitchen</option><option value="bar" ${m.station === 'bar' ? 'selected' : ''}>Bar</option></select></div>`}
-        </div>
-        ${isNew && State.settings.business_type === 'wines_spirits' ? `<div class="grid3" style="margin-top:12px">
-          <div><label class="fld">Opening stock</label><input class="inp" id="ioq" type="number" min="0" value="0"></div>
-          <div><label class="fld">Reorder level</label><input class="inp" id="imin" type="number" min="0" value="4"></div>
-          <div><label class="fld">Stock unit</label><select class="inp" id="iunit"><option>bottle</option><option>can</option><option>pack</option><option>crate</option><option>carton</option><option>piece</option></select></div>
+        ${retail ? `<div class="grid2" style="margin-top:12px">
+          ${isNew ? '<div><label class="fld">Opening stock</label><input class="inp" id="ioq" type="number" min="0" step="1" value="0"></div>' : ''}
+          <div><label class="fld">Low-stock alert at</label><input class="inp" id="imin" type="number" min="0" step="1" value="${m.stock_min_qty ?? 4}"></div>
         </div>` : ''}
-        <div style="margin-top:12px"><label class="row" style="gap:8px;cursor:pointer">
+        <div style="margin-top:14px"><label class="row" style="gap:8px;cursor:pointer">
           <input type="checkbox" id="ia" ${m.available ? 'checked' : ''}> Available for sale</label></div>`,
-      footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>${isNew ? 'Create item' : 'Save changes'}</button>`
+      footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>${isNew ? 'Create product' : 'Save changes'}</button>`
     });
     const ov = document.querySelector('#modalRoot .ov');
     const upd = () => {
-      const p = Number(ov.querySelector('#ip').value) || 0, c = Number(ov.querySelector('#ic').value) || 0;
-      ov.querySelector('#im').value = p ? Math.round(((p - c) / p) * 100) + '%' : '—';
+      const price = Number(ov.querySelector('#ip').value) || 0, cost = Number(ov.querySelector('#ic').value) || 0;
+      ov.querySelector('#im').value = price ? Math.round(((price - cost) / price) * 100) + '%' : '—';
     };
     ov.querySelector('#ip').oninput = upd; ov.querySelector('#ic').oninput = upd; upd();
     ov.querySelector('[data-no]').onclick = closeModal;
     ov.querySelector('[data-yes]').onclick = async () => {
+      const volume = Number(ov.querySelector('#ivol').value) || null;
+      let productName = ov.querySelector('#in').value.trim();
+      if (retail && volume) {
+        productName = productName.replace(/\s*\d+(?:\.\d+)?\s*(?:ml|l)\s*$/i, '').trim();
+        productName += ' ' + (volume >= 1000 ? `${volume / 1000}L` : `${volume}ml`);
+      }
       const payload = {
-        name: ov.querySelector('#in').value.trim(),
-        price: Number(ov.querySelector('#ip').value),
-        cost: Number(ov.querySelector('#ic').value),
-        category_id: Number(ov.querySelector('#icat').value),
-        station: ov.querySelector('#ist')?.value || 'bar',
-        sku: ov.querySelector('#isku').value.trim(),
-        barcode: ov.querySelector('#ibar').value.trim(),
-        volume_ml: Number(ov.querySelector('#ivol').value) || null,
-        kra_item_code: ov.querySelector('#ikra')?.value.trim() || '',
-        opening_qty: Number(ov.querySelector('#ioq')?.value || 0),
-        min_qty: Number(ov.querySelector('#imin')?.value || 0),
-        unit: ov.querySelector('#iunit')?.value || 'bottle',
+        name: productName, price: Number(ov.querySelector('#ip').value),
+        cost: Number(ov.querySelector('#ic').value), category_id: Number(ov.querySelector('#icat').value),
+        station: retail ? 'retail' : ov.querySelector('#ist').value,
+        sku: ov.querySelector('#isku').value.trim(), barcode: ov.querySelector('#ibar').value.trim(),
+        volume_ml: volume,
+        kra_item_code: ov.querySelector('#ikra').value.trim(), opening_qty: Number(ov.querySelector('#ioq')?.value || 0),
+        min_qty: Number(ov.querySelector('#imin')?.value || 0), unit: ov.querySelector('#iunit')?.value || 'piece',
         available: ov.querySelector('#ia').checked ? 1 : 0
       };
-      if (!payload.name) return toast('Name is required', 'err');
+      if (!payload.name) return toast('Product name is required', 'err');
+      if (!payload.category_id) return toast('Choose a category', 'err');
+      if (!(payload.price >= 0)) return toast('Enter a valid selling price', 'err');
       try {
         if (isNew) await api('/api/menu-items', { body: payload });
         else await api('/api/menu-items/' + m.id, { method: 'PUT', body: payload });
-        closeModal(); await reload(); menu(body); toast('Saved', 'ok');
+        closeModal(); await reload(); menu(body); toast('Product saved', 'ok');
       } catch (e) { toast(e.message, 'err'); }
     };
   }
@@ -415,10 +443,10 @@ const Manager = (() => {
         ${stat('Low stock', low.length, low.length ? 'needs reordering' : 'all healthy', low.length ? 'warn' : '')}
         ${stat('Out of stock', st.filter((x) => x.qty <= 0).length, 'items at zero')}
         <span class="grow"></span>
-        ${canManage() ? '<button class="btn primary" id="addS" style="align-self:center">+ New stock item</button>' : ''}
+        ${canManage() && State.settings.business_type !== 'wines_spirits' ? '<button class="btn primary" id="addS" style="align-self:center">+ New stock item</button>' : ''}
       </div>
       <div class="card"><div class="card-h"><h3>Inventory</h3><span class="grow"></span>
-        <span class="muted tiny">Received = add stock · Adjust = count correction / wastage</span></div>
+        <span class="muted tiny">${State.settings.business_type === 'wines_spirits' ? 'Use Deliveries for received stock and Stocktakes for end-of-day counts' : 'Received = add stock · Adjust = count correction / wastage'}</span></div>
         <div class="scroll-x"><table class="tbl">
           <thead><tr><th>Item</th><th>Unit</th><th class="right">On hand</th><th class="right">Min</th>
           <th class="right">Unit cost</th><th class="right">Value</th><th>Status</th><th></th></tr></thead>
@@ -428,9 +456,9 @@ const Manager = (() => {
             <td class="right mono muted">${fmt(x.cost)}</td>
             <td class="right mono">${fmt(x.qty * x.cost)}</td>
             <td>${x.qty <= 0 ? '<span class="tag bad">Out</span>' : x.qty <= x.min_qty ? '<span class="tag warn">Low</span>' : '<span class="tag ok">OK</span>'}</td>
-            <td class="right nowrap">${canManage() ? `<button class="btn xs green" data-rec="${x.id}">Quick receive</button>
+            <td class="right nowrap">${canManage() ? `${State.settings.business_type === 'wines_spirits' ? '' : `<button class="btn xs green" data-rec="${x.id}">Quick receive</button>`}
               <button class="btn xs ghost" data-adj="${x.id}">Quick correction</button>
-              <button class="btn xs ghost" data-se="${x.id}">Edit</button>` : '<span class="tiny muted">Owner controlled</span>'}</td>
+              <button class="btn xs ghost" data-se="${x.id}">Edit controls</button>` : '<span class="tiny muted">Owner controlled</span>'}</td>
           </tr>`).join('')}</tbody></table></div>
       </div>
       <div class="card" style="margin-top:14px"><div class="card-h"><h3>Recent stock movement</h3><span class="grow"></span><span class="tiny muted">Sales, deliveries and counts</span></div>
@@ -594,7 +622,7 @@ const Manager = (() => {
           <div class="tiny muted" style="margin-top:4px">Load a Kenyan wines &amp; spirits starter catalogue
           (products, selling prices, costs and bottle stock) as a starting point. Never overwrites existing data.</div></div>
         <span class="grow"></span>
-        <button class="btn" id="loadSample" ${hasMenu ? 'disabled title="A menu already exists"' : ''}>Load sample menu</button>
+        <button class="btn" id="loadSample" ${hasMenu ? 'disabled title="Products already exist"' : ''}>Load starter products</button>
       </div></div>
       <div class="grid" style="grid-template-columns:1fr 1fr">
         <div class="card"><div class="card-h"><h3>Business details</h3></div><div class="card-b">
@@ -653,11 +681,11 @@ const Manager = (() => {
       </div>` : ''}`;
 
     const ls = body.querySelector('#loadSample');
-    if (ls) ls.onclick = () => confirmBox('Load sample menu',
+    if (ls) ls.onclick = () => confirmBox('Load starter products',
       'Adds a starter wines and spirits catalogue with matching bottle stock. Your existing data is untouched.', {
         okLabel: 'Load sample', onOk: async () => {
           try { await api('/api/setup/sample', { body: {} }); await Manager.reload();
-            settings(body); toast('Sample menu loaded', 'ok'); }
+            settings(body); toast('Starter products loaded', 'ok'); }
           catch (e) { toast(e.message, 'err'); }
         } });
 

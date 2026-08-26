@@ -137,7 +137,9 @@ const listMenu = () => db.prepare(`
     (SELECT si.min_qty FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
       WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_min_qty,
     (SELECT si.id FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
-      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_item_id
+      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_item_id,
+    (SELECT si.unit FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
+      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_unit
   FROM menu_items m JOIN categories c ON c.id = m.category_id
   ORDER BY c.sort_order, m.sort_order, m.name`).all();
 
@@ -202,13 +204,14 @@ app.post('/api/menu-items', requireAuth, requireRole('manager', 'admin'), (req, 
     sku = '', barcode = '', volume_ml = null, kra_item_code = '', tax_type = 'B',
     opening_qty = 0, min_qty = 0, unit = 'bottle' } = req.body;
   if (!name || !category_id) return bad(res, 'Name and category required');
+  const effectiveStation = getSetting('business_type') === 'wines_spirits' ? 'retail' : station;
   if (barcode && db.prepare('SELECT id FROM menu_items WHERE barcode=?').get(String(barcode).trim())) return bad(res, 'Barcode already belongs to another product');
   if (sku && db.prepare('SELECT id FROM menu_items WHERE sku=?').get(String(sku).trim())) return bad(res, 'SKU already belongs to another product');
   let itemId;
   const tx = db.transaction(() => {
     itemId = db.prepare(`INSERT INTO menu_items(category_id,name,price,cost,station,available,sort_order,sku,barcode,volume_ml,kra_item_code,tax_type)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(category_id, name.trim(), Math.round(Number(price) * 100),
-      Math.round(Number(cost) * 100), station, available ? 1 : 0, 999, String(sku).trim() || null,
+      Math.round(Number(cost) * 100), effectiveStation, available ? 1 : 0, 999, String(sku).trim() || null,
       String(barcode).trim() || null, Number(volume_ml) || null, String(kra_item_code).trim() || null, tax_type || 'B').lastInsertRowid;
     if (getSetting('business_type') === 'wines_spirits') {
       const opening = Number(opening_qty) || 0;
@@ -232,12 +235,13 @@ app.put('/api/menu-items/:id', requireAuth, requireRole('manager', 'admin'), (re
     sku = b.sku !== undefined ? String(b.sku).trim() : cur.sku;
   if (barcode && db.prepare('SELECT id FROM menu_items WHERE barcode=? AND id!=?').get(barcode, cur.id)) return bad(res, 'Barcode already belongs to another product');
   if (sku && db.prepare('SELECT id FROM menu_items WHERE sku=? AND id!=?').get(sku, cur.id)) return bad(res, 'SKU already belongs to another product');
+  const effectiveStation = getSetting('business_type') === 'wines_spirits' ? 'retail' : (b.station ?? cur.station);
   const tx = db.transaction(() => {
     db.prepare(`UPDATE menu_items SET category_id=?,name=?,price=?,cost=?,station=?,available=?,sku=?,barcode=?,volume_ml=?,kra_item_code=?,tax_type=? WHERE id=?`)
       .run(b.category_id ?? cur.category_id, b.name ?? cur.name,
         b.price != null ? Math.round(Number(b.price) * 100) : cur.price,
         b.cost != null ? Math.round(Number(b.cost) * 100) : cur.cost,
-        b.station ?? cur.station, b.available != null ? (b.available ? 1 : 0) : cur.available,
+        effectiveStation, b.available != null ? (b.available ? 1 : 0) : cur.available,
         sku || null, barcode || null, b.volume_ml !== undefined ? (Number(b.volume_ml) || null) : cur.volume_ml,
         b.kra_item_code !== undefined ? (String(b.kra_item_code).trim() || null) : cur.kra_item_code,
         b.tax_type ?? cur.tax_type, cur.id);
@@ -273,16 +277,18 @@ app.delete('/api/menu-items/:id', requireAuth, requireRole('manager', 'admin'), 
 app.post('/api/categories', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const { name, station = 'kitchen' } = req.body;
   if (!name) return bad(res, 'Name required');
+  const effectiveStation = getSetting('business_type') === 'wines_spirits' ? 'retail' : station;
   const r = db.prepare('INSERT INTO categories(name,station,sort_order) VALUES(?,?,?)')
-    .run(name.trim(), station, db.prepare('SELECT COALESCE(MAX(sort_order),0)+1 s FROM categories').get().s);
+    .run(name.trim(), effectiveStation, db.prepare('SELECT COALESCE(MAX(sort_order),0)+1 s FROM categories').get().s);
   broadcast('menu');
   res.json(db.prepare('SELECT * FROM categories WHERE id=?').get(r.lastInsertRowid));
 });
 app.put('/api/categories/:id', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const c = db.prepare('SELECT * FROM categories WHERE id=?').get(req.params.id);
   if (!c) return bad(res, 'Not found', 404);
+  const station = getSetting('business_type') === 'wines_spirits' ? 'retail' : (req.body.station ?? c.station);
   db.prepare('UPDATE categories SET name=?, station=? WHERE id=?')
-    .run(req.body.name ?? c.name, req.body.station ?? c.station, c.id);
+    .run(req.body.name ?? c.name, station, c.id);
   broadcast('menu');
   res.json(db.prepare('SELECT * FROM categories WHERE id=?').get(c.id));
 });
@@ -608,8 +614,11 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
     if (tip) db.prepare('UPDATE orders SET tip = tip + ? WHERE id=?').run(tip, o.id);
     if (customer) db.prepare('UPDATE orders SET customer_id=? WHERE id=?').run(customer.id, o.id);
 
-    // mark served items as billed-out
-    db.prepare("UPDATE order_items SET status='served' WHERE order_id=? AND status IN ('sent','ready')").run(o.id);
+    // Finalise retail units without exposing hospitality preparation states.
+    if (s.business_type === 'wines_spirits')
+      db.prepare("UPDATE order_items SET status='sold' WHERE order_id=? AND status!='void'").run(o.id);
+    else
+      db.prepare("UPDATE order_items SET status='served' WHERE order_id=? AND status IN ('sent','ready')").run(o.id);
     const after = db.prepare('SELECT COALESCE(SUM(amount),0) p FROM payments WHERE order_id=?').get(o.id).p;
 
     if (after >= d.totals.grand_total + tip) {
@@ -1270,6 +1279,11 @@ app.get('/api/shift-clearing', requireAuth, requireRole('seller', 'cashier', 'ma
   const byStation = q(`SELECT oi.station, COALESCE(SUM(oi.price*oi.qty),0) v, COUNT(*) lines
     FROM order_items oi JOIN orders o ON o.id=oi.order_id
     WHERE o.shift_id=? AND o.status='closed' AND oi.status!='void' GROUP BY oi.station`);
+  const byCategory = q(`SELECT COALESCE(c.name,'Uncategorised') category,
+      COALESCE(SUM(oi.price*oi.qty),0) v, COALESCE(SUM(oi.qty),0) units
+    FROM order_items oi JOIN orders o ON o.id=oi.order_id
+    LEFT JOIN menu_items m ON m.id=oi.menu_item_id LEFT JOIN categories c ON c.id=m.category_id
+    WHERE o.shift_id=? AND o.status='closed' AND oi.status!='void' GROUP BY c.id,c.name ORDER BY v DESC`);
   const tips = one(`SELECT COALESCE(SUM(tip),0) v FROM payments WHERE shift_id=?`);
   const payouts = one(`SELECT COALESCE(SUM(amount),0) v FROM cash_payouts WHERE shift_id=?`);
   const covers = one(`SELECT COALESCE(SUM(people),0) v FROM orders WHERE shift_id=? AND status='closed'`);
@@ -1278,7 +1292,8 @@ app.get('/api/shift-clearing', requireAuth, requireRole('seller', 'cashier', 'ma
   if (s) drawer = s.status !== 'closed' ? drawerFigures(s)
     : { expected: s.expected_cash, counted: s.counted_cash, variance: s.variance,
       expected_mpesa: s.expected_mpesa, counted_mpesa: s.counted_mpesa, mpesa_variance: s.mpesa_variance, payouts };
-  res.json({ shift: s || null, by_method: byMethod, by_station: byStation, tips, payouts, covers, orders: ordersN, drawer });
+  res.json({ shift: s || null, by_method: byMethod, by_station: byStation, by_category: byCategory,
+    tips, payouts, covers, units: byCategory.reduce((n, x) => n + Number(x.units || 0), 0), orders: ordersN, drawer });
 });
 
 /* ==================== OPEN BAR TABS / PRE-AUTH (3.8) ==================== */
@@ -1690,10 +1705,17 @@ app.post('/api/qr/:token/items', (req, res) => {
 });
 
 /* ------------------------------- frontend ------------------------------- */
-app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
+/* Legacy hospitality screens stay available only to migrated restaurant installs. */
+app.get(['/kds', '/kds.html'], (req, res, next) => {
+  if (getSetting('business_type') === 'wines_spirits') return res.redirect('/');
+  next();
+});
 app.get('/kds', (req, res) => res.sendFile(path.join(__dirname, 'public', 'kds.html')));
-/* Guest self-ordering page, reached by scanning a table's QR code */
-app.get('/order/:token', (req, res) => res.sendFile(path.join(__dirname, 'public', 'order.html')));
+app.get('/order/:token', (req, res, next) => {
+  if (getSetting('business_type') === 'wines_spirits') return res.status(404).send('Retail ordering is available at the till.');
+  res.sendFile(path.join(__dirname, 'public', 'order.html'));
+});
+app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 app.get('/healthz', (req, res) => res.json({ ok: true, orders: clients.size }));
 
 const PORT = Number(process.env.PORT) || 3000;

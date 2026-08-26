@@ -127,8 +127,10 @@ const Retail = (() => {
     };
     const draw = () => {
       const item = count.items[index], done = count.items.filter((x) => x.counted != null).length;
-      wizard.innerHTML = `<div class="row" style="margin-bottom:14px"><span class="tag info">Product ${index + 1} of ${count.items.length}</span>
+      wizard.innerHTML = `<div class="row" style="margin-bottom:10px"><span class="tag info">Product ${index + 1} of ${count.items.length}</span>
           <span class="muted small">${done} completed</span><span class="grow"></span><div style="width:180px" class="pbar"><i style="width:${Math.round(done / Math.max(1, count.items.length) * 100)}%"></i></div></div>
+        <div class="row count-jump" style="margin-bottom:14px"><label class="fld" style="margin:0;white-space:nowrap">Jump to product</label>
+          <select class="inp" id="countJump">${count.items.map((x, n) => `<option value="${n}" ${n === index ? 'selected' : ''}>${x.counted != null ? '✓ ' : ''}${n + 1}. ${esc(x.name)}</option>`).join('')}</select></div>
         <div class="card" style="background:#101820"><div class="card-b" style="padding:24px">
           <div class="tiny muted" style="text-transform:uppercase;letter-spacing:.08em">Count this product</div>
           <h2 style="margin:6px 0 4px;font-size:24px">${esc(item.name)}</h2>
@@ -154,8 +156,21 @@ const Retail = (() => {
         diff.textContent = (v > 0 ? '+' : '') + v + ' ' + item.unit;
         diff.style.color = v === 0 ? 'var(--green)' : 'var(--amber)';
       };
-      hand.oninput = update; update(); setTimeout(() => hand.focus(), 20);
-      wizard.querySelector('#countPrev').onclick = () => { if (index > 0) { index--; draw(); } };
+      hand.oninput = update; update(); setTimeout(() => hand.select(), 20);
+      wizard.querySelector('#countJump').onchange = async (e) => {
+        const target = Number(e.target.value);
+        try {
+          if (hand.value !== '') await saveItem(item, Number(hand.value), Number(added.value) || 0);
+          index = target; draw();
+        } catch (err) { toast(err.message, 'err'); }
+      };
+      wizard.querySelector('#countPrev').onclick = async () => {
+        if (index <= 0) return;
+        try {
+          if (hand.value !== '') await saveItem(item, Number(hand.value), Number(added.value) || 0);
+          index--; draw();
+        } catch (err) { toast(err.message, 'err'); }
+      };
       wizard.querySelector('#countSkip').onclick = async () => {
         try { await saveItem(item, item.expected, 0); if (index < count.items.length - 1) index++; draw(); }
         catch (e) { toast(e.message, 'err'); }

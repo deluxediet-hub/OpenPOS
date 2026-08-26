@@ -166,17 +166,17 @@ const Pos = (() => {
           <div class="cats">
             ${State.categories.map((c) => `
               <button class="cat${c.id === State.category && !search ? ' active' : ''}" data-cat="${c.id}">
-                ${esc(c.name)}${c.station === 'bar' ? ' 🍸' : ''}</button>`).join('')}
+                ${esc(c.name)}${!retail && c.station === 'bar' ? ' 🍸' : ''}</button>`).join('')}
           </div>
           <div class="items">
             ${filtered.length ? filtered.map((m) => {
               const live = priceOf(m), rule = ruleFor(m), off = live !== m.price;
-              return `<button class="item${m.available ? '' : ' out'}" data-mid="${m.id}" ${m.available ? '' : 'title="86 — unavailable"'}>
+              return `<button class="item${m.available ? '' : ' out'}" data-mid="${m.id}" ${m.available ? '' : `title="${retail ? 'Out of stock / unavailable' : '86 — unavailable'}"`}>
                 <span class="n">${esc(m.name)}${groupsFor(m.id).length ? ' <span class="tiny" style="color:var(--teal)">▸</span>' : ''}</span>
                 ${retail && (m.sku || m.barcode) ? `<span class="tiny muted mono">${esc(m.sku || m.barcode)}</span>` : ''}
                 ${retail && m.stock_qty != null ? `<span class="tiny" style="color:${m.stock_qty <= 0 ? 'var(--red)' : m.stock_qty <= m.stock_min_qty ? 'var(--amber)' : 'var(--dim)'}">Stock ${m.stock_qty}</span>` : ''}
                 ${off ? `<span class="tiny" style="color:var(--dim2);text-decoration:line-through">${fmt(m.price)}</span>` : ''}
-                <span class="p" style="${off ? 'color:var(--green)' : ''}">${m.available ? fmt(live) : '86'}</span>
+                <span class="p" style="${off ? 'color:var(--green)' : ''}">${m.available ? fmt(live) : (retail ? 'Unavailable' : '86')}</span>
                 ${rule ? `<span class="tiny" style="color:var(--green)">${esc(rule)}</span>` : ''}
               </button>`;
             }).join('') : '<div class="empty">No items match.</div>'}
@@ -185,7 +185,7 @@ const Pos = (() => {
         <div class="bill-panel">
           <div class="bill-head">
             <div class="row" style="justify-content:space-between">
-              <div><b>${retail ? 'Current sale' : 'Current order'}</b><div class="tiny muted">${o.items.length} line(s) · ${o.items.filter(i=>i.status==='pending').length} unsent</div></div>
+              <div><b>${retail ? 'Current sale' : 'Current order'}</b><div class="tiny muted">${retail ? `${o.items.reduce((n, i) => n + i.qty, 0)} unit(s)` : `${o.items.length} line(s) · ${o.items.filter(i=>i.status==='pending').length} unsent`}</div></div>
               <button class="btn sm" id="printBill">🖨 ${retail ? 'Sale slip' : 'Pre-bill'}</button>
             </div>
           </div>
@@ -197,8 +197,8 @@ const Pos = (() => {
                 ${i.modifiers && i.modifiers.length ? `<span class="note">↳ ${i.modifiers.map((x) => esc(x.name)).join(', ')}</span>` : ''}
                 ${i.note ? `<span class="note">↳ ${esc(i.note)}</span>` : ''}
                 <span class="sub">
-                  <span class="tag ${i.station}">${i.station}</span>
-                  <span class="tag ${i.status === 'sent' ? 'info' : i.status === 'ready' ? 'ok' : 'warn'}">${i.status}</span>
+                  ${retail ? '' : `<span class="tag ${i.station}">${i.station}</span>
+                  <span class="tag ${i.status === 'sent' ? 'info' : i.status === 'ready' ? 'ok' : 'warn'}">${i.status}</span>`}
                   <span class="grow" style="flex:1"></span>
                   <span class="qty">
                     <button data-dec="${i.id}">−</button><span>${i.qty}</span><button data-inc="${i.id}">+</button>
@@ -265,8 +265,8 @@ const Pos = (() => {
     if (transferBtn) transferBtn.onclick = () => transferModal(o, host);
     const voidBtn = host.querySelector('#voidBtn');
     if (voidBtn) voidBtn.onclick = () => requireManagerPin('Voiding a whole order needs manager authorisation.', async () => {
-      confirmBox('Void order #' + o.number, 'All items will be voided and the table freed. This cannot be undone.', {
-        danger: true, okLabel: 'Void order', fields: [{ name: 'reason', label: 'Reason', placeholder: 'Guest walked out / wrong order' }],
+      confirmBox(`Void ${retail ? 'sale' : 'order'} #${o.number}`, retail ? 'All products will be removed and the sale cancelled. This cannot be undone.' : 'All items will be voided and the table freed. This cannot be undone.', {
+        danger: true, okLabel: `Void ${retail ? 'sale' : 'order'}`, fields: [{ name: 'reason', label: 'Reason', placeholder: retail ? 'Duplicate / wrong sale' : 'Guest walked out / wrong order' }],
         onOk: async (v) => {
           try { await api(`/api/orders/${o.id}/void`, { body: { reason: v.reason } }); await refresh(); toast('Order voided', 'ok'); closeEditor(host); }
           catch (e) { toast(e.message, 'err'); }
@@ -301,7 +301,7 @@ const Pos = (() => {
     const o = activeOrder();
     const m = State.menu.find((x) => x.id === mid);
     if (!m) return;
-    if (!m.available) return toast(m.name + ' is marked 86 (unavailable)', 'err');
+    if (!m.available) return toast(m.name + (State.settings.business_type === 'wines_spirits' ? ' is unavailable' : ' is marked 86 (unavailable)'), 'err');
     const groups = groupsFor(mid);
     if (groups.length) return modifierPicker(host, m, groups);
     await pushLines(host, o.id, [{ menu_item_id: mid, qty: 1 }]);
@@ -423,12 +423,13 @@ const Pos = (() => {
   function noteLine(host, lineId) {
     const o = activeOrder();
     const line = o.items.find((i) => i.id === lineId);
+    const retail = State.settings.business_type === 'wines_spirits';
     modal({
       title: 'Note — ' + line.name,
-      body: `<label class="fld">Preparation note</label>
-        <input class="inp" id="nt" value="${esc(line.note || '')}" placeholder="e.g. no onions, well done, extra ice">
+      body: `<label class="fld">${retail ? 'Sale note' : 'Preparation note'}</label>
+        <input class="inp" id="nt" value="${esc(line.note || '')}" placeholder="${retail ? 'e.g. gift, chilled, customer request' : 'e.g. no onions, well done, extra ice'}">
         <div class="row" style="margin-top:10px">
-          ${['No onions', 'Well done', 'Extra spicy', 'No ice', 'Gluten free', 'Less sugar']
+          ${(retail ? ['Chilled', 'Gift purchase', 'Customer request'] : ['No onions', 'Well done', 'Extra spicy', 'No ice', 'Gluten free', 'Less sugar'])
             .map((s) => `<button class="btn xs ghost" data-q="${esc(s)}">${esc(s)}</button>`).join('')}
         </div>`,
       footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Save note</button>`

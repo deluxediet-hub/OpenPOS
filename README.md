@@ -44,6 +44,8 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 ## Retail controls included
 
 - Owner-controlled USB/Bluetooth barcode scanner mode; when enabled, scanning from any normal page opens the current sale and adds the matching barcode/SKU
+- Guided product setup with size, category and selling-unit dropdowns; restaurant preparation fields never appear in retail mode
+- Stocktake product jumper with automatic save, previous/next navigation and input auto-selection
 - Live stock shown at the till with optional negative-stock prevention
 - Supplier directory and invoice/delivery-note receiving
 - Batch/expiry capture on delivery lines

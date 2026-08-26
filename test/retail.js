@@ -32,9 +32,12 @@ const mk = () => {
   ck('seller opens morning till with cash and M-Pesa balances', r.status === 200 && r.data.status === 'open', JSON.stringify(r.data));
 
   const cat = boot.categories[0];
+  r = await admin.post('/api/categories', { name: 'Champagne', station: 'kitchen' });
+  ck('new retail category has no kitchen/bar station semantics', r.status === 200 && r.data.station === 'retail', JSON.stringify(r.data));
   r = await admin.post('/api/menu-items', { name: 'Audit Test Gin 750ml', category_id: cat.id, price: 1000, cost: 700,
     sku: 'TEST-GIN-750', barcode: '616000000001', volume_ml: 750, opening_qty: 3, min_qty: 1, unit: 'bottle' });
-  ck('owner creates barcode product and matching stock', r.status === 200 && r.data.barcode === '616000000001' && r.data.stock_qty === 3, JSON.stringify(r.data));
+  ck('owner creates sized retail product and matching stock', r.status === 200 && r.data.barcode === '616000000001' &&
+    r.data.volume_ml === 750 && r.data.stock_unit === 'bottle' && r.data.station === 'retail' && r.data.stock_qty === 3, JSON.stringify(r.data));
   const product = r.data;
   r = await seller.post('/api/menu-items', { name: 'Forbidden', category_id: cat.id, price: 1 });
   ck('seller cannot change product catalogue', r.status === 403);

@@ -99,10 +99,22 @@ const Cashier = (() => {
           tables: [
             { title: 'Takings by payment method', head: ['Method', 'Txns', 'Total'], right: [1, 2],
               rows: c.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]) },
-            { title: 'Sales by station', head: ['Station', 'Lines', 'Sales'], right: [1, 2],
-              rows: c.by_station.map((s2) => [s2.station.toUpperCase(), String(s2.lines), (s2.v / 100).toFixed(2)]) }
+            State.settings.business_type === 'wines_spirits'
+              ? { title: 'Sales by category', head: ['Category', 'Units', 'Sales'], right: [1, 2],
+                  rows: (c.by_category || []).map((x) => [x.category, String(x.units), (x.v / 100).toFixed(2)]) }
+              : { title: 'Sales by station', head: ['Station', 'Lines', 'Sales'], right: [1, 2],
+                  rows: c.by_station.map((s2) => [s2.station.toUpperCase(), String(s2.lines), (s2.v / 100).toFixed(2)]) }
           ],
-          summary: [
+          summary: State.settings.business_type === 'wines_spirits' ? [
+            ['Business expenses', money2(c.payouts)],
+            ['Expected cash', c.drawer && c.drawer.expected != null ? money2(c.drawer.expected) : '—'],
+            ['Counted cash', c.drawer && c.drawer.counted != null ? money2(c.drawer.counted) : '—'],
+            ['Cash variance', c.drawer && c.drawer.variance != null ? money2(c.drawer.variance) : '—'],
+            ['Expected M-Pesa', c.drawer && c.drawer.expected_mpesa != null ? money2(c.drawer.expected_mpesa) : '—'],
+            ['Actual M-Pesa', c.drawer && c.drawer.counted_mpesa != null ? money2(c.drawer.counted_mpesa) : '—'],
+            ['M-Pesa variance', c.drawer && c.drawer.mpesa_variance != null ? money2(c.drawer.mpesa_variance) : '—'],
+            ['Receipts closed', String(c.orders)], ['Units sold', String(c.units || 0)]
+          ] : [
             ['Tips', money2(c.tips)], ['Cash payouts', money2(c.payouts)],
             ['Expected in drawer', c.drawer && c.drawer.expected != null ? money2(c.drawer.expected) : '—'],
             ['Counted', c.drawer && c.drawer.counted != null ? money2(c.drawer.counted) : '—'],
@@ -129,7 +141,7 @@ const Cashier = (() => {
           <th>#</th><th>Sale</th><th>Seller</th><th>Closed</th><th>Items</th><th class="right">Total</th><th></th></tr></thead>
         <tbody>${closed.slice(0, 25).map((o) => {
           const t = orderTable(o);
-          return `<tr><td class="mono">${o.number}</td><td>${t ? esc(t.name) : 'Takeaway'}</td>
+          return `<tr><td class="mono">${o.number}</td><td>${t ? esc(t.name) : (State.settings.business_type === 'wines_spirits' ? 'Retail sale' : 'Takeaway')}</td>
             <td>${esc(waiterName(o.waiter_id))}</td><td>${clockTime(o.closed_at)}</td>
             <td>${o.items.length}</td><td class="right mono"><b>${fmt(o.totals.total)}</b></td>
             <td class="right"><button class="btn xs ghost" data-rp="${o.id}">Receipt</button>
@@ -150,7 +162,7 @@ const Cashier = (() => {
           <label class="fld">Refund amount (${sym()})</label>
           <input class="inp" id="ra" type="number" min="0.01" step="0.01" max="${paid/100}" value="${(paid/100).toFixed(2)}">
           <div style="margin-top:12px"><label class="fld">Reason</label>
-            <input class="inp" id="rr" placeholder="e.g. item not served, card chargeback"></div>`,
+            <input class="inp" id="rr" placeholder="${State.settings.business_type === 'wines_spirits' ? 'e.g. approved return, duplicate payment' : 'e.g. item not served, card chargeback'}"></div>`,
         footer: `<button class="btn" data-no>Cancel</button><button class="btn red" data-yes>Issue refund</button>`
       });
       const ov = document.querySelector('#modalRoot .ov');

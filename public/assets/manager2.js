@@ -722,7 +722,7 @@ const Manager2 = (() => {
 
   /* --------------------------- PRINTER UI --------------------------- */
   function printer(body) {
-    const s = State.settings;
+    const s = State.settings, retail = s.business_type === 'wines_spirits';
     body.innerHTML = `
       <div class="card" style="margin-bottom:14px"><div class="card-h"><h3>Thermal printer</h3>
         <span class="grow"></span>${s.printer_enabled === '1' ? '<span class="tag ok">Enabled</span>' : '<span class="tag info">Disabled</span>'}</div>
@@ -735,8 +735,8 @@ const Manager2 = (() => {
           <div class="grid2">
             <div><label class="fld">Receipt printer host</label><input class="inp mono" id="pr_h" value="${esc(s.printer_host)}" placeholder="192.168.1.50"></div>
             <div><label class="fld">Port</label><input class="inp mono" id="pr_p" value="${esc(s.printer_port)}"></div>
-            <div><label class="fld">Kitchen printer host (optional)</label><input class="inp mono" id="pr_kh" value="${esc(s.kitchen_printer_host)}" placeholder="defaults to receipt printer"></div>
-            <div><label class="fld">Kitchen port</label><input class="inp mono" id="pr_kp" value="${esc(s.kitchen_printer_port)}"></div>
+            ${retail ? '' : `<div><label class="fld">Kitchen printer host (optional)</label><input class="inp mono" id="pr_kh" value="${esc(s.kitchen_printer_host)}" placeholder="defaults to receipt printer"></div>
+            <div><label class="fld">Kitchen port</label><input class="inp mono" id="pr_kp" value="${esc(s.kitchen_printer_port)}"></div>`}
             <div><label class="fld">Characters per line</label><input class="inp" id="pr_c" type="number" value="${esc(s.printer_chars)}">
               <div class="tiny muted" style="margin-top:4px">42 for 80mm paper, 32 for 58mm</div></div>
             <div><label class="fld">Cash drawer</label><select class="inp" id="pr_d">
@@ -755,8 +755,8 @@ const Manager2 = (() => {
         printer_enabled: body.querySelector('#pr_en').checked ? '1' : '0',
         printer_host: body.querySelector('#pr_h').value.trim(),
         printer_port: body.querySelector('#pr_p').value,
-        kitchen_printer_host: body.querySelector('#pr_kh').value.trim(),
-        kitchen_printer_port: body.querySelector('#pr_kp').value,
+        kitchen_printer_host: body.querySelector('#pr_kh')?.value.trim() || '',
+        kitchen_printer_port: body.querySelector('#pr_kp')?.value || '9100',
         printer_chars: body.querySelector('#pr_c').value,
         drawer_kick_enabled: body.querySelector('#pr_d').value } });
       toast('Printer settings saved', 'ok'); printer(body);

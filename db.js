@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS order_items (
   qty         REAL NOT NULL DEFAULT 1,
   note        TEXT,
   station     TEXT NOT NULL DEFAULT 'kitchen',
-  status      TEXT NOT NULL DEFAULT 'pending',  -- pending|sent|ready|served|void
+  status      TEXT NOT NULL DEFAULT 'pending',  -- retail: pending|sold|void; legacy: sent|ready|served
   added_by    INTEGER REFERENCES users(id),
   added_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   sent_at     TEXT,
@@ -409,6 +409,12 @@ function migrate() {
   /* Retail policy: buyers are handled as adults at entry; checkout must stay fast. */
   if ((db.prepare("SELECT value FROM settings WHERE key='business_type'").get() || {}).value === 'wines_spirits') {
     db.prepare("INSERT INTO settings(key,value) VALUES('age_verification_required','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();
+    /* Remove restaurant station semantics from existing retail catalogues once. */
+    if (!db.prepare("SELECT value FROM settings WHERE key='retail_catalogue_cleanup_v1'").get()) {
+      db.prepare("UPDATE categories SET station='retail'").run();
+      db.prepare("UPDATE menu_items SET station='retail'").run();
+      db.prepare("INSERT INTO settings(key,value) VALUES('retail_catalogue_cleanup_v1','1')").run();
+    }
   }
 
   /* Upgrade any credentials left in plaintext by an older release.
@@ -818,7 +824,7 @@ function loadSampleData() {
   const insCat = db.prepare('INSERT INTO categories(name,station,sort_order) VALUES(?,?,?)');
   const cats = {};
   ['Whisky', 'Vodka', 'Gin', 'Rum & Brandy', 'Wine', 'Beer & Cider', 'Liqueurs', 'Mixers & Soft Drinks']
-    .forEach((name, i) => { cats[name] = insCat.run(name, 'bar', i + 1).lastInsertRowid; });
+    .forEach((name, i) => { cats[name] = insCat.run(name, 'retail', i + 1).lastInsertRowid; });
 
   /* Starter prices are examples in KES and are intentionally easy to edit. */
   const products = {
@@ -840,7 +846,7 @@ function loadSampleData() {
   const insRecipe = db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,1)');
   for (const [category, items] of Object.entries(products)) {
     items.forEach(([name, price, cost], i) => {
-      const menuId = insItem.run(cats[category], name, price * 100, cost * 100, 'bar', i + 1).lastInsertRowid;
+      const menuId = insItem.run(cats[category], name, price * 100, cost * 100, 'retail', i + 1).lastInsertRowid;
       const stockId = insStock.run(name, 'bottle', 12, 4, cost * 100).lastInsertRowid;
       insRecipe.run(menuId, stockId); // one retail unit sold = one unit removed
     });
