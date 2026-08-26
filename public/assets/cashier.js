@@ -124,7 +124,6 @@ const Cashier = (() => {
     const box = host.querySelector('#recentBox');
     if (!box) return;
     try {
-      const rows = await api('/api/reports/items?from=' + today() + '&to=' + today());
       const closed = await api('/api/orders?status=closed');
       box.innerHTML = closed.length ? `<table class="tbl"><thead><tr>
           <th>#</th><th>Sale</th><th>Seller</th><th>Closed</th><th>Items</th><th class="right">Total</th><th></th></tr></thead>
@@ -207,8 +206,14 @@ const Cashier = (() => {
               <button class="btn sm ghost" data-split="third">⅓ each</button>
               <button class="btn sm ghost" data-split="full">Full balance</button>
             </div>
-            <p class="tiny muted" style="margin-top:8px">Take a part-payment now, then settle the rest on the same check.</p>
+            <p class="tiny muted" style="margin-top:8px">Take a part-payment now, then settle the rest on the same sale.</p>
           </div>
+          ${State.settings.business_type === 'wines_spirits' ? `<div class="card" style="margin-top:14px;border-color:var(--amber);background:#211b10"><div class="card-b">
+            <label class="row" style="gap:10px;cursor:pointer;align-items:flex-start"><input type="checkbox" id="ageOk" ${o.age_verified ? 'checked' : ''} style="margin-top:3px">
+              <span><b>Age verified: customer is ${esc(State.settings.minimum_sale_age || 18)} or older</b><br>
+              <span class="tiny muted">Ask for an official ID whenever age is uncertain. Never sell alcohol to a minor.</span></span></label>
+            <input class="inp" id="ageNote" style="margin-top:10px" placeholder="Optional: ID checked (do not record the ID number)">
+          </div></div>` : ''}
         </div>
         <div>
           <div class="row" style="gap:8px;margin-bottom:12px">
@@ -329,6 +334,8 @@ const Cashier = (() => {
     renderForm();
 
     ov.querySelector('[data-go]').onclick = async () => {
+      const ageVerified = State.settings.business_type !== 'wines_spirits' || !!ov.querySelector('#ageOk')?.checked;
+      if (!ageVerified) return toast(`Confirm the customer is at least ${State.settings.minimum_sale_age || 18}`, 'err');
       let amount, reference, tendered;
       if (method === 'cash') {
         tendered = Math.round(Number(form.querySelector('#tend').value || 0) * 100);
@@ -352,11 +359,14 @@ const Cashier = (() => {
             amount: amount / 100,
             reference,
             tendered: tendered == null ? undefined : tendered / 100,
-            tip: tip / 100
+            tip: tip / 100,
+            age_verified: ageVerified,
+            age_check_note: ov.querySelector('#ageNote')?.value.trim() || undefined
           }
         });
         closeModal();
-        await Pos.refresh();
+        if (State.settings.business_type === 'wines_spirits') await loadBootstrap();
+        else await Pos.refresh();
         State.openOrderId = null;
         toast(`${METHOD_LABEL[method]} ${fmt(amount)} received${r.change ? ' · change ' + fmt(r.change) : ''}`, 'ok');
         await printReceipt(o.id, { paid: true });

@@ -20,6 +20,7 @@ app.use(express.json({ limit: '1mb' }));
 
 /* --------------------------- session cookies --------------------------- */
 const SESSIONS = new Map(); // token -> {user_id}
+const LOGIN_ATTEMPTS = new Map(); // IP -> { failures, blockedUntil }; local brute-force protection
 const COOKIE = 'pos_session';
 const genToken = () => require('crypto').randomBytes(24).toString('hex');
 
@@ -99,10 +100,20 @@ app.post('/api/setup/sample', requireAuth, requireRole('manager', 'admin'), (req
 });
 
 app.post('/api/login', (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress || 'local';
+  const attempt = LOGIN_ATTEMPTS.get(ip) || { failures: 0, blockedUntil: 0 };
+  if (attempt.blockedUntil > Date.now())
+    return bad(res, `Too many failed PINs. Try again in ${Math.ceil((attempt.blockedUntil - Date.now()) / 1000)} seconds.`, 429);
   const pin = String(req.body.pin || '').trim();
   if (!pin) return bad(res, 'PIN required');
   const user = findUserByPin(pin);            /* verifies against the stored scrypt hash */
-  if (!user) return bad(res, 'Invalid PIN', 401);
+  if (!user) {
+    attempt.failures += 1;
+    if (attempt.failures >= 5) { attempt.blockedUntil = Date.now() + 60000; attempt.failures = 0; }
+    LOGIN_ATTEMPTS.set(ip, attempt);
+    return bad(res, 'Invalid PIN', 401);
+  }
+  LOGIN_ATTEMPTS.delete(ip);
   const token = genToken();
   SESSIONS.set(token, { user_id: user.id });
   res.setHeader('Set-Cookie', `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200`);
@@ -120,8 +131,14 @@ app.get('/api/me', requireAuth, (req, res) =>
 
 /* ------------------------------- bootstrap ------------------------------ */
 const listMenu = () => db.prepare(`
-  SELECT m.*, c.name AS category_name FROM menu_items m
-  JOIN categories c ON c.id = m.category_id
+  SELECT m.*, c.name AS category_name,
+    (SELECT si.qty FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
+      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_qty,
+    (SELECT si.min_qty FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
+      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_min_qty,
+    (SELECT si.id FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
+      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_item_id
+  FROM menu_items m JOIN categories c ON c.id = m.category_id
   ORDER BY c.sort_order, m.sort_order, m.name`).all();
 
 const orderWithTotals = (o) => {
@@ -181,36 +198,74 @@ app.get('/api/bootstrap', requireAuth, (req, res) => {
 app.get('/api/menu', requireAuth, (req, res) => res.json(listMenu()));
 
 app.post('/api/menu-items', requireAuth, requireRole('manager', 'admin'), (req, res) => {
-  const { name, category_id, price, cost = 0, station = 'kitchen', available = 1 } = req.body;
+  const { name, category_id, price, cost = 0, station = 'bar', available = 1,
+    sku = '', barcode = '', volume_ml = null, kra_item_code = '', tax_type = 'B',
+    opening_qty = 0, min_qty = 0, unit = 'bottle' } = req.body;
   if (!name || !category_id) return bad(res, 'Name and category required');
-  const r = db.prepare(
-    'INSERT INTO menu_items(category_id,name,price,cost,station,available,sort_order) VALUES(?,?,?,?,?,?,?)'
-  ).run(category_id, name.trim(), Math.round(Number(price) * 100), Math.round(Number(cost) * 100),
-    station, available ? 1 : 0, 999);
-  audit(req.user, 'menu.create', `${name} @ KSh${Number(price).toFixed(2)}`);
-  broadcast('menu');
-  res.json(db.prepare('SELECT * FROM menu_items WHERE id=?').get(r.lastInsertRowid));
+  if (barcode && db.prepare('SELECT id FROM menu_items WHERE barcode=?').get(String(barcode).trim())) return bad(res, 'Barcode already belongs to another product');
+  if (sku && db.prepare('SELECT id FROM menu_items WHERE sku=?').get(String(sku).trim())) return bad(res, 'SKU already belongs to another product');
+  let itemId;
+  const tx = db.transaction(() => {
+    itemId = db.prepare(`INSERT INTO menu_items(category_id,name,price,cost,station,available,sort_order,sku,barcode,volume_ml,kra_item_code,tax_type)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(category_id, name.trim(), Math.round(Number(price) * 100),
+      Math.round(Number(cost) * 100), station, available ? 1 : 0, 999, String(sku).trim() || null,
+      String(barcode).trim() || null, Number(volume_ml) || null, String(kra_item_code).trim() || null, tax_type || 'B').lastInsertRowid;
+    if (getSetting('business_type') === 'wines_spirits') {
+      const opening = Number(opening_qty) || 0;
+      const stockId = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost) VALUES(?,?,?,?,?)')
+        .run(name.trim(), unit || 'bottle', opening, Number(min_qty) || 0, Math.round(Number(cost) * 100)).lastInsertRowid;
+      db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,1)').run(itemId, stockId);
+      if (opening) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
+        .run(stockId, opening, 'Opening stock', req.user.id);
+    }
+  });
+  try { tx(); } catch (e) { return bad(res, e.message); }
+  audit(req.user, 'product.create', `${name} @ KSh${Number(price).toFixed(2)} sku=${sku || '-'} barcode=${barcode || '-'}`);
+  broadcast('menu'); broadcast('stock');
+  res.json(listMenu().find((m) => m.id === Number(itemId)));
 });
 
 app.put('/api/menu-items/:id', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const cur = db.prepare('SELECT * FROM menu_items WHERE id=?').get(req.params.id);
   if (!cur) return bad(res, 'Not found', 404);
-  const b = req.body;
-  db.prepare(`UPDATE menu_items SET category_id=?, name=?, price=?, cost=?, station=?, available=? WHERE id=?`)
-    .run(b.category_id ?? cur.category_id, b.name ?? cur.name,
-      b.price != null ? Math.round(Number(b.price) * 100) : cur.price,
-      b.cost != null ? Math.round(Number(b.cost) * 100) : cur.cost,
-      b.station ?? cur.station, b.available != null ? (b.available ? 1 : 0) : cur.available, cur.id);
-  audit(req.user, 'menu.update', cur.name);
-  broadcast('menu');
-  res.json(db.prepare('SELECT * FROM menu_items WHERE id=?').get(cur.id));
+  const b = req.body, barcode = b.barcode !== undefined ? String(b.barcode).trim() : cur.barcode,
+    sku = b.sku !== undefined ? String(b.sku).trim() : cur.sku;
+  if (barcode && db.prepare('SELECT id FROM menu_items WHERE barcode=? AND id!=?').get(barcode, cur.id)) return bad(res, 'Barcode already belongs to another product');
+  if (sku && db.prepare('SELECT id FROM menu_items WHERE sku=? AND id!=?').get(sku, cur.id)) return bad(res, 'SKU already belongs to another product');
+  const tx = db.transaction(() => {
+    db.prepare(`UPDATE menu_items SET category_id=?,name=?,price=?,cost=?,station=?,available=?,sku=?,barcode=?,volume_ml=?,kra_item_code=?,tax_type=? WHERE id=?`)
+      .run(b.category_id ?? cur.category_id, b.name ?? cur.name,
+        b.price != null ? Math.round(Number(b.price) * 100) : cur.price,
+        b.cost != null ? Math.round(Number(b.cost) * 100) : cur.cost,
+        b.station ?? cur.station, b.available != null ? (b.available ? 1 : 0) : cur.available,
+        sku || null, barcode || null, b.volume_ml !== undefined ? (Number(b.volume_ml) || null) : cur.volume_ml,
+        b.kra_item_code !== undefined ? (String(b.kra_item_code).trim() || null) : cur.kra_item_code,
+        b.tax_type ?? cur.tax_type, cur.id);
+    const stock = db.prepare(`SELECT si.* FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id WHERE r.menu_item_id=? ORDER BY r.id LIMIT 1`).get(cur.id);
+    if (stock && getSetting('business_type') === 'wines_spirits')
+      db.prepare('UPDATE stock_items SET name=?,cost=?,min_qty=COALESCE(?,min_qty),unit=COALESCE(?,unit) WHERE id=?')
+        .run(b.name ?? cur.name, b.cost != null ? Math.round(Number(b.cost) * 100) : cur.cost,
+          b.min_qty !== undefined ? Number(b.min_qty) : null, b.unit || null, stock.id);
+  });
+  try { tx(); } catch (e) { return bad(res, e.message); }
+  audit(req.user, 'product.update', `${cur.name} sku=${sku || '-'} barcode=${barcode || '-'}`);
+  broadcast('menu'); broadcast('stock');
+  res.json(listMenu().find((m) => m.id === cur.id));
 });
 
 app.delete('/api/menu-items/:id', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const cur = db.prepare('SELECT * FROM menu_items WHERE id=?').get(req.params.id);
   if (!cur) return bad(res, 'Not found', 404);
-  db.prepare('DELETE FROM menu_items WHERE id=?').run(cur.id);
-  audit(req.user, 'menu.delete', cur.name);
+  const linkedStock = db.prepare('SELECT stock_item_id FROM recipes WHERE menu_item_id=?').all(cur.id).map((r) => r.stock_item_id);
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM menu_items WHERE id=?').run(cur.id);
+    if (getSetting('business_type') === 'wines_spirits') for (const stockId of linkedStock) {
+      const stillUsed = db.prepare('SELECT id FROM recipes WHERE stock_item_id=? LIMIT 1').get(stockId);
+      if (!stillUsed) db.prepare('DELETE FROM stock_items WHERE id=?').run(stockId);
+    }
+  });
+  tx();
+  audit(req.user, 'product.delete', cur.name);
   broadcast('menu');
   res.json({ ok: true });
 });
@@ -315,6 +370,15 @@ app.post('/api/orders/:id/items', requireAuth, requireRole('seller', 'waiter', '
       const m = db.prepare('SELECT * FROM menu_items WHERE id=?').get(Number(l.menu_item_id));
       if (!m) throw new Error('Menu item not found');
       if (!m.available && !['manager', 'admin'].includes(req.user.role)) throw new Error(`${m.name} is unavailable`);
+      const requestedQty = Number(l.qty) || 1;
+      if (getSetting('business_type') === 'wines_spirits' && getSetting('prevent_negative_stock') === '1') {
+        const tracked = db.prepare(`SELECT si.qty FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
+          WHERE r.menu_item_id=? ORDER BY r.id LIMIT 1`).get(m.id);
+        const already = db.prepare(`SELECT COALESCE(SUM(qty),0) q FROM order_items
+          WHERE order_id=? AND menu_item_id=? AND status!='void'`).get(o.id, m.id).q;
+        if (tracked && already + requestedQty > tracked.qty)
+          throw new Error(`${m.name}: only ${tracked.qty} in stock`);
+      }
 
       /* base price, less any active daypart discount */
       const rule = domain.bestDiscountFor(m, dayparts);
@@ -464,9 +528,13 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
   const tip = Math.max(0, Math.round(Number(req.body.tip || 0) * 100));
   const amount = Math.round(Number(req.body.amount) * 100);
   if (!amount || amount <= 0) return bad(res, 'Amount must be greater than zero');
+  if (s.business_type === 'wines_spirits' && s.age_verification_required === '1' && !req.body.age_verified)
+    return bad(res, `Confirm the customer is at least ${s.minimum_sale_age || 18} before taking payment`);
   const balance = d.totals.grand_total + tip - d.paid;
   if (method === 'mpesa' && !String(req.body.reference || '').trim())
     return bad(res, 'M-Pesa confirmation code is required');
+  if (method === 'mpesa' && db.prepare("SELECT id FROM payments WHERE method='mpesa' AND upper(reference)=upper(?)").get(String(req.body.reference).trim()))
+    return bad(res, 'That M-Pesa confirmation code has already been used');
   if (method !== 'cash' && amount > balance)
     return bad(res, `${method} payment cannot exceed the balance due`);
 
@@ -513,8 +581,18 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
   }
 
   const openShift = db.prepare("SELECT * FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get();
+  if (s.business_type === 'wines_spirits' && s.prevent_negative_stock === '1' && d.paid + amount >= d.totals.grand_total + tip) {
+    const movements = domain.stockMovementsFor(d.items, db.prepare('SELECT * FROM recipes').all());
+    for (const movement of movements) {
+      const stock = db.prepare('SELECT name,qty FROM stock_items WHERE id=?').get(movement.stock_item_id);
+      if (stock && stock.qty < movement.qty) return bad(res, `${stock.name}: only ${stock.qty} in stock; recount before payment`);
+    }
+  }
 
   const tx = db.transaction(() => {
+    if (s.business_type === 'wines_spirits' && req.body.age_verified)
+      db.prepare('UPDATE orders SET age_verified=1,age_check_note=? WHERE id=?')
+        .run(String(req.body.age_check_note || `Confirmed ${s.minimum_sale_age || 18}+`).slice(0, 120), o.id);
     db.prepare('INSERT INTO payments(order_id,method,amount,reference,tip,cashier_id,shift_id) VALUES(?,?,?,?,?,?,?)')
       .run(o.id, method, amount, reference, tip, req.user.id, openShift ? openShift.id : null);
 
@@ -596,7 +674,7 @@ app.post('/api/orders/:id/refund', requireAuth, requireRole('manager', 'admin'),
   res.json(decorate(db.prepare('SELECT * FROM orders WHERE id=?').get(o.id)));
 });
 
-app.get('/api/receipt/:id', (req, res) => {
+app.get('/api/receipt/:id', requireAuth, (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return res.status(404).send('Order not found');
   const t = o.table_id ? db.prepare('SELECT * FROM tables WHERE id=?').get(o.table_id) : null;
@@ -608,6 +686,12 @@ app.get('/api/receipt/:id', (req, res) => {
 /* ------------------------------- inventory ------------------------------ */
 app.get('/api/stock', requireAuth, (req, res) =>
   res.json(db.prepare('SELECT * FROM stock_items ORDER BY name').all()));
+app.get('/api/stock-moves', requireAuth, (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  res.json(db.prepare(`SELECT sm.*,si.name,si.unit,u.name user_name FROM stock_moves sm
+    JOIN stock_items si ON si.id=sm.stock_item_id LEFT JOIN users u ON u.id=sm.user_id
+    ORDER BY sm.id DESC LIMIT ?`).all(limit));
+});
 
 app.post('/api/stock', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const { name, unit = 'pcs', qty = 0, min_qty = 0, cost = 0 } = req.body;
@@ -643,6 +727,133 @@ app.post('/api/stock/:id/adjust', requireAuth, requireRole('seller', 'manager', 
     .run(s.id, delta, reason, req.user.id);
   audit(req.user, 'stock.adjust', `${s.name} ${delta > 0 ? '+' : ''}${delta} — ${reason}`);
   res.json(db.prepare('SELECT * FROM stock_items WHERE id=?').get(s.id));
+});
+
+/* ---------------------- retail receiving & stocktakes --------------------- */
+app.get('/api/suppliers', requireAuth, (req, res) =>
+  res.json(db.prepare('SELECT * FROM suppliers WHERE active=1 ORDER BY name').all()));
+
+app.post('/api/suppliers', requireAuth, requireRole('manager', 'admin'), (req, res) => {
+  const b = req.body || {};
+  if (!String(b.name || '').trim()) return bad(res, 'Supplier name required');
+  const r = db.prepare('INSERT INTO suppliers(name,phone,email,kra_pin,address) VALUES(?,?,?,?,?)')
+    .run(String(b.name).trim(), b.phone || null, b.email || null, b.kra_pin || null, b.address || null);
+  audit(req.user, 'supplier.create', String(b.name).trim());
+  res.json(db.prepare('SELECT * FROM suppliers WHERE id=?').get(r.lastInsertRowid));
+});
+
+app.put('/api/suppliers/:id', requireAuth, requireRole('manager', 'admin'), (req, res) => {
+  const cur = db.prepare('SELECT * FROM suppliers WHERE id=?').get(req.params.id);
+  if (!cur) return bad(res, 'Supplier not found', 404);
+  const b = req.body || {};
+  db.prepare('UPDATE suppliers SET name=?,phone=?,email=?,kra_pin=?,address=?,active=? WHERE id=?')
+    .run(b.name ?? cur.name, b.phone ?? cur.phone, b.email ?? cur.email, b.kra_pin ?? cur.kra_pin,
+      b.address ?? cur.address, b.active !== undefined ? (b.active ? 1 : 0) : cur.active, cur.id);
+  audit(req.user, 'supplier.update', cur.name);
+  res.json(db.prepare('SELECT * FROM suppliers WHERE id=?').get(cur.id));
+});
+
+app.get('/api/goods-receipts', requireAuth, (req, res) => res.json(db.prepare(`
+  SELECT gr.*,s.name supplier_name,u.name received_by_name,
+    (SELECT COUNT(*) FROM goods_receipt_items gi WHERE gi.receipt_id=gr.id) lines
+  FROM goods_receipts gr LEFT JOIN suppliers s ON s.id=gr.supplier_id
+  LEFT JOIN users u ON u.id=gr.received_by ORDER BY gr.id DESC LIMIT 100`).all()));
+
+app.post('/api/goods-receipts', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
+  const b = req.body || {}, lines = Array.isArray(b.items) ? b.items : [];
+  if (!String(b.invoice_no || '').trim()) return bad(res, 'Supplier invoice or delivery note number required');
+  if (!lines.length) return bad(res, 'Add at least one delivered product');
+  let receiptId, total = 0;
+  const tx = db.transaction(() => {
+    receiptId = db.prepare('INSERT INTO goods_receipts(supplier_id,invoice_no,notes,received_by) VALUES(?,?,?,?)')
+      .run(Number(b.supplier_id) || null, String(b.invoice_no).trim(), b.notes || null, req.user.id).lastInsertRowid;
+    const ins = db.prepare('INSERT INTO goods_receipt_items(receipt_id,stock_item_id,qty,unit_cost,batch_no,expiry_date) VALUES(?,?,?,?,?,?)');
+    for (const line of lines) {
+      const stock = db.prepare('SELECT * FROM stock_items WHERE id=?').get(Number(line.stock_item_id));
+      const qty = Number(line.qty), unitCost = Math.round(Number(line.unit_cost || 0) * 100);
+      if (!stock || !(qty > 0)) throw new Error('Every delivery line needs a valid product and positive quantity');
+      ins.run(receiptId, stock.id, qty, unitCost || stock.cost, line.batch_no || null, line.expiry_date || null);
+      db.prepare('UPDATE stock_items SET qty=qty+?,cost=? WHERE id=?').run(qty, unitCost || stock.cost, stock.id);
+      if (unitCost) db.prepare(`UPDATE menu_items SET cost=? WHERE id IN
+        (SELECT menu_item_id FROM recipes WHERE stock_item_id=? AND qty=1)`).run(unitCost, stock.id);
+      db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
+        .run(stock.id, qty, `Delivery ${String(b.invoice_no).trim()}`, req.user.id);
+      total += qty * (unitCost || stock.cost);
+    }
+    db.prepare('UPDATE goods_receipts SET total_cost=? WHERE id=?').run(Math.round(total), receiptId);
+  });
+  try { tx(); } catch (e) { return bad(res, e.message); }
+  audit(req.user, 'delivery.receive', `${b.invoice_no} · ${lines.length} lines · KSh${(total / 100).toFixed(2)}`);
+  broadcast('stock');
+  res.json({ id: receiptId, total_cost: Math.round(total), ok: true });
+});
+
+app.get('/api/stock-counts', requireAuth, (req, res) => res.json(db.prepare(`
+  SELECT sc.*,us.name started_by_name,uc.name completed_by_name,
+    (SELECT COUNT(*) FROM stock_count_items si WHERE si.stock_count_id=sc.id) lines,
+    (SELECT COUNT(*) FROM stock_count_items si WHERE si.stock_count_id=sc.id AND ABS(COALESCE(si.variance,0))>0.0001) variances
+  FROM stock_counts sc LEFT JOIN users us ON us.id=sc.started_by LEFT JOIN users uc ON uc.id=sc.completed_by
+  ORDER BY sc.id DESC LIMIT 100`).all()));
+
+app.post('/api/stock-counts', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
+  if (db.prepare("SELECT id FROM stock_counts WHERE status='open'").get()) return bad(res, 'Complete the open stocktake first');
+  const reference = String(req.body.reference || `COUNT-${todayLocal()}`).trim();
+  let id;
+  const tx = db.transaction(() => {
+    id = db.prepare('INSERT INTO stock_counts(reference,notes,started_by) VALUES(?,?,?)')
+      .run(reference, req.body.notes || null, req.user.id).lastInsertRowid;
+    const ins = db.prepare('INSERT INTO stock_count_items(stock_count_id,stock_item_id,expected) VALUES(?,?,?)');
+    for (const stock of db.prepare('SELECT id,qty FROM stock_items ORDER BY name').all()) ins.run(id, stock.id, stock.qty);
+  }); tx();
+  audit(req.user, 'stocktake.start', reference);
+  res.json({ id, reference, ok: true });
+});
+
+app.get('/api/stock-counts/:id', requireAuth, (req, res) => {
+  const count = db.prepare('SELECT * FROM stock_counts WHERE id=?').get(req.params.id);
+  if (!count) return bad(res, 'Stocktake not found', 404);
+  count.items = db.prepare(`SELECT sci.*,si.name,si.unit FROM stock_count_items sci
+    JOIN stock_items si ON si.id=sci.stock_item_id WHERE sci.stock_count_id=? ORDER BY si.name`).all(count.id);
+  res.json(count);
+});
+
+app.post('/api/stock-counts/:id/save', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
+  const count = db.prepare('SELECT * FROM stock_counts WHERE id=?').get(req.params.id);
+  if (!count || count.status !== 'open') return bad(res, 'Open stocktake not found', 404);
+  const upd = db.prepare('UPDATE stock_count_items SET counted=?,variance=? WHERE stock_count_id=? AND stock_item_id=?');
+  const tx = db.transaction(() => {
+    for (const line of (Array.isArray(req.body.items) ? req.body.items : [])) {
+      if (line.counted === '' || line.counted == null || !Number.isFinite(Number(line.counted))) continue;
+      const row = db.prepare('SELECT expected FROM stock_count_items WHERE stock_count_id=? AND stock_item_id=?').get(count.id, Number(line.stock_item_id));
+      if (row) upd.run(Number(line.counted), Number(line.counted) - row.expected, count.id, Number(line.stock_item_id));
+    }
+  }); tx();
+  audit(req.user, 'stocktake.save', count.reference);
+  res.json({ ok: true });
+});
+
+app.post('/api/stock-counts/:id/complete', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
+  const count = db.prepare('SELECT * FROM stock_counts WHERE id=?').get(req.params.id);
+  if (!count || count.status !== 'open') return bad(res, 'Open stocktake not found', 404);
+  const entered = new Map((Array.isArray(req.body.items) ? req.body.items : []).map((x) => [Number(x.stock_item_id), Number(x.counted)]));
+  const rows = db.prepare('SELECT * FROM stock_count_items WHERE stock_count_id=?').all(count.id);
+  if (rows.some((r) => !entered.has(r.stock_item_id) || !Number.isFinite(entered.get(r.stock_item_id))))
+    return bad(res, 'Enter a count for every product');
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      const counted = entered.get(row.stock_item_id), variance = counted - row.expected;
+      db.prepare('UPDATE stock_count_items SET counted=?,variance=? WHERE id=?').run(counted, variance, row.id);
+      db.prepare('UPDATE stock_items SET qty=? WHERE id=?').run(counted, row.stock_item_id);
+      if (variance) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
+        .run(row.stock_item_id, variance, `Stocktake ${count.reference}`, req.user.id);
+    }
+    db.prepare("UPDATE stock_counts SET status='completed',completed_by=?,completed_at=datetime('now','localtime') WHERE id=?")
+      .run(req.user.id, count.id);
+  }); tx();
+  const variances = rows.filter((r) => entered.get(r.stock_item_id) !== r.expected).length;
+  audit(req.user, 'stocktake.complete', `${count.reference} · ${variances} variances`);
+  broadcast('stock');
+  res.json({ ok: true, variances });
 });
 
 /* --------------------------------- staff -------------------------------- */
@@ -704,7 +915,7 @@ app.delete('/api/users/:id', requireAuth, requireRole('admin'), (req, res) => {
 const dayBounds = (d) => `${d} 00:00:00`;
 const dayEnd = (d) => `${d} 23:59:59`;
 
-app.get('/api/reports/summary', requireAuth, requireRole('seller', 'manager', 'admin', 'cashier'), (req, res) => {
+app.get('/api/reports/summary', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
   const from = req.query.from || todayLocal();
   const to = req.query.to || from;
   const a = dayBounds(from), b = dayEnd(to);
@@ -744,7 +955,7 @@ app.get('/api/reports/summary', requireAuth, requireRole('seller', 'manager', 'a
   });
 });
 
-app.get('/api/reports/items', requireAuth, requireRole('seller', 'manager', 'admin', 'cashier'), (req, res) => {
+app.get('/api/reports/items', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
   const from = req.query.from || todayLocal();
   const to = req.query.to || from;
   res.json(db.prepare(`
@@ -756,7 +967,7 @@ app.get('/api/reports/items', requireAuth, requireRole('seller', 'manager', 'adm
     GROUP BY oi.name, oi.station ORDER BY revenue DESC LIMIT 100`).all(dayBounds(from), dayEnd(to)));
 });
 
-app.get('/api/reports/waiters', requireAuth, requireRole('seller', 'manager', 'admin', 'cashier'), (req, res) => {
+app.get('/api/reports/waiters', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
   const from = req.query.from || todayLocal();
   const to = req.query.to || from;
   res.json(db.prepare(`
@@ -767,7 +978,7 @@ app.get('/api/reports/waiters', requireAuth, requireRole('seller', 'manager', 'a
     GROUP BY u.name ORDER BY revenue DESC`).all(dayBounds(from), dayEnd(to)));
 });
 
-app.get('/api/reports/categories', requireAuth, requireRole('seller', 'manager', 'admin', 'cashier'), (req, res) => {
+app.get('/api/reports/categories', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
   const from = req.query.from || todayLocal();
   const to = req.query.to || from;
   res.json(db.prepare(`
@@ -778,7 +989,7 @@ app.get('/api/reports/categories', requireAuth, requireRole('seller', 'manager',
     GROUP BY c.id ORDER BY revenue DESC`).all(dayBounds(from), dayEnd(to)));
 });
 
-app.get('/api/reports/hourly', requireAuth, requireRole('seller', 'manager', 'admin', 'cashier'), (req, res) => {
+app.get('/api/reports/hourly', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
   const from = req.query.from || todayLocal();
   res.json(db.prepare(`
     SELECT substr(created_at,12,2) AS hour, COALESCE(SUM(amount),0) total, COUNT(*) n
@@ -1346,7 +1557,7 @@ app.get('/api/last-closed-order', requireAuth, requireRole('seller', 'cashier', 
 });
 
 /* ================== ORDER CHANNELS / DELIVERY (4.13) =================== */
-app.get('/api/reports/channels', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
+app.get('/api/reports/channels', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
   const from = req.query.from || todayLocal();
   const to = req.query.to || from;
   res.json(db.prepare(`
@@ -1357,7 +1568,7 @@ app.get('/api/reports/channels', requireAuth, requireRole('seller', 'cashier', '
     WHERE o.closed_at BETWEEN ? AND ? AND o.status = 'closed'
     GROUP BY o.channel ORDER BY revenue DESC`).all(from + ' 00:00:00', to + ' 23:59:59'));
 });
-app.post('/api/orders/:id/commission', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
+app.post('/api/orders/:id/commission', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return bad(res, 'Order not found', 404);
   const commission = Math.max(0, Math.round(Number(req.body.commission || 0) * 100));

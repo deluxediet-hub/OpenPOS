@@ -11,7 +11,7 @@ Node.js + Express + SQLite, with no frontend build step. Prices are in KES, VAT 
 | **Owner / Admin** | Unlimited access: sales, payments, receipts, stock, products and prices, reports, refunds, discounts, staff, settings, integrations and audit history |
 | **Seller** | Make sales, accept Cash/Card/M-Pesa, print/reprint receipts, run the cash drawer, receive deliveries, enter stock counts and record breakage/adjustments |
 
-Sellers cannot change business settings, product prices, staff permissions, reports, refunds or the audit log. Sensitive actions such as a discount or void require an admin PIN. Legacy restaurant roles remain understood by the API so an existing OpenPOS database can still be migrated, but new shops only need `admin` and `seller`.
+Sellers cannot change business settings, product prices, staff permissions, reports, refunds or the audit log. For a discount, void or refund, the seller signs out and the owner/admin performs the action. Legacy restaurant roles remain understood by the API so an existing OpenPOS database can still be migrated, but new shops only need `admin` and `seller`.
 
 ## First run
 
@@ -23,7 +23,7 @@ Sellers cannot change business settings, product prices, staff permissions, repo
 
 The optional starter catalogue includes common Kenyan whisky, vodka, gin, rum/brandy, wine, beer/cider, liqueurs and mixers. Each product has matching bottle stock, so one unit sold automatically removes one unit from stock. Starter seller accounts are included only as an initial convenience (`Seller 1`: PIN `1234`; `Seller 2`: PIN `2345`) and their PINs should be changed before the shop goes live.
 
-A blank setup is also supported: create categories, products and matching stock/recipe links from the owner console.
+A blank setup is also supported. Creating a retail product automatically creates its matching stock record and one-unit sale deduction.
 
 ## Daily workflow
 
@@ -38,7 +38,19 @@ A blank setup is also supported: create categories, products and matching stock/
 
 ### Owner
 
-Use **Shop management** for the sales dashboard, product pricing and costs, stock alerts, staff, cash reconciliation, reports, KRA/eTIMS configuration and full audit history. The owner/admin account has all rights.
+Use **Shop management** for the sales dashboard, barcode/SKU products, pricing and costs, suppliers, delivery history, full stocktakes, stock alerts, staff, cash reconciliation, reports, KRA/eTIMS configuration and full audit history. The owner/admin account has all rights.
+
+## Retail controls included
+
+- USB/Bluetooth keyboard-wedge barcode scanning and SKU lookup
+- Live stock shown at the till with optional negative-stock prevention
+- Supplier directory and invoice/delivery-note receiving
+- Batch/expiry capture on delivery lines
+- Full stocktakes with expected, counted and audited variance
+- Mandatory configurable age confirmation before alcohol payment
+- Duplicate M-Pesa confirmation-code rejection
+- Alcohol licence metadata and responsible-retail receipt warning
+- Temporary lockout after repeated invalid PIN attempts
 
 ## Kenya-specific notes
 

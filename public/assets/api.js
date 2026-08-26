@@ -175,11 +175,11 @@ function connectEvents() {
         State.orders = await api('/api/orders');
         if (ev === 'tables') { /* tables list only changes via manager */ }
       }
-      if (ev === 'users' || ev === 'settings') await loadBootstrap();
+      if (ev === 'users' || ev === 'settings' || ev === 'stock') await loadBootstrap();
       document.dispatchEvent(new CustomEvent('pos:update', { detail: { ev } }));
     } catch (e) { /* transient */ }
   };
-  ['orders', 'kitchen', 'menu', 'tables', 'users', 'settings', 'sales'].forEach((t) => es.addEventListener(t, () => refresh(t)));
+  ['orders', 'kitchen', 'menu', 'tables', 'users', 'settings', 'sales', 'stock'].forEach((t) => es.addEventListener(t, () => refresh(t)));
 }
 
 async function loadBootstrap() {

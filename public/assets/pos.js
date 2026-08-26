@@ -145,7 +145,7 @@ const Pos = (() => {
       ? State.menu.filter((m) => m.category_id === cat.id)
       : State.menu;
     const filtered = search
-      ? State.menu.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()))
+      ? State.menu.filter((m) => [m.name, m.sku, m.barcode].some((v) => String(v || '').toLowerCase().includes(search.toLowerCase())))
       : items;
 
     host.innerHTML = `
@@ -157,8 +157,8 @@ const Pos = (() => {
         <span class="grow"></span>
         ${retail ? '' : `<button class="btn sm" id="transfer">Move table</button>
         <button class="btn sm" id="peopleBtn">Guests: ${o.people}</button>`}
-        <button class="btn sm" id="discBtn">Discount</button>
-        <button class="btn sm red" id="voidBtn">Void order</button>
+        ${retail && !['manager', 'admin'].includes(State.user.role) ? '' : `<button class="btn sm" id="discBtn">Discount</button>
+        <button class="btn sm red" id="voidBtn">Void order</button>`}
       </div>
       <div class="pos">
         <div class="menu-panel">
@@ -173,6 +173,8 @@ const Pos = (() => {
               const live = priceOf(m), rule = ruleFor(m), off = live !== m.price;
               return `<button class="item${m.available ? '' : ' out'}" data-mid="${m.id}" ${m.available ? '' : 'title="86 — unavailable"'}>
                 <span class="n">${esc(m.name)}${groupsFor(m.id).length ? ' <span class="tiny" style="color:var(--teal)">▸</span>' : ''}</span>
+                ${retail && (m.sku || m.barcode) ? `<span class="tiny muted mono">${esc(m.sku || m.barcode)}</span>` : ''}
+                ${retail && m.stock_qty != null ? `<span class="tiny" style="color:${m.stock_qty <= 0 ? 'var(--red)' : m.stock_qty <= m.stock_min_qty ? 'var(--amber)' : 'var(--dim)'}">Stock ${m.stock_qty}</span>` : ''}
                 ${off ? `<span class="tiny" style="color:var(--dim2);text-decoration:line-through">${fmt(m.price)}</span>` : ''}
                 <span class="p" style="${off ? 'color:var(--green)' : ''}">${m.available ? fmt(live) : '86'}</span>
                 ${rule ? `<span class="tiny" style="color:var(--green)">${esc(rule)}</span>` : ''}
@@ -221,7 +223,15 @@ const Pos = (() => {
 
     /* wire up */
     host.querySelector('#back').onclick = () => closeEditor(host);
-    host.querySelector('#search').oninput = (e) => { search = e.target.value; renderEditor(host); };
+    const searchInput = host.querySelector('#search');
+    searchInput.oninput = (e) => { search = e.target.value; renderEditor(host); };
+    searchInput.onkeydown = (e) => {
+      if (e.key !== 'Enter') return;
+      const code = searchInput.value.trim().toLowerCase();
+      const exact = State.menu.find((m) => [m.barcode, m.sku].some((v) => String(v || '').toLowerCase() === code));
+      if (exact) { e.preventDefault(); search = ''; addItem(host, exact.id); }
+    };
+    if (search) setTimeout(() => { const i = host.querySelector('#search'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 0);
     host.querySelectorAll('[data-cat]').forEach((b) => b.onclick = () => {
       State.category = Number(b.dataset.cat); search = ''; renderEditor(host);
     });
@@ -244,7 +254,8 @@ const Pos = (() => {
     host.querySelector('#toBill').onclick = () => Cashier.payModal(o.id, () => { closeEditor(host); });
     const transferBtn = host.querySelector('#transfer');
     if (transferBtn) transferBtn.onclick = () => transferModal(o, host);
-    host.querySelector('#voidBtn').onclick = () => requireManagerPin('Voiding a whole order needs manager authorisation.', async () => {
+    const voidBtn = host.querySelector('#voidBtn');
+    if (voidBtn) voidBtn.onclick = () => requireManagerPin('Voiding a whole order needs manager authorisation.', async () => {
       confirmBox('Void order #' + o.number, 'All items will be voided and the table freed. This cannot be undone.', {
         danger: true, okLabel: 'Void order', fields: [{ name: 'reason', label: 'Reason', placeholder: 'Guest walked out / wrong order' }],
         onOk: async (v) => {
@@ -253,7 +264,8 @@ const Pos = (() => {
         }
       });
     });
-    host.querySelector('#discBtn').onclick = () => requireManagerPin('Discounts need manager authorisation.', () => discountModal(o, host));
+    const discountBtn = host.querySelector('#discBtn');
+    if (discountBtn) discountBtn.onclick = () => requireManagerPin('Discounts need manager authorisation.', () => discountModal(o, host));
     const peopleBtn = host.querySelector('#peopleBtn');
     if (peopleBtn) peopleBtn.onclick = async () => {
       const n = prompt('Number of guests at this table', o.people);

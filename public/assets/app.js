@@ -61,6 +61,11 @@ async function startApp(user) {
   /* Always pull the full catalogue — a fresh PIN login has no bootstrap data yet,
      and a returning session may be holding a stale menu or floor plan. */
   try { await loadBootstrap(); } catch (e) { toast('Could not load data: ' + e.message, 'err'); }
+  if (State.settings.business_type === 'wines_spirits' && State.settings.licence_expiry) {
+    const days = Math.ceil((new Date(State.settings.licence_expiry + 'T23:59:59') - new Date()) / 86400000);
+    if (days < 0) toast('Alcohol licence appears expired — owner action required', 'err');
+    else if (days <= 30) toast(`Alcohol licence expires in ${days} day(s)`, 'err');
+  }
   document.getElementById('login').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
   document.title = `${State.settings.business_name || 'POS'} — ${user.name}`;
@@ -79,7 +84,10 @@ async function startApp(user) {
 }
 
 function buildRail() {
-  const items = NAV[State.user.role] || NAV.waiter;
+  const retailAdmin = State.settings.business_type === 'wines_spirits' && ['admin', 'manager'].includes(State.user.role);
+  const items = retailAdmin
+    ? [['tables', 'Sale', 'floor'], ['bills', 'Receipts', 'cash'], ['manager', 'Management', 'chart']]
+    : (NAV[State.user.role] || NAV.waiter);
   const initials = State.user.name.split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase();
   document.getElementById('rail').innerHTML = `
     <div class="rail-logo">🍾</div>

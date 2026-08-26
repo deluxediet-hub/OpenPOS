@@ -52,8 +52,15 @@ CREATE TABLE IF NOT EXISTS menu_items (
   cost        INTEGER NOT NULL DEFAULT 0,       -- cents
   station     TEXT NOT NULL DEFAULT 'kitchen',
   available   INTEGER NOT NULL DEFAULT 1,
-  sort_order  INTEGER NOT NULL DEFAULT 0
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  sku         TEXT,
+  barcode     TEXT,
+  volume_ml   INTEGER,
+  kra_item_code TEXT,
+  tax_type    TEXT NOT NULL DEFAULT 'B'
 );
+CREATE UNIQUE INDEX IF NOT EXISTS ux_menu_sku ON menu_items(sku) WHERE sku IS NOT NULL AND sku != '';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_menu_barcode ON menu_items(barcode) WHERE barcode IS NOT NULL AND barcode != '';
 CREATE INDEX IF NOT EXISTS ix_menu_cat ON menu_items(category_id);
 
 CREATE TABLE IF NOT EXISTS tables (
@@ -77,7 +84,9 @@ CREATE TABLE IF NOT EXISTS orders (
   notes          TEXT,
   opened_at      TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   closed_at      TEXT,
-  closed_by      INTEGER REFERENCES users(id)
+  closed_by      INTEGER REFERENCES users(id),
+  age_verified   INTEGER NOT NULL DEFAULT 0,
+  age_check_note TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_orders_status ON orders(status);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_number ON orders(number);
@@ -350,6 +359,42 @@ function migrate() {
   add('users', 'hourly_rate', 'hourly_rate INTEGER NOT NULL DEFAULT 0');
   add('stock_items', 'location_id', 'location_id INTEGER REFERENCES locations(id)');
   add('payments', 'shift_id', 'shift_id INTEGER REFERENCES shifts(id)');
+  add('menu_items', 'sku', 'sku TEXT');
+  add('menu_items', 'barcode', 'barcode TEXT');
+  add('menu_items', 'volume_ml', 'volume_ml INTEGER');
+  add('menu_items', 'kra_item_code', 'kra_item_code TEXT');
+  add('menu_items', 'tax_type', "tax_type TEXT NOT NULL DEFAULT 'B'");
+  add('orders', 'age_verified', 'age_verified INTEGER NOT NULL DEFAULT 0');
+  add('orders', 'age_check_note', 'age_check_note TEXT');
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_menu_sku ON menu_items(sku) WHERE sku IS NOT NULL AND sku != '';
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_menu_barcode ON menu_items(barcode) WHERE barcode IS NOT NULL AND barcode != '';
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, phone TEXT, email TEXT,
+      kra_pin TEXT, address TEXT, active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS goods_receipts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, supplier_id INTEGER REFERENCES suppliers(id),
+      invoice_no TEXT NOT NULL, notes TEXT, total_cost INTEGER NOT NULL DEFAULT 0,
+      received_by INTEGER REFERENCES users(id), received_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS goods_receipt_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, receipt_id INTEGER NOT NULL REFERENCES goods_receipts(id) ON DELETE CASCADE,
+      stock_item_id INTEGER NOT NULL REFERENCES stock_items(id), qty REAL NOT NULL,
+      unit_cost INTEGER NOT NULL DEFAULT 0, batch_no TEXT, expiry_date TEXT
+    );
+    CREATE TABLE IF NOT EXISTS stock_counts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, reference TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+      notes TEXT, started_by INTEGER REFERENCES users(id), completed_by INTEGER REFERENCES users(id),
+      started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), completed_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS stock_count_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, stock_count_id INTEGER NOT NULL REFERENCES stock_counts(id) ON DELETE CASCADE,
+      stock_item_id INTEGER NOT NULL REFERENCES stock_items(id), expected REAL NOT NULL,
+      counted REAL, variance REAL, UNIQUE(stock_count_id,stock_item_id)
+    );
+  `);
 
   /* Upgrade any credentials left in plaintext by an older release.
      A stored value not starting with the hash marker is plaintext. */
@@ -400,6 +445,14 @@ const DEFAULT_SETTINGS = {
   receipt_footer: 'Asante sana. Please drink responsibly. No sale to persons under 18.',
   default_people: '1',
   business_type: 'wines_spirits',
+  minimum_sale_age: '18',
+  age_verification_required: '1',
+  prevent_negative_stock: '1',
+  licence_number: '',
+  licence_expiry: '',
+  sales_hours_enforced: '0',
+  sales_open_time: '00:00',
+  sales_close_time: '23:59',
 
   /* --- ESC/POS thermal printing (Phase 2.5) ---
      Leave printer_host blank to keep using browser printing. */

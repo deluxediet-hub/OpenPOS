@@ -40,7 +40,7 @@ function runSuite(file, base) {
 }
 
 (async () => {
-  const suites = ['domain.js', 'packaging.js', 'e2e.js', 'features.js', 'ui.js'];
+  const suites = ['domain.js', 'packaging.js', 'retail.js', 'e2e.js', 'features.js', 'ui.js'];
   let code = 0;
 
   for (const suite of suites) {
@@ -84,7 +84,8 @@ function runSuite(file, base) {
     const setupRes = await fetch(base + '/api/setup', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        business: { business_name: 'Test Cafe', address: '1 Test Way', phone: '+254700000000', kra_pin: 'P000000000T' },
+        business: { business_name: suite === 'retail.js' ? 'Test Wines & Spirits' : 'Test Cafe', address: '1 Test Way',
+          phone: '+254700000000', kra_pin: 'P000000000T', ...(suite === 'retail.js' ? { business_type: 'wines_spirits' } : {}) },
         owner_name: 'Owner', owner_pin: '0000', sample: true
       })
     });

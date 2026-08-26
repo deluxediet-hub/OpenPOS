@@ -13,7 +13,7 @@ const Manager = (() => {
     ['dashboard', 'Dashboard',   [['dashboard', 'Overview']]],
     ['reports',   'Reports',     [['sales', 'Sales'], ['labour', 'Labour'], ['audit', 'Audit log']]],
     ['menu',      'Products & Pricing', [['menu', 'Products'], ['modifiers', 'Options'], ['recipes', 'Recipes'], ['dayparts', 'Happy Hour']]],
-    ['stock',     'Stock',       [['stock', 'Inventory']]],
+    ['stock',     'Stock',       [['stock', 'Inventory'], ['stocktakes', 'Stocktakes'], ['deliveries', 'Deliveries'], ['suppliers', 'Suppliers']]],
     ['money',     'Cash & Loyalty', [['drawer', 'Cash Drawer'], ['loyalty', 'Loyalty']]],
     ['bookings',  'Bookings',    [['bookings', 'Reservations']]],
     ['team',      'Team',        [['staff', 'Staff']]],
@@ -46,7 +46,9 @@ const Manager = (() => {
     host.querySelectorAll('[data-top]').forEach((b) => b.onclick = () => { top = b.dataset.top; sub = null; render(host); });
     host.querySelectorAll('[data-sub]').forEach((b) => b.onclick = () => { sub = b.dataset.sub; render(host); });
     const body = host.querySelector('#mbody');
-    if (LOCAL[sub]) LOCAL[sub](body); else Manager2[EXT2[sub]](body);
+    if (LOCAL[sub]) LOCAL[sub](body);
+    else if (['stocktakes', 'deliveries', 'suppliers'].includes(sub)) Retail[sub](body);
+    else Manager2[EXT2[sub]](body);
   }
 
   /* ---------------------------- dashboard ---------------------------- */
@@ -251,7 +253,7 @@ const Manager = (() => {
     if (menuCat === null && cats.length) menuCat = cats[0].id;
     const items = State.menu.filter((m) =>
       (menuCat === null || m.category_id === menuCat) &&
-      (!menuSearch || m.name.toLowerCase().includes(menuSearch.toLowerCase())));
+      (!menuSearch || [m.name, m.sku, m.barcode].some((v) => String(v || '').toLowerCase().includes(menuSearch.toLowerCase()))));
 
     body.innerHTML = `
       <div class="row" style="margin-bottom:14px">
@@ -273,14 +275,14 @@ const Manager = (() => {
         <div class="card"><div class="card-h"><h3>${menuCat === null ? 'All items' : esc((cats.find((c) => c.id === menuCat) || {}).name)}</h3>
           <span class="grow"></span><span class="muted tiny">${items.length} items</span></div>
           <div class="scroll-x"><table class="tbl">
-            <thead><tr><th>Item</th><th>Category</th><th>Station</th><th class="right">Cost</th>
+            <thead><tr><th>Product / code</th><th>Category</th><th class="right">Stock</th><th class="right">Cost</th>
             <th class="right">Price</th><th class="right">Margin</th><th>Avail</th><th></th></tr></thead>
             <tbody>${items.map((m) => {
               const marg = m.price ? Math.round(((m.price - m.cost) / m.price) * 100) : 0;
               return `<tr>
-                <td><b>${esc(m.name)}</b></td>
+                <td><b>${esc(m.name)}</b><div class="tiny muted mono">${esc(m.sku || '')}${m.sku && m.barcode ? ' · ' : ''}${esc(m.barcode || '')}</div></td>
                 <td class="muted small">${esc(m.category_name)}</td>
-                <td><span class="tag ${m.station}">${m.station}</span></td>
+                <td class="right mono"><span class="tag ${m.stock_qty <= 0 ? 'bad' : m.stock_qty <= m.stock_min_qty ? 'warn' : 'ok'}">${m.stock_qty ?? '—'}</span></td>
                 <td class="right mono muted">${fmt(m.cost)}</td>
                 <td class="right mono"><b>${fmt(m.price)}</b></td>
                 <td class="right"><span class="tag ${marg >= 60 ? 'ok' : marg >= 40 ? 'warn' : 'bad'}">${marg}%</span></td>
@@ -340,20 +342,29 @@ const Manager = (() => {
     m = m || { name: '', price: 0, cost: 0, station: 'kitchen', available: 1, category_id: menuCat || State.categories[0].id };
     modal({
       title: isNew ? 'New product' : 'Edit — ' + m.name,
-      body: `<label class="fld">Name</label><input class="inp" id="in" value="${esc(m.name)}">
+      body: `<label class="fld">Product name</label><input class="inp" id="in" value="${esc(m.name)}" placeholder="Brand, variant and bottle size">
         <div class="grid3" style="margin-top:12px">
-          <div><label class="fld">Price (${sym()})</label><input class="inp" id="ip" type="number" step="0.01" value="${(m.price/100).toFixed(2)}"></div>
-          <div><label class="fld">Cost (${sym()})</label><input class="inp" id="ic" type="number" step="0.01" value="${(m.cost/100).toFixed(2)}"></div>
-          <div><label class="fld">Margin</label><input class="inp" id="im" disabled></div>
+          <div><label class="fld">SKU / shop code</label><input class="inp mono" id="isku" value="${esc(m.sku || '')}" placeholder="e.g. WHI-JAM-750"></div>
+          <div><label class="fld">Barcode</label><input class="inp mono" id="ibar" value="${esc(m.barcode || '')}" inputmode="numeric" placeholder="Scan or type EAN/UPC"></div>
+          <div><label class="fld">Volume (ml)</label><input class="inp" id="ivol" type="number" min="0" value="${m.volume_ml || ''}" placeholder="750"></div>
+        </div>
+        <div class="grid3" style="margin-top:12px">
+          <div><label class="fld">Selling price (${sym()})</label><input class="inp" id="ip" type="number" step="0.01" value="${(m.price/100).toFixed(2)}"></div>
+          <div><label class="fld">Unit cost (${sym()})</label><input class="inp" id="ic" type="number" step="0.01" value="${(m.cost/100).toFixed(2)}"></div>
+          <div><label class="fld">Gross margin</label><input class="inp" id="im" disabled></div>
         </div>
         <div class="grid2" style="margin-top:12px">
-          <div><label class="fld">Category</label>
-            <select class="inp" id="icat">${State.categories.map((c) =>
+          <div><label class="fld">Category</label><select class="inp" id="icat">${State.categories.map((c) =>
               `<option value="${c.id}" ${c.id === m.category_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
-          <div><label class="fld">Station</label>
-            <select class="inp" id="ist"><option value="kitchen" ${m.station === 'kitchen' ? 'selected' : ''}>Kitchen</option>
-              <option value="bar" ${m.station === 'bar' ? 'selected' : ''}>Bar</option></select></div>
+          ${State.settings.business_type === 'wines_spirits'
+            ? `<div><label class="fld">KRA item classification code</label><input class="inp mono" id="ikra" value="${esc(m.kra_item_code || '')}" placeholder="Required for live eTIMS"></div>`
+            : `<div><label class="fld">Station</label><select class="inp" id="ist"><option value="kitchen" ${m.station === 'kitchen' ? 'selected' : ''}>Kitchen</option><option value="bar" ${m.station === 'bar' ? 'selected' : ''}>Bar</option></select></div>`}
         </div>
+        ${isNew && State.settings.business_type === 'wines_spirits' ? `<div class="grid3" style="margin-top:12px">
+          <div><label class="fld">Opening stock</label><input class="inp" id="ioq" type="number" min="0" value="0"></div>
+          <div><label class="fld">Reorder level</label><input class="inp" id="imin" type="number" min="0" value="4"></div>
+          <div><label class="fld">Stock unit</label><select class="inp" id="iunit"><option>bottle</option><option>can</option><option>pack</option><option>crate</option><option>carton</option><option>piece</option></select></div>
+        </div>` : ''}
         <div style="margin-top:12px"><label class="row" style="gap:8px;cursor:pointer">
           <input type="checkbox" id="ia" ${m.available ? 'checked' : ''}> Available for sale</label></div>`,
       footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>${isNew ? 'Create item' : 'Save changes'}</button>`
@@ -371,7 +382,14 @@ const Manager = (() => {
         price: Number(ov.querySelector('#ip').value),
         cost: Number(ov.querySelector('#ic').value),
         category_id: Number(ov.querySelector('#icat').value),
-        station: ov.querySelector('#ist').value,
+        station: ov.querySelector('#ist')?.value || 'bar',
+        sku: ov.querySelector('#isku').value.trim(),
+        barcode: ov.querySelector('#ibar').value.trim(),
+        volume_ml: Number(ov.querySelector('#ivol').value) || null,
+        kra_item_code: ov.querySelector('#ikra')?.value.trim() || '',
+        opening_qty: Number(ov.querySelector('#ioq')?.value || 0),
+        min_qty: Number(ov.querySelector('#imin')?.value || 0),
+        unit: ov.querySelector('#iunit')?.value || 'bottle',
         available: ov.querySelector('#ia').checked ? 1 : 0
       };
       if (!payload.name) return toast('Name is required', 'err');
@@ -385,7 +403,7 @@ const Manager = (() => {
 
   /* ------------------------------ stock ------------------------------ */
   async function stock(body) {
-    const st = await api('/api/stock');
+    const [st, moves] = await Promise.all([api('/api/stock'), api('/api/stock-moves?limit=40')]);
     State.stock = st;
     const low = st.filter((x) => x.qty <= x.min_qty);
     const value = st.reduce((a, x) => a + x.qty * x.cost, 0);
@@ -412,7 +430,12 @@ const Manager = (() => {
               <button class="btn xs ghost" data-adj="${x.id}">Stock count</button>
               ${canManage() ? `<button class="btn xs ghost" data-se="${x.id}">Edit</button>` : ''}` : ''}</td>
           </tr>`).join('')}</tbody></table></div>
-      </div>`;
+      </div>
+      <div class="card" style="margin-top:14px"><div class="card-h"><h3>Recent stock movement</h3><span class="grow"></span><span class="tiny muted">Sales, deliveries and counts</span></div>
+        <div class="scroll-x" style="max-height:300px"><table class="tbl"><thead><tr><th>When</th><th>Product</th><th class="right">Change</th><th>Reason</th><th>By</th></tr></thead>
+        <tbody>${moves.map((m) => `<tr><td class="nowrap muted small">${esc(m.created_at)}</td><td><b>${esc(m.name)}</b></td>
+          <td class="right mono"><span class="tag ${m.delta < 0 ? 'warn' : 'ok'}">${m.delta > 0 ? '+' : ''}${m.delta} ${esc(m.unit)}</span></td>
+          <td class="small">${esc(m.reason || '—')}</td><td>${esc(m.user_name || 'system')}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">No stock movement yet.</td></tr>'}</tbody></table></div></div>`;
 
     if (!canEdit()) return;
     const addStock = body.querySelector('#addS');
@@ -577,6 +600,10 @@ const Manager = (() => {
           <div style="margin-top:10px"><label class="fld">Address</label><input class="inp" id="s_ad" value="${esc(s.address)}"></div>
           <div style="margin-top:10px"><label class="fld">Phone</label><input class="inp" id="s_ph" value="${esc(s.phone)}"></div>
           <div style="margin-top:10px"><label class="fld">KRA PIN</label><input class="inp mono" id="s_kra" value="${esc(s.kra_pin)}"></div>
+          ${s.business_type === 'wines_spirits' ? `<div class="grid2" style="margin-top:10px">
+            <div><label class="fld">Alcohol licence number</label><input class="inp mono" id="s_lic" value="${esc(s.licence_number || '')}"></div>
+            <div><label class="fld">Licence expiry</label><input class="inp" type="date" id="s_lice" value="${esc(s.licence_expiry || '')}"></div>
+          </div>` : ''}
         </div></div>
         <div class="card"><div class="card-h"><h3>Tax &amp; charges</h3></div><div class="card-b">
           <div class="grid2">
@@ -596,6 +623,11 @@ const Manager = (() => {
           <p class="tiny muted" style="margin-top:12px">Kenyan retail prices are normally VAT-inclusive. Service charge is normally disabled. Current setup: ${s.tax_mode === 'inclusive' ? 'inclusive' : 'exclusive'}, ${s.vat_rate}% VAT, ${s.service_charge_enabled ? s.service_charge_rate + '% service charge' : 'no service charge'}.</p>
         </div></div>
       </div>
+      ${s.business_type === 'wines_spirits' ? `<div class="card" style="margin-top:14px"><div class="card-h"><h3>Responsible retail controls</h3></div><div class="card-b grid3">
+        <div><label class="fld">Minimum sale age</label><input class="inp" id="s_age" type="number" min="18" value="${esc(s.minimum_sale_age || 18)}"></div>
+        <div><label class="fld">Require age confirmation</label><select class="inp" id="s_age_req"><option value="1" ${s.age_verification_required === '1' ? 'selected' : ''}>Yes — block payment</option><option value="0" ${s.age_verification_required !== '1' ? 'selected' : ''}>No</option></select></div>
+        <div><label class="fld">Prevent negative stock</label><select class="inp" id="s_neg"><option value="1" ${s.prevent_negative_stock === '1' ? 'selected' : ''}>Yes</option><option value="0" ${s.prevent_negative_stock !== '1' ? 'selected' : ''}>No</option></select></div>
+      </div></div>` : ''}
       <div class="card" style="margin-top:14px"><div class="card-h"><h3>Receipt</h3></div><div class="card-b">
         <label class="fld">Footer message</label><input class="inp" id="s_ft" value="${esc(s.receipt_footer)}">
       </div></div>
@@ -635,7 +667,11 @@ const Manager = (() => {
           vat_rate: body.querySelector('#s_vat').value, tax_mode: body.querySelector('#s_mode').value,
           service_charge_rate: body.querySelector('#s_sc').value,
           service_charge_enabled: body.querySelector('#s_sce').value,
-          receipt_footer: body.querySelector('#s_ft').value
+          receipt_footer: body.querySelector('#s_ft').value,
+          licence_number: body.querySelector('#s_lic')?.value || '', licence_expiry: body.querySelector('#s_lice')?.value || '',
+          minimum_sale_age: body.querySelector('#s_age')?.value || s.minimum_sale_age || 18,
+          age_verification_required: body.querySelector('#s_age_req')?.value || s.age_verification_required || '1',
+          prevent_negative_stock: body.querySelector('#s_neg')?.value || s.prevent_negative_stock || '1'
         } });
         toast('Settings saved', 'ok');
         document.getElementById('lgName') && (document.getElementById('lgName').textContent = State.settings.business_name);
