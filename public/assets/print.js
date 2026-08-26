@@ -15,8 +15,8 @@ function receiptHtml(r, { paid = false } = {}) {
     ${line('Receipt #', String(o.number))}
     ${line('Date', (o.closed_at || o.opened_at).slice(0, 16))}
     ${r.table ? line('Table', esc(r.table.name) + ' · ' + esc(r.table.area)) : ''}
-    ${line('Guests', o.people)}
-    ${line('Served by', esc((r.waiter || {}).name || '—'))}
+    ${s.business_type === 'wines_spirits' ? '' : line('Guests', o.people)}
+    ${line(s.business_type === 'wines_spirits' ? 'Sold by' : 'Served by', esc((r.waiter || {}).name || '—'))}
     ${line('Cashier', esc(State.user ? State.user.name : '—'))}
     <hr>
     <table>${items}</table>
@@ -35,6 +35,7 @@ function receiptHtml(r, { paid = false } = {}) {
       line(p.method.toUpperCase() + (p.reference ? ' ' + esc(p.reference) : ''), (p.amount / 100).toFixed(2))).join('')}` : ''}
     <hr>
     <div class="c" style="margin-top:6px">${esc(s.receipt_footer)}</div>
+    ${s.business_type === 'wines_spirits' ? '<div class="c" style="margin-top:5px;font-weight:700">18+ ONLY · PLEASE DRINK RESPONSIBLY</div>' : ''}
     <div class="c" style="margin-top:8px;font-size:10px">${esc(s.business_name || 'POS')} · ${new Date().toLocaleString('en-KE')}</div>
   </div>`;
 }

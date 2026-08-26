@@ -5,13 +5,14 @@ const Manager = (() => {
   let top = 'dashboard';
   let sub = null;
   const range = { from: today(), to: today() };
-  const canEdit = () => ['manager', 'admin'].includes(State.user.role);
+  const canEdit = () => ['seller', 'manager', 'admin'].includes(State.user.role);
+  const canManage = () => ['manager', 'admin'].includes(State.user.role);
 
   /* Eight top-level groups over the SAME existing screens (presentation only). */
   const TOP = [
     ['dashboard', 'Dashboard',   [['dashboard', 'Overview']]],
     ['reports',   'Reports',     [['sales', 'Sales'], ['labour', 'Labour'], ['audit', 'Audit log']]],
-    ['menu',      'Menu & Pricing', [['menu', 'Items'], ['modifiers', 'Options'], ['recipes', 'Recipes'], ['dayparts', 'Happy Hour']]],
+    ['menu',      'Products & Pricing', [['menu', 'Products'], ['modifiers', 'Options'], ['recipes', 'Recipes'], ['dayparts', 'Happy Hour']]],
     ['stock',     'Stock',       [['stock', 'Inventory']]],
     ['money',     'Cash & Loyalty', [['drawer', 'Cash Drawer'], ['loyalty', 'Loyalty']]],
     ['bookings',  'Bookings',    [['bookings', 'Reservations']]],
@@ -26,10 +27,18 @@ const Manager = (() => {
   };
 
   function render(host) {
-    const group = TOP.find(([k]) => k === top) || TOP[0];
+    const retail = State.settings.business_type === 'wines_spirits';
+    const retailTop = TOP.filter(([k]) => k !== 'bookings').map(([k, label, children]) => {
+      if (k === 'reports') children = children.filter(([id]) => ['sales', 'audit'].includes(id));
+      if (k === 'menu') children = children.filter(([id]) => id === 'menu');
+      return [k, label, children];
+    });
+    const visibleTop = State.user.role === 'seller' ? TOP.filter(([k]) => k === 'stock') : (retail ? retailTop : TOP);
+    if (State.user.role === 'seller') top = 'stock';
+    const group = visibleTop.find(([k]) => k === top) || visibleTop[0];
     if (!group[2].some(([k]) => k === sub)) sub = group[2][0][0];
     host.innerHTML = `
-      <div class="tabs">${TOP.map(([k, l]) =>
+      <div class="tabs">${visibleTop.map(([k, l]) =>
         `<button class="tab${top === k ? ' active' : ''}" data-top="${k}">${l}</button>`).join('')}</div>
       ${group[2].length > 1 ? `<div class="tabs subtabs">${group[2].map(([k, l]) =>
         `<button class="tab sub${sub === k ? ' active' : ''}" data-sub="${k}">${l}</button>`).join('')}</div>` : ''}
@@ -42,6 +51,7 @@ const Manager = (() => {
 
   /* ---------------------------- dashboard ---------------------------- */
   async function dashboard(body) {
+    const retail = State.settings.business_type === 'wines_spirits';
     body.innerHTML = '<div class="empty">Loading dashboard…</div>';
     const [s, items, z] = await Promise.all([
       api(`/api/reports/summary?from=${range.from}&to=${range.to}`),
@@ -62,8 +72,8 @@ const Manager = (() => {
       </div>
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:14px">
         ${stat('Net sales', fmt(s.gross), `${s.orders_closed} receipts`)}
-        ${stat('Average ticket', fmt(s.avg_ticket), `${s.covers} covers`)}
-        ${stat('Per cover', fmt(s.avg_per_cover), 'guests served')}
+        ${stat('Average ticket', fmt(s.avg_ticket), retail ? `${s.orders_closed} completed sales` : `${s.covers} covers`)}
+        ${retail ? stat('Units sold', items.reduce((n, i) => n + i.qty, 0), 'products across completed sales') : stat('Per cover', fmt(s.avg_per_cover), 'guests served')}
         ${stat('Gross profit', fmt(s.gross_profit), s.margin + '% margin · COGS ' + fmt(s.cogs))}
         ${stat('VAT collected', fmt(s.vat_collected), `${State.settings.vat_rate}% (${State.settings.tax_mode})`)}
         ${stat('Discounts & voids', fmt(s.discounts), s.orders_void + ' voided checks', 'warn')}
@@ -123,6 +133,7 @@ const Manager = (() => {
 
   /* ----------------------------- reports ----------------------------- */
   async function sales(body) {
+    const retail = State.settings.business_type === 'wines_spirits';
     body.innerHTML = `
       <div class="row" style="margin-bottom:14px">
         <label class="fld" style="margin:0">From</label><input class="inp" type="date" id="rf" value="${range.from}" style="width:auto">
@@ -150,7 +161,7 @@ const Manager = (() => {
             rows: sm.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]) },
           { title: 'Top items', head: ['Item', 'Qty', 'Revenue'], right: [1, 2],
             rows: items.slice(0, 25).map((i) => [i.name, String(i.qty), (i.revenue / 100).toFixed(2)]) },
-          { title: 'By waiter', head: ['Waiter', 'Checks', 'Covers', 'Revenue'], right: [1, 2, 3],
+          { title: retail ? 'By seller' : 'By waiter', head: [retail ? 'Seller' : 'Waiter', retail ? 'Sales' : 'Checks', retail ? 'Orders' : 'Covers', 'Revenue'], right: [1, 2, 3],
             rows: waiters.map((w) => [w.waiter || 'Unassigned', String(w.orders), String(w.covers), (w.revenue / 100).toFixed(2)]) },
           { title: 'By category', head: ['Category', 'Qty', 'Revenue'], right: [1, 2],
             rows: cats.map((c) => [c.category, String(c.qty), (c.revenue / 100).toFixed(2)]) }
@@ -178,7 +189,7 @@ const Manager = (() => {
         </div>
         <div class="grid" style="grid-template-columns:1fr 1fr">
           <div class="card"><div class="card-h"><h3>Sales by waiter</h3></div>
-            <table class="tbl"><thead><tr><th>Waiter</th><th class="right">Checks</th><th class="right">Covers</th><th class="right">Revenue</th></tr></thead>
+            <table class="tbl"><thead><tr><th>${retail ? 'Seller' : 'Waiter'}</th><th class="right">${retail ? 'Sales' : 'Checks'}</th><th class="right">${retail ? 'Orders' : 'Covers'}</th><th class="right">Revenue</th></tr></thead>
             <tbody>${waiters.map((w) => `<tr><td><b>${esc(w.waiter || 'Unassigned')}</b></td>
               <td class="right mono">${w.orders}</td><td class="right mono">${w.covers}</td>
               <td class="right mono"><b>${fmt(w.revenue)}</b></td></tr>`).join('') || '<tr><td colspan="4" class="empty">No data.</td></tr>'}</tbody></table>
@@ -244,10 +255,10 @@ const Manager = (() => {
 
     body.innerHTML = `
       <div class="row" style="margin-bottom:14px">
-        <input class="inp" id="ms" placeholder="Search menu…" value="${esc(menuSearch)}" style="max-width:240px">
+        <input class="inp" id="ms" placeholder="Search products…" value="${esc(menuSearch)}" style="max-width:240px">
         <span class="grow"></span>
         ${canEdit() ? `<button class="btn ghost" id="addCat">+ Category</button>
-          <button class="btn primary" id="add">+ New item</button>` : '<span class="tag info">Read only</span>'}
+          <button class="btn primary" id="add">+ New product</button>` : '<span class="tag info">Read only</span>'}
       </div>
       <div class="pos" style="grid-template-columns:230px 1fr;height:auto">
         <div class="card" style="align-self:start">
@@ -328,7 +339,7 @@ const Manager = (() => {
     const isNew = !m;
     m = m || { name: '', price: 0, cost: 0, station: 'kitchen', available: 1, category_id: menuCat || State.categories[0].id };
     modal({
-      title: isNew ? 'New menu item' : 'Edit — ' + m.name,
+      title: isNew ? 'New product' : 'Edit — ' + m.name,
       body: `<label class="fld">Name</label><input class="inp" id="in" value="${esc(m.name)}">
         <div class="grid3" style="margin-top:12px">
           <div><label class="fld">Price (${sym()})</label><input class="inp" id="ip" type="number" step="0.01" value="${(m.price/100).toFixed(2)}"></div>
@@ -384,7 +395,7 @@ const Manager = (() => {
         ${stat('Low stock', low.length, low.length ? 'needs reordering' : 'all healthy', low.length ? 'warn' : '')}
         ${stat('Out of stock', st.filter((x) => x.qty <= 0).length, 'items at zero')}
         <span class="grow"></span>
-        ${canEdit() ? '<button class="btn primary" id="addS" style="align-self:center">+ New stock item</button>' : ''}
+        ${canManage() ? '<button class="btn primary" id="addS" style="align-self:center">+ New stock item</button>' : ''}
       </div>
       <div class="card"><div class="card-h"><h3>Inventory</h3><span class="grow"></span>
         <span class="muted tiny">Received = add stock · Adjust = count correction / wastage</span></div>
@@ -398,13 +409,14 @@ const Manager = (() => {
             <td class="right mono">${fmt(x.qty * x.cost)}</td>
             <td>${x.qty <= 0 ? '<span class="tag bad">Out</span>' : x.qty <= x.min_qty ? '<span class="tag warn">Low</span>' : '<span class="tag ok">OK</span>'}</td>
             <td class="right nowrap">${canEdit() ? `<button class="btn xs green" data-rec="${x.id}">Received</button>
-              <button class="btn xs ghost" data-adj="${x.id}">Adjust</button>
-              <button class="btn xs ghost" data-se="${x.id}">Edit</button>` : ''}</td>
+              <button class="btn xs ghost" data-adj="${x.id}">Stock count</button>
+              ${canManage() ? `<button class="btn xs ghost" data-se="${x.id}">Edit</button>` : ''}` : ''}</td>
           </tr>`).join('')}</tbody></table></div>
       </div>`;
 
     if (!canEdit()) return;
-    body.querySelector('#addS').onclick = () => stockForm(null, body);
+    const addStock = body.querySelector('#addS');
+    if (addStock) addStock.onclick = () => stockForm(null, body);
     body.querySelectorAll('[data-se]').forEach((b) => b.onclick = () =>
       stockForm(State.stock.find((x) => x.id === Number(b.dataset.se)), body));
     body.querySelectorAll('[data-rec]').forEach((b) => b.onclick = () => adjust(State.stock.find((x) => x.id === Number(b.dataset.rec)), body, 'receive'));
@@ -413,12 +425,12 @@ const Manager = (() => {
 
   function adjust(x, body, mode) {
     modal({
-      title: (mode === 'receive' ? 'Stock received — ' : 'Adjust — ') + x.name,
+      title: (mode === 'receive' ? 'Stock received — ' : 'Stock count — ') + x.name,
       body: `<p class="muted" style="margin-top:0">Current level: <b>${x.qty} ${esc(x.unit)}</b></p>
-        <label class="fld">${mode === 'receive' ? 'Quantity received' : 'Change (+ / −)'}</label>
-        <input class="inp" id="aq" type="number" step="0.5" value="${mode === 'receive' ? '' : '0'}" placeholder="${mode === 'receive' ? 'e.g. 25' : 'e.g. -3'}">
+        <label class="fld">${mode === 'receive' ? 'Quantity received' : 'Actual quantity counted'}</label>
+        <input class="inp" id="aq" type="number" step="0.5" value="${mode === 'receive' ? '' : x.qty}" placeholder="${mode === 'receive' ? 'e.g. 25' : 'e.g. 9'}">
         <div style="margin-top:12px"><label class="fld">Reason</label>
-          <input class="inp" id="ar" placeholder="${mode === 'receive' ? 'Supplier delivery / invoice no.' : 'Wastage, breakage, stock count'}"></div>`,
+          <input class="inp" id="ar" placeholder="${mode === 'receive' ? 'Supplier delivery / invoice no.' : 'Full count, breakage found, correction…'}"></div>`,
       footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Save</button>`
     });
     const ov = document.querySelector('#modalRoot .ov');
@@ -426,9 +438,12 @@ const Manager = (() => {
     ov.querySelector('[data-yes]').onclick = async () => {
       let d = Number(ov.querySelector('#aq').value) || 0;
       if (mode === 'receive') d = Math.abs(d);
-      if (!d) return toast('Enter a quantity', 'err');
+      else d -= x.qty;
+      const reason = ov.querySelector('#ar').value.trim();
+      if (!d) return toast('The count matches the current stock', 'err');
+      if (!reason) return toast('Enter a reason or count reference', 'err');
       try {
-        await api(`/api/stock/${x.id}/adjust`, { body: { delta: d, reason: ov.querySelector('#ar').value } });
+        await api(`/api/stock/${x.id}/adjust`, { body: { delta: d, reason } });
         closeModal(); stock(body); toast('Stock updated', 'ok');
       } catch (e) { toast(e.message, 'err'); }
     };
@@ -468,9 +483,9 @@ const Manager = (() => {
   /* ------------------------------ staff ------------------------------ */
   async function staff(body) {
     const users = await api('/api/users');
-    const ROLES = ['admin', 'manager', 'waiter', 'cashier', 'bartender', 'kitchen'];
-    const CAN = { admin: 'Full access', manager: 'Reports, menu, voids, refunds', waiter: 'Tables & orders',
-      cashier: 'Bills & payments', bartender: 'Bar orders & KDS', kitchen: 'Kitchen display' };
+    const ROLES = ['seller', 'admin'];
+    const CAN = { admin: 'Unlimited access: settings, reports, products, staff, stock, refunds and audit',
+      seller: 'Sales, payments, receipts, cash drawer and stock taking' };
     body.innerHTML = `
       <div class="row" style="margin-bottom:14px">
         <h3 style="margin:0;font-size:14px">Team (${users.length})</h3><span class="grow"></span>
@@ -501,7 +516,7 @@ const Manager = (() => {
 
   function userForm(u, body, ROLES) {
     const isNew = !u;
-    u = u || { name: '', pin: '', role: 'waiter', active: 1 };
+    u = u || { name: '', pin: '', role: 'seller', active: 1 };
     const pinLabel = isNew ? 'PIN (4-6 digits)' : 'PIN (4-6 digits) - leave blank to keep';
     const pinAttrs = isNew ? 'required placeholder="New PIN"' : 'placeholder="New PIN"';
     modal({
@@ -551,8 +566,8 @@ const Manager = (() => {
     body.innerHTML = `
       <div class="card" style="margin-bottom:14px"><div class="card-b row">
         <div style="min-width:220px"><b>Starter template</b>
-          <div class="tiny muted" style="margin-top:4px">Load a ready-made Kenyan restaurant &amp; lounge menu
-          (categories, items, recipes, tables) as a starting point. Never overwrites existing data.</div></div>
+          <div class="tiny muted" style="margin-top:4px">Load a Kenyan wines &amp; spirits starter catalogue
+          (products, selling prices, costs and bottle stock) as a starting point. Never overwrites existing data.</div></div>
         <span class="grow"></span>
         <button class="btn" id="loadSample" ${hasMenu ? 'disabled title="A menu already exists"' : ''}>Load sample menu</button>
       </div></div>
@@ -578,7 +593,7 @@ const Manager = (() => {
               <select class="inp" id="s_sce"><option value="1" ${s.service_charge_enabled ? 'selected' : ''}>Yes</option>
                 <option value="0" ${!s.service_charge_enabled ? 'selected' : ''}>No</option></select></div>
           </div>
-          <p class="tiny muted" style="margin-top:12px">Kenyan restaurants normally quote VAT-inclusive prices and add a 10% service charge before VAT. Current setup: ${s.tax_mode === 'inclusive' ? 'inclusive' : 'exclusive'}, ${s.vat_rate}% VAT, ${s.service_charge_enabled ? s.service_charge_rate + '% service charge' : 'no service charge'}.</p>
+          <p class="tiny muted" style="margin-top:12px">Kenyan retail prices are normally VAT-inclusive. Service charge is normally disabled. Current setup: ${s.tax_mode === 'inclusive' ? 'inclusive' : 'exclusive'}, ${s.vat_rate}% VAT, ${s.service_charge_enabled ? s.service_charge_rate + '% service charge' : 'no service charge'}.</p>
         </div></div>
       </div>
       <div class="card" style="margin-top:14px"><div class="card-h"><h3>Receipt</h3></div><div class="card-b">
@@ -604,7 +619,7 @@ const Manager = (() => {
 
     const ls = body.querySelector('#loadSample');
     if (ls) ls.onclick = () => confirmBox('Load sample menu',
-      'Adds the demo restaurant & lounge menu, tables and recipes alongside anything you already have. Your existing data is untouched.', {
+      'Adds a starter wines and spirits catalogue with matching bottle stock. Your existing data is untouched.', {
         okLabel: 'Load sample', onOk: async () => {
           try { await api('/api/setup/sample', { body: {} }); await Manager.reload();
             settings(body); toast('Sample menu loaded', 'ok'); }

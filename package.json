@@ -2,7 +2,7 @@
   "name": "openpos",
   "version": "1.0.0",
   "private": true,
-  "description": "White-label point of sale for restaurants & lounges: floor plan, order taking, kitchen display, payments (Cash/Card/M-Pesa), inventory, staff, loyalty and reports. Self-configuring via first-run onboarding.",
+  "description": "Point of sale for a small Kenyan wines and spirits shop: owner/admin, sellers, KES, M-Pesa, receipts, stock taking and audit.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

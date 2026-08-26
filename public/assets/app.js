@@ -2,6 +2,7 @@
 'use strict';
 
 const NAV = {
+  seller:    [['tables', 'Sale', 'floor'], ['bills', 'Receipts', 'cash'], ['manager', 'Stock', 'chart']],
   admin:     [['tables', 'Floor', 'floor'], ['bills', 'Bills', 'cash'], ['kds', 'Kitchen', 'chef'], ['manager', 'Manager', 'chart']],
   manager:   [['tables', 'Floor', 'floor'], ['bills', 'Bills', 'cash'], ['kds', 'Kitchen', 'chef'], ['manager', 'Manager', 'chart']],
   waiter:    [['tables', 'Floor', 'floor'], ['bills', 'Bills', 'cash'], ['kds', 'Kitchen', 'chef']],
@@ -9,7 +10,7 @@ const NAV = {
   bartender: [['kds', 'Kitchen', 'chef'], ['tables', 'Floor', 'floor']],
   kitchen:   [['kds', 'Kitchen', 'chef']]
 };
-const HOME = { admin: 'manager', manager: 'manager', waiter: 'tables', cashier: 'bills', bartender: 'kds', kitchen: 'kds' };
+const HOME = { seller: 'tables', admin: 'manager', manager: 'manager', waiter: 'tables', cashier: 'bills', bartender: 'kds', kitchen: 'kds' };
 
 let pin = '';
 let clockTimer = null;
@@ -81,7 +82,7 @@ function buildRail() {
   const items = NAV[State.user.role] || NAV.waiter;
   const initials = State.user.name.split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase();
   document.getElementById('rail').innerHTML = `
-    <div class="rail-logo">🍽️</div>
+    <div class="rail-logo">🍾</div>
     ${items.map(([k, l, ic]) => `<button class="rail-btn" data-nav="${k}" title="${l}">
       ${ICONS[ic]}<span>${l}</span></button>`).join('')}
     <div class="rail-spacer"></div>
@@ -97,10 +98,10 @@ function buildRail() {
 }
 
 const TITLES = {
-  tables: ['Floor plan', 'Seat guests, take orders'],
-  bills: ['Bills & payments', 'Cash · Card · M-Pesa'],
+  tables: ['New sale', 'Scan or tap products, then take payment'],
+  bills: ['Receipts & payments', 'Cash · Card · M-Pesa'],
   kds: ['Kitchen & bar display', 'Live tickets'],
-  manager: ['Manager console', 'Reports, menu, stock, staff']
+  manager: ['Shop management', 'Sales, products, stock and staff']
 };
 
 async function navigate(view) {
@@ -172,7 +173,8 @@ function initSetup() {
             currency: document.getElementById('suCur').value,
             currency_symbol: document.getElementById('suSym').value,
             vat_rate: document.getElementById('suVat').value,
-            service_charge_rate: document.getElementById('suSvc').value
+            service_charge_rate: document.getElementById('suSvc').value,
+            service_charge_enabled: false, business_type: 'wines_spirits'
           },
           owner_name: document.getElementById('suOwner').value,
           owner_pin: pin,

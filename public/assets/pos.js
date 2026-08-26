@@ -4,6 +4,7 @@
 const Pos = (() => {
   /* ---------------------------- FLOOR MAP ---------------------------- */
   function renderFloor(host) {
+    if (State.settings.business_type === 'wines_spirits') return renderRetail(host);
     const areas = ['All', ...new Set(State.tables.map((t) => t.area))];
     const list = State.tables.filter((t) => State.area === 'All' || t.area === State.area);
     const counts = { free: 0, occupied: 0, billed: 0 };
@@ -52,6 +53,27 @@ const Pos = (() => {
     host.querySelectorAll('[data-tid]').forEach((b) => b.onclick = () => tapTable(host, Number(b.dataset.tid)));
     host.querySelectorAll('[data-oid]').forEach((b) => b.onclick = () => openEditor(host, Number(b.dataset.oid)));
     host.querySelector('#newTakeaway').onclick = () => newOrder(host, null);
+  }
+
+  /* Retail till: no restaurant floor, seating or kitchen workflow. */
+  function renderRetail(host) {
+    const open = State.orders.filter((o) => ['open', 'billed'].includes(o.status) && !o.table_id);
+    host.innerHTML = `
+      <div class="row" style="margin-bottom:14px">
+        <div class="stat" style="flex:1;min-width:150px"><div class="l">Open sales</div><div class="v">${open.length}</div><div class="d">parked at this till</div></div>
+        <div class="stat" style="flex:1;min-width:150px"><div class="l">Products</div><div class="v">${State.menu.filter((m) => m.available).length}</div><div class="d">available for sale</div></div>
+        <div class="stat" style="flex:1;min-width:150px"><div class="l">Low stock</div><div class="v" style="color:var(--amber)">${State.stock.filter((x) => x.qty <= x.min_qty).length}</div><div class="d">check Stock tab</div></div>
+        <span class="grow"></span><button class="btn primary" id="newRetailSale">+ New sale</button>
+      </div>
+      <div class="card"><div class="card-h"><h3>Open / parked sales</h3><span class="grow"></span>
+        <span class="muted tiny">Start a sale, add bottles or packs, then take Cash, Card or M-Pesa.</span></div>
+        <div class="ord-list" style="padding:12px">${open.map((o) => `
+          <div class="ord" data-oid="${o.id}"><div class="t"><span>Sale #${o.number}</span><span>${fmt(o.totals.grand_total)}</span></div>
+          <div class="m"><span>${o.items.reduce((n, i) => n + i.qty, 0)} unit(s)</span><span>opened ${ago(o.opened_at)} ago</span>
+          <span>${esc(waiterName(o.waiter_id))}</span></div></div>`).join('') || '<div class="empty">No open sales. Tap “New sale” to begin.</div>'}</div>
+      </div>`;
+    host.querySelector('#newRetailSale').onclick = () => newOrder(host, null);
+    host.querySelectorAll('[data-oid]').forEach((b) => b.onclick = () => openEditor(host, Number(b.dataset.oid)));
   }
 
   function tapTable(host, tid) {
@@ -117,6 +139,7 @@ const Pos = (() => {
     const o = activeOrder();
     if (!o) return renderFloor(host);
     const t = orderTable(o);
+    const retail = State.settings.business_type === 'wines_spirits';
     const cat = State.categories.find((c) => c.id === State.category);
     const items = cat
       ? State.menu.filter((m) => m.category_id === cat.id)
@@ -127,19 +150,19 @@ const Pos = (() => {
 
     host.innerHTML = `
       <div class="row" style="margin-bottom:12px">
-        <button class="btn ghost" id="back">← Floor</button>
-        <h3 style="margin:0;font-size:16px">${t ? esc(t.name) + ' <span class="muted small">' + esc(t.area) + '</span>' : 'Takeaway #' + o.number}</h3>
+        <button class="btn ghost" id="back">← ${retail ? 'Sales' : 'Floor'}</button>
+        <h3 style="margin:0;font-size:16px">${t ? esc(t.name) + ' <span class="muted small">' + esc(t.area) + '</span>' : (retail ? 'Sale #' : 'Takeaway #') + o.number}</h3>
         <span class="tag ${o.status === 'billed' ? 'info' : 'warn'}">${o.status}</span>
-        <span class="muted small">#${o.number} · ${o.people} guests · ${esc(waiterName(o.waiter_id))} · open ${ago(o.opened_at)}</span>
+        <span class="muted small">#${o.number}${retail ? '' : ' · ' + o.people + ' guests'} · ${esc(waiterName(o.waiter_id))} · open ${ago(o.opened_at)}</span>
         <span class="grow"></span>
-        <button class="btn sm" id="transfer">Move table</button>
-        <button class="btn sm" id="peopleBtn">Guests: ${o.people}</button>
+        ${retail ? '' : `<button class="btn sm" id="transfer">Move table</button>
+        <button class="btn sm" id="peopleBtn">Guests: ${o.people}</button>`}
         <button class="btn sm" id="discBtn">Discount</button>
         <button class="btn sm red" id="voidBtn">Void order</button>
       </div>
       <div class="pos">
         <div class="menu-panel">
-          <div class="search"><input class="inp" id="search" placeholder="Search menu…  ( / )" value="${esc(search)}"></div>
+          <div class="search"><input class="inp" id="search" placeholder="Search products…  ( / )" value="${esc(search)}"></div>
           <div class="cats">
             ${State.categories.map((c) => `
               <button class="cat${c.id === State.category && !search ? ' active' : ''}" data-cat="${c.id}">
@@ -160,8 +183,8 @@ const Pos = (() => {
         <div class="bill-panel">
           <div class="bill-head">
             <div class="row" style="justify-content:space-between">
-              <div><b>Current order</b><div class="tiny muted">${o.items.length} line(s) · ${o.items.filter(i=>i.status==='pending').length} unsent</div></div>
-              <button class="btn sm" id="printBill">🖨 Pre-bill</button>
+              <div><b>${retail ? 'Current sale' : 'Current order'}</b><div class="tiny muted">${o.items.length} line(s) · ${o.items.filter(i=>i.status==='pending').length} unsent</div></div>
+              <button class="btn sm" id="printBill">🖨 ${retail ? 'Sale slip' : 'Pre-bill'}</button>
             </div>
           </div>
           <div class="bill-lines">
@@ -187,9 +210,9 @@ const Pos = (() => {
           <div class="bill-foot">
             ${totalRows(o)}
             <div class="row" style="margin-top:11px">
-              <button class="btn green" id="send" style="flex:1;justify-content:center" ${o.items.some(i=>i.status==='pending') ? '' : 'disabled'}>
+              ${retail ? '' : `<button class="btn green" id="send" style="flex:1;justify-content:center" ${o.items.some(i=>i.status==='pending') ? '' : 'disabled'}>
                 🔥 Send to kitchen / bar${o.items.some(i=>i.status==='pending') ? ' (' + o.items.filter(i=>i.status==='pending').length + ')' : ''}
-              </button>
+              </button>`}
               <button class="btn primary" id="toBill" style="flex:1;justify-content:center">💳 Take payment</button>
             </div>
           </div>
@@ -207,7 +230,8 @@ const Pos = (() => {
     host.querySelectorAll('[data-dec]').forEach((b) => b.onclick = () => bump(host, Number(b.dataset.dec), -1));
     host.querySelectorAll('[data-rm]').forEach((b) => b.onclick = () => removeLine(host, Number(b.dataset.rm)));
     host.querySelectorAll('[data-note]').forEach((b) => b.onclick = () => noteLine(host, Number(b.dataset.note)));
-    host.querySelector('#send').onclick = async () => {
+    const sendBtn = host.querySelector('#send');
+    if (sendBtn) sendBtn.onclick = async () => {
       try {
         await api(`/api/orders/${o.id}/send`, { method: 'POST' });
         await refresh();
@@ -218,7 +242,8 @@ const Pos = (() => {
     };
     host.querySelector('#printBill').onclick = () => printReceipt(o.id, { paid: false });
     host.querySelector('#toBill').onclick = () => Cashier.payModal(o.id, () => { closeEditor(host); });
-    host.querySelector('#transfer').onclick = () => transferModal(o, host);
+    const transferBtn = host.querySelector('#transfer');
+    if (transferBtn) transferBtn.onclick = () => transferModal(o, host);
     host.querySelector('#voidBtn').onclick = () => requireManagerPin('Voiding a whole order needs manager authorisation.', async () => {
       confirmBox('Void order #' + o.number, 'All items will be voided and the table freed. This cannot be undone.', {
         danger: true, okLabel: 'Void order', fields: [{ name: 'reason', label: 'Reason', placeholder: 'Guest walked out / wrong order' }],
@@ -229,7 +254,8 @@ const Pos = (() => {
       });
     });
     host.querySelector('#discBtn').onclick = () => requireManagerPin('Discounts need manager authorisation.', () => discountModal(o, host));
-    host.querySelector('#peopleBtn').onclick = async () => {
+    const peopleBtn = host.querySelector('#peopleBtn');
+    if (peopleBtn) peopleBtn.onclick = async () => {
       const n = prompt('Number of guests at this table', o.people);
       if (!n || !(Number(n) > 0)) return;
       try {

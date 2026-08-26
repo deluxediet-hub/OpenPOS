@@ -186,7 +186,7 @@ async function loadBootstrap() {
   const b = await api('/api/bootstrap');
   Object.assign(State, {
     user: b.user, settings: b.settings, categories: b.categories,
-    menu: b.menu, tables: b.tables, orders: b.orders, users: b.users,
+    menu: b.menu, tables: b.tables, orders: b.orders, users: b.users, stock: b.stock || [],
     dayparts: b.dayparts || [], activeDayparts: b.active_dayparts || [], pricing: b.pricing || {},
     modifierGroups: b.modifier_groups || [], modifierOptions: b.modifier_options || [],
     itemModifiers: b.item_modifiers || [], shift: b.shift || null,
@@ -206,7 +206,7 @@ const groupsFor = (itemId) => State.itemModifiers
 /** Live selling price for an item, honouring any active happy hour. */
 const priceOf = (m) => (State.pricing[m.id] ? State.pricing[m.id].price : m.price);
 const ruleFor = (m) => State.pricing[m.id] ? State.pricing[m.id].rule : null;
-const orderLabel = (o) => { const t = orderTable(o); return t ? t.name : 'Takeaway #' + o.number; };
+const orderLabel = (o) => { const t = orderTable(o); return t ? t.name : (State.settings.business_type === 'wines_spirits' ? 'Sale #' : 'Takeaway #') + o.number; };
 const activeOrder = () => State.orders.find((o) => o.id === State.openOrderId);
 const waiterName = (id) => (State.users.find((u) => u.id === id) || {}).name || '—';
 const tableStatus = (tid) => {

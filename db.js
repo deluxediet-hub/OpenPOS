@@ -5,8 +5,8 @@
  *
  * PINs are stored as salted scrypt hashes, never plaintext.
  * A fresh install is EMPTY (white-label): no business name, menu or staff.
- * The restaurant configures itself through the first-run onboarding flow,
- * optionally loading a sample menu as a starting template.
+ * The shop configures itself through the first-run onboarding flow,
+ * optionally loading a wines and spirits catalogue as a starting template.
  */
 const path = require('path');
 const fs = require('fs');
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS users (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   name       TEXT NOT NULL,
   pin        TEXT NOT NULL,
-  role       TEXT NOT NULL,            -- admin|manager|waiter|cashier|bartender|kitchen
+  role       TEXT NOT NULL,            -- admin|seller (legacy restaurant roles remain supported)
   active     INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -387,7 +387,7 @@ const todayLocal = (d = new Date()) => nowLocal(d).slice(0, 10);
 /* Generic, white-label defaults. A real deployment overrides these in onboarding
    or under Manager → Settings; nothing here is tied to a specific business. */
 const DEFAULT_SETTINGS = {
-  business_name: 'My Restaurant',
+  business_name: 'My Wines & Spirits',
   address: '',
   phone: '',
   kra_pin: '',
@@ -395,10 +395,11 @@ const DEFAULT_SETTINGS = {
   currency_symbol: 'KSh',
   vat_rate: '16',
   tax_mode: 'inclusive',
-  service_charge_enabled: '1',
-  service_charge_rate: '10',
-  receipt_footer: 'Thank you for your visit. Karibu tena!',
-  default_people: '2',
+  service_charge_enabled: '0',
+  service_charge_rate: '0',
+  receipt_footer: 'Asante sana. Please drink responsibly. No sale to persons under 18.',
+  default_people: '1',
+  business_type: 'wines_spirits',
 
   /* --- ESC/POS thermal printing (Phase 2.5) ---
      Leave printer_host blank to keep using browser printing. */
@@ -523,7 +524,16 @@ function runSetup(p = {}) {
     /* the owner / admin account */
     db.prepare('INSERT INTO users(name,pin,role) VALUES(?,?,?)').run(ownerName, hashPin(ownerPin), 'admin');
 
-    if (p.sample) loadSampleData();
+    if (p.sample) {
+      if (b.business_type === 'wines_spirits') loadSampleData();
+      else {
+        setSetting('business_type', 'restaurant');
+        setSetting('service_charge_enabled', '1');
+        setSetting('service_charge_rate', '10');
+        setSetting('default_people', '2');
+        loadLegacySampleData();
+      }
+    }
   });
   tx();
   audit(null, 'setup.complete', `business="${getSetting('business_name')}" sample=${p.sample ? 'yes' : 'no'}`);
@@ -537,8 +547,9 @@ function seed() {
   return true;
 }
 
-/** Optional Kenyan restaurant + lounge template. */
-function loadSampleData() {
+/** Legacy restaurant template retained for existing deployments and API regression tests.
+ * New retail onboarding explicitly sets business_type=wines_spirits and never uses it. */
+function loadLegacySampleData() {
   if (db.prepare('SELECT COUNT(*) c FROM menu_items').get().c > 0) return false; // don't clobber
 
   /* sample staff (the owner/admin was created by setup; not duplicated here) */
@@ -719,6 +730,56 @@ function loadSampleData() {
   db.prepare('INSERT INTO gift_cards(code,value,balance,customer_id,created_by) VALUES(?,?,?,?,?)')
     .run('GC-DEMO-1234-ABCD', 200000, 200000, c1, 1);
 
+  return true;
+}
+
+
+/** Optional Kenyan wines and spirits retail template. */
+function loadSampleData() {
+  if (db.prepare('SELECT COUNT(*) c FROM menu_items').get().c > 0) return false; // do not clobber
+
+  /* A small-shop team: the owner/admin already exists; these two sellers can
+     sell, receive stock, perform counts, reconcile the drawer and reprint receipts. */
+  const insUser = db.prepare('INSERT INTO users(name,pin,role) VALUES(?,?,?)');
+  [['Seller 1', '1234', 'seller'], ['Seller 2', '2345', 'seller']]
+    .forEach(([name, pin, role]) => {
+      if (!pinTaken(pin)) insUser.run(name, hashPin(pin), role);
+    });
+
+  const insCat = db.prepare('INSERT INTO categories(name,station,sort_order) VALUES(?,?,?)');
+  const cats = {};
+  ['Whisky', 'Vodka', 'Gin', 'Rum & Brandy', 'Wine', 'Beer & Cider', 'Liqueurs', 'Mixers & Soft Drinks']
+    .forEach((name, i) => { cats[name] = insCat.run(name, 'bar', i + 1).lastInsertRowid; });
+
+  /* Starter prices are examples in KES and are intentionally easy to edit. */
+  const products = {
+    Whisky: [['Kenya Cane Smooth 750ml', 850, 650], ['Johnnie Walker Red 750ml', 2100, 1750],
+      ['Johnnie Walker Black 750ml', 4200, 3500], ['Jameson 750ml', 3200, 2700], ['VAT 69 750ml', 1600, 1300]],
+    Vodka: [['Chrome Vodka 750ml', 750, 560], ['Smirnoff Red 750ml', 1800, 1450], ['Absolut Vodka 750ml', 2600, 2150]],
+    Gin: [['Gilbeys Gin 750ml', 1400, 1100], ['Gordon’s Gin 750ml', 2400, 1950], ['Tanqueray Gin 750ml', 3500, 2900]],
+    'Rum & Brandy': [['Viceroy Brandy 750ml', 1500, 1200], ['Captain Morgan Gold 750ml', 1900, 1500], ['Bacardi Carta Blanca 750ml', 2300, 1850]],
+    Wine: [['Four Cousins Sweet Red 750ml', 1300, 1000], ['Four Cousins Sweet White 750ml', 1300, 1000],
+      ['Drostdy-Hof Red 750ml', 1450, 1150], ['Nederburg Cabernet 750ml', 2200, 1750]],
+    'Beer & Cider': [['Tusker Lager 500ml', 250, 190], ['Tusker Malt 330ml', 280, 210],
+      ['White Cap 500ml', 280, 210], ['Guinness 500ml', 300, 225], ['Savanna Dry 330ml', 350, 280]],
+    Liqueurs: [['Baileys 750ml', 3200, 2650], ['Jägermeister 700ml', 3500, 2900], ['Amarula 750ml', 2800, 2300]],
+    'Mixers & Soft Drinks': [['Coca-Cola 500ml', 100, 65], ['Tonic Water 300ml', 120, 80],
+      ['Soda Water 300ml', 100, 65], ['Minute Maid 1L', 250, 190], ['Bottled Water 500ml', 60, 35]]
+  };
+  const insItem = db.prepare('INSERT INTO menu_items(category_id,name,price,cost,station,sort_order) VALUES(?,?,?,?,?,?)');
+  const insStock = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost) VALUES(?,?,?,?,?)');
+  const insRecipe = db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,1)');
+  for (const [category, items] of Object.entries(products)) {
+    items.forEach(([name, price, cost], i) => {
+      const menuId = insItem.run(cats[category], name, price * 100, cost * 100, 'bar', i + 1).lastInsertRowid;
+      const stockId = insStock.run(name, 'bottle', 12, 4, cost * 100).lastInsertRowid;
+      insRecipe.run(menuId, stockId); // one retail unit sold = one unit removed
+    });
+  }
+
+  const locId = (db.prepare('SELECT id FROM locations LIMIT 1').get() || {}).id;
+  if (locId) db.prepare('UPDATE stock_items SET location_id=? WHERE location_id IS NULL').run(locId);
+  db.prepare("UPDATE users SET hourly_rate=15000 WHERE role='seller'").run();
   return true;
 }
 

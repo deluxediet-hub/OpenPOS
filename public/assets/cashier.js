@@ -11,9 +11,9 @@ const Cashier = (() => {
 
     host.innerHTML = `
       <div class="row" style="margin-bottom:14px">
-        <div class="stat" style="flex:1;min-width:130px"><div class="l">Bills outstanding</div><div class="v" style="color:var(--blue)">${fmt(due)}</div></div>
-        <div class="stat" style="flex:1;min-width:130px"><div class="l">Open checks</div><div class="v">${open.length}</div></div>
-        <div class="stat" style="flex:1;min-width:130px"><div class="l">Bill requested</div><div class="v">${open.filter(o=>o.status==='billed').length}</div></div>
+        <div class="stat" style="flex:1;min-width:130px"><div class="l">Sales outstanding</div><div class="v" style="color:var(--blue)">${fmt(due)}</div></div>
+        <div class="stat" style="flex:1;min-width:130px"><div class="l">Open sales</div><div class="v">${open.length}</div></div>
+        <div class="stat" style="flex:1;min-width:130px"><div class="l">Part-paid</div><div class="v">${open.filter(o=>o.status==='billed').length}</div></div>
         <span class="grow"></span>
         <button class="btn ghost" id="zbtn">🖨 Print Z-report</button>
       </div>
@@ -31,12 +31,12 @@ const Cashier = (() => {
           const t = orderTable(o);
           return `<div class="card">
             <div class="card-h">
-              <h3>${t ? esc(t.name) + ' · ' + esc(t.area) : 'Takeaway #' + o.number}</h3>
+              <h3>${t ? esc(t.name) + ' · ' + esc(t.area) : (State.settings.business_type === 'wines_spirits' ? 'Sale #' : 'Takeaway #') + o.number}</h3>
               <span class="grow"></span>
               <span class="tag ${o.status === 'billed' ? 'info' : 'warn'}">${o.status}</span>
             </div>
             <div class="card-b" style="padding:12px 15px">
-              <div class="tiny muted">#${o.number} · ${o.people} guests · ${esc(waiterName(o.waiter_id))} · ${ago(o.opened_at)}</div>
+              <div class="tiny muted">#${o.number}${State.settings.business_type === 'wines_spirits' ? '' : ' · ' + o.people + ' guests'} · ${esc(waiterName(o.waiter_id))} · ${ago(o.opened_at)}</div>
               <div style="margin:10px 0;font-size:12.5px;color:var(--dim);max-height:130px;overflow:auto">
                 ${o.items.slice(0, 12).map((i) => `<div class="row" style="gap:8px;justify-content:space-between">
                   <span>${i.qty} × ${esc(i.name)}</span><span class="mono">${fmt(i.price*i.qty)}</span></div>`).join('')}
@@ -52,7 +52,7 @@ const Cashier = (() => {
               </div>
             </div>
           </div>`;
-        }).join('') : '<div class="empty">No open bills. Enjoy the quiet. ☕</div>'}
+        }).join('') : '<div class="empty">No open sales.</div>'}
       </div>
       <h3 style="margin:24px 0 10px;font-size:13px;color:var(--dim)">RECENTLY CLOSED</h3>
       <div class="card"><div class="scroll-x" id="recentBox"><div class="empty">Loading…</div></div></div>`;
@@ -127,14 +127,14 @@ const Cashier = (() => {
       const rows = await api('/api/reports/items?from=' + today() + '&to=' + today());
       const closed = await api('/api/orders?status=closed');
       box.innerHTML = closed.length ? `<table class="tbl"><thead><tr>
-          <th>#</th><th>Table</th><th>Waiter</th><th>Closed</th><th>Items</th><th class="right">Total</th><th></th></tr></thead>
+          <th>#</th><th>Sale</th><th>Seller</th><th>Closed</th><th>Items</th><th class="right">Total</th><th></th></tr></thead>
         <tbody>${closed.slice(0, 25).map((o) => {
           const t = orderTable(o);
           return `<tr><td class="mono">${o.number}</td><td>${t ? esc(t.name) : 'Takeaway'}</td>
             <td>${esc(waiterName(o.waiter_id))}</td><td>${clockTime(o.closed_at)}</td>
             <td>${o.items.length}</td><td class="right mono"><b>${fmt(o.totals.total)}</b></td>
             <td class="right"><button class="btn xs ghost" data-rp="${o.id}">Receipt</button>
-            <button class="btn xs red" data-rf="${o.id}">Refund</button></td></tr>`;
+            ${['manager','admin'].includes(State.user.role) ? `<button class="btn xs red" data-rf="${o.id}">Refund</button>` : ''}</td></tr>`;
         }).join('')}</tbody></table>` : '<div class="empty">No closed orders today yet.</div>';
       box.querySelectorAll('[data-rp]').forEach((b) => b.onclick = () => printReceipt(Number(b.dataset.rp), { paid: true }));
       box.querySelectorAll('[data-rf]').forEach((b) => b.onclick = () => refundModal(Number(b.dataset.rf)));

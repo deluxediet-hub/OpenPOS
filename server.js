@@ -1,6 +1,6 @@
 'use strict';
 /**
- * server.js — white-label restaurant/lounge POS. REST API + static frontend + SSE realtime feed.
+ * server.js — Kenyan wines and spirits retail POS. REST API + static frontend + SSE realtime feed.
  */
 const path = require('path');
 const express = require('express');
@@ -94,7 +94,7 @@ app.post('/api/setup', (req, res) => {
 });
 /* Load the optional sample menu later, after setup (manager/admin only). */
 app.post('/api/setup/sample', requireAuth, requireRole('manager', 'admin'), (req, res) => {
-  if (loadSampleData()) { audit(req.user, 'sample.load', 'Loaded the sample restaurant template'); broadcast('menu'); res.json({ ok: true }); }
+  if (loadSampleData()) { audit(req.user, 'sample.load', 'Loaded the wines and spirits starter catalogue'); broadcast('menu'); res.json({ ok: true }); }
   else return bad(res, 'Sample data already loaded, or a menu already exists — not clobbering your data');
 });
 
@@ -163,6 +163,7 @@ app.get('/api/bootstrap', requireAuth, (req, res) => {
     orders: orders.map(decorate),
     qr_base: (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:' + (process.env.PORT || 3000)),
     users: db.prepare('SELECT id,name,role,active FROM users ORDER BY role,name').all(),
+    stock: db.prepare('SELECT * FROM stock_items ORDER BY name').all(),
     /* Phase 2-4 working data */
     dayparts, active_dayparts: active, pricing,
     modifier_groups: db.prepare('SELECT * FROM modifier_groups ORDER BY name').all(),
@@ -277,7 +278,7 @@ app.get('/api/orders/:id', requireAuth, (req, res) => {
   res.json(decorate(o));
 });
 
-app.post('/api/orders', requireAuth, requireRole('waiter', 'cashier', 'manager', 'admin'), (req, res) => {
+app.post('/api/orders', requireAuth, requireRole('seller', 'waiter', 'cashier', 'manager', 'admin'), (req, res) => {
   const table_id = Number(req.body.table_id) || null;
   const people = Number(req.body.people) || Number(getSettings().default_people) || 1;
   /* Order channel (Phase 4) — how the sale reached us, and what an aggregator took. */
@@ -297,7 +298,7 @@ app.post('/api/orders', requireAuth, requireRole('waiter', 'cashier', 'manager',
   res.json(o);
 });
 
-app.post('/api/orders/:id/items', requireAuth, requireRole('waiter', 'cashier', 'bartender', 'manager', 'admin'), (req, res) => {
+app.post('/api/orders/:id/items', requireAuth, requireRole('seller', 'waiter', 'cashier', 'bartender', 'manager', 'admin'), (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return bad(res, 'Order not found', 404);
   if (o.status === 'closed' || o.status === 'void') return bad(res, 'Order is closed');
@@ -393,7 +394,7 @@ app.delete('/api/orders/:id/items/:itemId', requireAuth, (req, res) => {
 });
 
 // Send all pending lines to their station (fire ticket)
-app.post('/api/orders/:id/send', requireAuth, requireRole('waiter', 'cashier', 'bartender', 'manager', 'admin'), (req, res) => {
+app.post('/api/orders/:id/send', requireAuth, requireRole('seller', 'waiter', 'cashier', 'bartender', 'manager', 'admin'), (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return bad(res, 'Order not found', 404);
   const now = nowLocal();
@@ -405,7 +406,7 @@ app.post('/api/orders/:id/send', requireAuth, requireRole('waiter', 'cashier', '
   res.json(decorate(readOrder(o.id)));
 });
 
-app.patch('/api/orders/:id/people', requireAuth, requireRole('waiter', 'cashier', 'manager', 'admin'), (req, res) => {
+app.patch('/api/orders/:id/people', requireAuth, requireRole('seller', 'waiter', 'cashier', 'manager', 'admin'), (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return bad(res, 'Order not found', 404);
   const people = Math.max(1, Math.min(200, Math.round(Number(req.body.people) || 1)));
@@ -426,7 +427,7 @@ app.post('/api/orders/:id/discount', requireAuth, requireRole('manager', 'admin'
   res.json(decorate(readOrder(o.id)));
 });
 
-app.post('/api/orders/:id/transfer', requireAuth, requireRole('waiter', 'cashier', 'manager', 'admin'), (req, res) => {
+app.post('/api/orders/:id/transfer', requireAuth, requireRole('seller', 'waiter', 'cashier', 'manager', 'admin'), (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   const t = db.prepare('SELECT * FROM tables WHERE id=?').get(Number(req.body.table_id));
   if (!o || !t) return bad(res, 'Order or table not found', 404);
@@ -452,7 +453,7 @@ app.post('/api/orders/:id/void', requireAuth, requireRole('manager', 'admin'), (
 });
 
 /* ------------------------------- payments ------------------------------- */
-app.post('/api/orders/:id/pay', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
+app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return bad(res, 'Order not found', 404);
   const d = decorate(o);
@@ -630,14 +631,17 @@ app.delete('/api/stock/:id', requireAuth, requireRole('manager', 'admin'), (req,
   res.json({ ok: true });
 });
 
-app.post('/api/stock/:id/adjust', requireAuth, requireRole('manager', 'admin'), (req, res) => {
+app.post('/api/stock/:id/adjust', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
   const s = db.prepare('SELECT * FROM stock_items WHERE id=?').get(req.params.id);
   if (!s) return bad(res, 'Not found', 404);
   const delta = Number(req.body.delta) || 0;
+  const reason = String(req.body.reason || '').trim();
+  if (!delta) return bad(res, 'Stock change cannot be zero');
+  if (!reason) return bad(res, 'A reason or stock-count reference is required');
   db.prepare('UPDATE stock_items SET qty = qty + ? WHERE id=?').run(delta, s.id);
   db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
-    .run(s.id, delta, req.body.reason || 'Adjustment', req.user.id);
-  audit(req.user, 'stock.adjust', `${s.name} ${delta > 0 ? '+' : ''}${delta} — ${req.body.reason || ''}`);
+    .run(s.id, delta, reason, req.user.id);
+  audit(req.user, 'stock.adjust', `${s.name} ${delta > 0 ? '+' : ''}${delta} — ${reason}`);
   res.json(db.prepare('SELECT * FROM stock_items WHERE id=?').get(s.id));
 });
 
@@ -655,6 +659,9 @@ app.get('/api/users', requireAuth, requireRole('manager', 'admin'), (req, res) =
 app.post('/api/users', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const { name, pin, role } = req.body;
   if (!name || !pin || !role) return bad(res, 'Name, PIN and role required');
+  const allowedRoles = ['seller', 'admin', 'manager', 'waiter', 'cashier', 'bartender', 'kitchen'];
+  if (!allowedRoles.includes(role)) return bad(res, 'Unknown role');
+  if (role === 'admin' && req.user.role !== 'admin') return bad(res, 'Only an admin can create another admin', 403);
   if (!/^\d{4,6}$/.test(String(pin))) return bad(res, 'PIN must be 4-6 digits');
   if (pinTaken(String(pin))) return bad(res, 'That PIN is already in use');
   const r = db.prepare('INSERT INTO users(name,pin,role) VALUES(?,?,?)').run(name.trim(), hashPin(String(pin)), role);
@@ -672,8 +679,13 @@ app.put('/api/users/:id', requireAuth, requireRole('manager', 'admin'), (req, re
     if (!/^\d{4,6}$/.test(newPin)) return bad(res, 'PIN must be 4-6 digits');
     if (pinTaken(newPin, u.id)) return bad(res, 'That PIN is already in use');
   }
+  const nextRole = req.body.role ?? u.role;
+  if (!['seller', 'admin', 'manager', 'waiter', 'cashier', 'bartender', 'kitchen'].includes(nextRole))
+    return bad(res, 'Unknown role');
+  if ((u.role === 'admin' || nextRole === 'admin') && req.user.role !== 'admin')
+    return bad(res, 'Only an admin can manage administrator accounts', 403);
   db.prepare('UPDATE users SET name=?, pin=?, role=?, active=? WHERE id=?')
-    .run(req.body.name ?? u.name, newPin ? hashPin(newPin) : u.pin, req.body.role ?? u.role,
+    .run(req.body.name ?? u.name, newPin ? hashPin(newPin) : u.pin, nextRole,
       req.body.active != null ? (req.body.active ? 1 : 0) : u.active, u.id);
   audit(req.user, 'user.update', u.name + (newPin ? ' (PIN changed)' : ''));
   broadcast('users');
@@ -692,7 +704,7 @@ app.delete('/api/users/:id', requireAuth, requireRole('admin'), (req, res) => {
 const dayBounds = (d) => `${d} 00:00:00`;
 const dayEnd = (d) => `${d} 23:59:59`;
 
-app.get('/api/reports/summary', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
+app.get('/api/reports/summary', requireAuth, requireRole('seller', 'manager', 'admin', 'cashier'), (req, res) => {
   const from = req.query.from || todayLocal();
   const to = req.query.to || from;
   const a = dayBounds(from), b = dayEnd(to);
@@ -732,7 +744,7 @@ app.get('/api/reports/summary', requireAuth, requireRole('manager', 'admin', 'ca
   });
 });
 
-app.get('/api/reports/items', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
+app.get('/api/reports/items', requireAuth, requireRole('seller', 'manager', 'admin', 'cashier'), (req, res) => {
   const from = req.query.from || todayLocal();
   const to = req.query.to || from;
   res.json(db.prepare(`
@@ -744,7 +756,7 @@ app.get('/api/reports/items', requireAuth, requireRole('manager', 'admin', 'cash
     GROUP BY oi.name, oi.station ORDER BY revenue DESC LIMIT 100`).all(dayBounds(from), dayEnd(to)));
 });
 
-app.get('/api/reports/waiters', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
+app.get('/api/reports/waiters', requireAuth, requireRole('seller', 'manager', 'admin', 'cashier'), (req, res) => {
   const from = req.query.from || todayLocal();
   const to = req.query.to || from;
   res.json(db.prepare(`
@@ -755,7 +767,7 @@ app.get('/api/reports/waiters', requireAuth, requireRole('manager', 'admin', 'ca
     GROUP BY u.name ORDER BY revenue DESC`).all(dayBounds(from), dayEnd(to)));
 });
 
-app.get('/api/reports/categories', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
+app.get('/api/reports/categories', requireAuth, requireRole('seller', 'manager', 'admin', 'cashier'), (req, res) => {
   const from = req.query.from || todayLocal();
   const to = req.query.to || from;
   res.json(db.prepare(`
@@ -766,7 +778,7 @@ app.get('/api/reports/categories', requireAuth, requireRole('manager', 'admin', 
     GROUP BY c.id ORDER BY revenue DESC`).all(dayBounds(from), dayEnd(to)));
 });
 
-app.get('/api/reports/hourly', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
+app.get('/api/reports/hourly', requireAuth, requireRole('seller', 'manager', 'admin', 'cashier'), (req, res) => {
   const from = req.query.from || todayLocal();
   res.json(db.prepare(`
     SELECT substr(created_at,12,2) AS hour, COALESCE(SUM(amount),0) total, COUNT(*) n
@@ -774,7 +786,7 @@ app.get('/api/reports/hourly', requireAuth, requireRole('manager', 'admin', 'cas
     GROUP BY hour ORDER BY hour`).all(dayBounds(from), dayEnd(from)));
 });
 
-app.get('/api/zreport', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
+app.get('/api/zreport', requireAuth, requireRole('seller', 'manager', 'admin', 'cashier'), (req, res) => {
   const day = req.query.date || todayLocal();
   const a = dayBounds(day), b = dayEnd(day);
   const sales = db.prepare(`SELECT method, COALESCE(SUM(amount),0) total, COUNT(*) n FROM payments
@@ -938,7 +950,7 @@ app.post('/api/menu-items/:id/modifiers', requireAuth, requireRole('manager', 'a
 });
 
 /* ================= CASH DRAWER RECONCILIATION (2.6) ==================== */
-app.get('/api/shifts', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
+app.get('/api/shifts', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   res.json(db.prepare(`SELECT s.*, uo.name AS opened_by_name, uc.name AS closed_by_name
     FROM shifts s LEFT JOIN users uo ON uo.id = s.opened_by
     LEFT JOIN users uc ON uc.id = s.closed_by ORDER BY s.id DESC LIMIT 100`).all());
@@ -962,7 +974,7 @@ function drawerFigures(s) {
   });
   return { cash_sales: cashSales, cash_refunds: cashRefunds, payouts, expected };
 }
-app.post('/api/shifts', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
+app.post('/api/shifts', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const open = db.prepare("SELECT * FROM shifts WHERE status='open'").get();
   if (open) return bad(res, 'A shift is already open — close it first');
   const float = Math.round(Number(req.body.opening_float || 0) * 100);
@@ -972,7 +984,7 @@ app.post('/api/shifts', requireAuth, requireRole('cashier', 'manager', 'admin'),
   broadcast('sales');
   res.json(db.prepare('SELECT * FROM shifts WHERE id=?').get(r.lastInsertRowid));
 });
-app.post('/api/shifts/:id/close', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
+app.post('/api/shifts/:id/close', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const s = db.prepare('SELECT * FROM shifts WHERE id=?').get(req.params.id);
   if (!s) return bad(res, 'Shift not found', 404);
   if (s.status === 'closed') return bad(res, 'Shift already closed');
@@ -989,7 +1001,7 @@ app.post('/api/shifts/:id/close', requireAuth, requireRole('cashier', 'manager',
   broadcast('sales');
   res.json({ ...db.prepare('SELECT * FROM shifts WHERE id=?').get(s.id), drawer: fig });
 });
-app.post('/api/shifts/:id/payout', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
+app.post('/api/shifts/:id/payout', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const s = db.prepare('SELECT * FROM shifts WHERE id=?').get(req.params.id);
   if (!s) return bad(res, 'Shift not found', 404);
   const amount = Math.round(Number(req.body.amount) * 100);
@@ -1002,7 +1014,7 @@ app.post('/api/shifts/:id/payout', requireAuth, requireRole('cashier', 'manager'
 });
 
 /* End-of-shift clearing sheet: everything a cashier needs to cash up. */
-app.get('/api/shift-clearing', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
+app.get('/api/shift-clearing', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const s = db.prepare("SELECT * FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get()
         || db.prepare('SELECT * FROM shifts ORDER BY id DESC LIMIT 1').get();
   const q = (sql) => s ? db.prepare(sql).all(s.id) : [];
@@ -1104,7 +1116,7 @@ app.get('/api/reservations', requireAuth, (req, res) => {
     LEFT JOIN tables t ON t.id = r.table_id
     WHERE r.res_date = ? ORDER BY r.res_time`).all(day));
 });
-app.post('/api/reservations', requireAuth, requireRole('waiter', 'cashier', 'manager', 'admin'), (req, res) => {
+app.post('/api/reservations', requireAuth, requireRole('seller', 'waiter', 'cashier', 'manager', 'admin'), (req, res) => {
   const { name, phone, people = 2, res_date, res_time, table_id, notes } = req.body;
   if (!name || !res_date || !res_time) return bad(res, 'Name, date and time required');
   const r = db.prepare(`INSERT INTO reservations(name,phone,people,res_date,res_time,table_id,notes,created_by)
@@ -1114,7 +1126,7 @@ app.post('/api/reservations', requireAuth, requireRole('waiter', 'cashier', 'man
   broadcast('tables');
   res.json(db.prepare('SELECT * FROM reservations WHERE id=?').get(r.lastInsertRowid));
 });
-app.put('/api/reservations/:id', requireAuth, requireRole('waiter', 'cashier', 'manager', 'admin'), (req, res) => {
+app.put('/api/reservations/:id', requireAuth, requireRole('seller', 'waiter', 'cashier', 'manager', 'admin'), (req, res) => {
   const r0 = db.prepare('SELECT * FROM reservations WHERE id=?').get(req.params.id);
   if (!r0) return bad(res, 'Not found', 404);
   const b = req.body;
@@ -1125,7 +1137,7 @@ app.put('/api/reservations/:id', requireAuth, requireRole('waiter', 'cashier', '
   broadcast('tables');
   res.json(db.prepare('SELECT * FROM reservations WHERE id=?').get(r0.id));
 });
-app.delete('/api/reservations/:id', requireAuth, requireRole('waiter', 'cashier', 'manager', 'admin'), (req, res) => {
+app.delete('/api/reservations/:id', requireAuth, requireRole('seller', 'waiter', 'cashier', 'manager', 'admin'), (req, res) => {
   db.prepare("UPDATE reservations SET status='cancelled' WHERE id=?").run(req.params.id);
   broadcast('tables'); res.json({ ok: true });
 });
@@ -1138,7 +1150,7 @@ app.get('/api/customers', requireAuth, (req, res) => {
         .all(`%${q}%`, `%${q}%`)
     : db.prepare('SELECT * FROM customers ORDER BY name LIMIT 200').all());
 });
-app.post('/api/customers', requireAuth, requireRole('waiter', 'cashier', 'manager', 'admin'), (req, res) => {
+app.post('/api/customers', requireAuth, requireRole('seller', 'waiter', 'cashier', 'manager', 'admin'), (req, res) => {
   const { name, phone, email } = req.body;
   if (!name) return bad(res, 'Name required');
   const dupe = phone && db.prepare('SELECT id FROM customers WHERE phone=?').get(phone);
@@ -1162,7 +1174,7 @@ app.get('/api/customers/:id', requireAuth, (req, res) => {
     points_log: db.prepare('SELECT * FROM loyalty_log WHERE customer_id=? ORDER BY id DESC LIMIT 30').all(c.id)
   });
 });
-app.get('/api/gift-cards', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) =>
+app.get('/api/gift-cards', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) =>
   res.json(db.prepare(`SELECT g.*, c.name AS customer_name FROM gift_cards g
     LEFT JOIN customers c ON c.id = g.customer_id ORDER BY g.id DESC LIMIT 200`).all()));
 app.get('/api/gift-cards/lookup/:code', requireAuth, (req, res) => {
@@ -1170,7 +1182,7 @@ app.get('/api/gift-cards/lookup/:code', requireAuth, (req, res) => {
   if (!g) return bad(res, 'No gift card with that code', 404);
   res.json(g);
 });
-app.post('/api/gift-cards', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
+app.post('/api/gift-cards', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const s = getSettings();
   const value = Math.round(Number(req.body.value) * 100);
   if (!value || value <= 0) return bad(res, 'Value must be greater than zero');
@@ -1314,7 +1326,7 @@ app.post('/api/integrations/dry-run', requireAuth, requireRole('manager', 'admin
 });
 
 /* Read-only payment lookup for the cashier's "find a payment / reprint" box. */
-app.get('/api/payments', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
+app.get('/api/payments', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   let rows = db.prepare(`SELECT p.*, o.number AS order_number, o.channel
@@ -1327,14 +1339,14 @@ app.get('/api/payments', requireAuth, requireRole('cashier', 'manager', 'admin')
 });
 
 /* Most recent settled order, for one-tap reprint. */
-app.get('/api/last-closed-order', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
+app.get('/api/last-closed-order', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const o = db.prepare("SELECT * FROM orders WHERE status='closed' ORDER BY closed_at DESC, id DESC LIMIT 1").get();
   if (!o) return bad(res, 'No closed orders yet', 404);
   res.json(decorate(o));
 });
 
 /* ================== ORDER CHANNELS / DELIVERY (4.13) =================== */
-app.get('/api/reports/channels', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
+app.get('/api/reports/channels', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const from = req.query.from || todayLocal();
   const to = req.query.to || from;
   res.json(db.prepare(`
@@ -1345,7 +1357,7 @@ app.get('/api/reports/channels', requireAuth, requireRole('cashier', 'manager', 
     WHERE o.closed_at BETWEEN ? AND ? AND o.status = 'closed'
     GROUP BY o.channel ORDER BY revenue DESC`).all(from + ' 00:00:00', to + ' 23:59:59'));
 });
-app.post('/api/orders/:id/commission', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
+app.post('/api/orders/:id/commission', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return bad(res, 'Order not found', 404);
   const commission = Math.max(0, Math.round(Number(req.body.commission || 0) * 100));
