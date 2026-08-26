@@ -111,7 +111,7 @@ const Manager = (() => {
         <div class="card"><div class="card-h"><h3>${retail ? 'Top products today' : 'Top sellers today'}</h3></div>
           <div style="max-height:300px;overflow:auto">
             <table class="tbl"><thead><tr><th>#</th><th>Product</th>${retail ? '' : '<th>Station</th>'}<th class="right">Qty</th><th class="right">Revenue</th></tr></thead>
-            <tbody>${items.slice(0, 12).map((i, n) => `<tr>
+            <tbody>${items.slice(0, retail ? 5 : 12).map((i, n) => `<tr>
               <td class="muted">${n + 1}</td><td><b>${esc(i.name)}</b></td>
               ${retail ? '' : `<td><span class="tag ${i.station}">${i.station}</span></td>`}
               <td class="right mono">${i.qty}</td><td class="right mono">${fmt(i.revenue)}</td></tr>`).join('')
@@ -163,8 +163,8 @@ const Manager = (() => {
             ['Average ticket', fmt(sm.avg_ticket)] ] },
           { title: 'By payment method', head: ['Method', 'Txns', 'Total'], right: [1, 2],
             rows: sm.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]) },
-          { title: 'Top items', head: ['Item', 'Qty', 'Revenue'], right: [1, 2],
-            rows: items.slice(0, 25).map((i) => [i.name, String(i.qty), (i.revenue / 100).toFixed(2)]) },
+          { title: retail ? 'Top 5 products' : 'Top items', head: [retail ? 'Product' : 'Item', 'Qty', 'Revenue'], right: [1, 2],
+            rows: items.slice(0, retail ? 5 : 25).map((i) => [i.name, String(i.qty), (i.revenue / 100).toFixed(2)]) },
           retail
             ? { title: 'By seller', head: ['Seller', 'Sales', 'Revenue'], right: [1, 2],
                 rows: waiters.map((w) => [w.waiter || 'Unassigned', String(w.orders), (w.revenue / 100).toFixed(2)]) }
@@ -288,7 +288,7 @@ const Manager = (() => {
               return `<tr>
                 <td><b>${esc(m.name)}</b><div class="tiny muted mono">${esc(m.sku || '')}${m.sku && m.barcode ? ' · ' : ''}${esc(m.barcode || '')}</div></td>
                 <td class="muted small">${esc(m.category_name)}</td>
-                <td class="right mono"><span class="tag ${m.stock_qty <= 0 ? 'bad' : m.stock_qty <= m.stock_min_qty ? 'warn' : 'ok'}">${m.stock_qty ?? '—'}</span></td>
+                <td class="right mono"><span class="tag ${m.stock_qty <= 0 ? 'bad' : m.stock_qty <= m.stock_min_qty ? 'warn' : 'ok'}">${m.stock_mode === 'pour' && m.stock_deduction ? `${Math.floor(m.stock_qty / m.stock_deduction)} servings` : (m.stock_qty ?? '—')}</span></td>
                 <td class="right mono muted">${fmt(m.cost)}</td>
                 <td class="right mono"><b>${fmt(m.price)}</b></td>
                 <td class="right"><span class="tag ${marg >= 60 ? 'ok' : marg >= 40 ? 'warn' : 'bad'}">${marg}%</span></td>
@@ -356,16 +356,22 @@ const Manager = (() => {
     if (!State.categories.length) return toast('Create a category before adding products', 'err');
     m = m || { name: '', price: 0, cost: 0, station: retail ? 'retail' : 'kitchen', available: 1,
       category_id: menuCat || State.categories[0].id, volume_ml: 750, stock_unit: 'bottle', stock_min_qty: 4 };
-    const sizes = [50, 100, 200, 250, 300, 330, 350, 375, 500, 700, 750, 1000, 1500, 2000, 3000, 4500, 5000];
+    const sizes = [25, 30, 35, 50, 100, 125, 150, 175, 200, 250, 300, 330, 350, 375, 500, 700, 750,
+      1000, 1500, 2000, 3000, 4500, 5000, 10000, 20000, 30000, 50000];
     const currentSize = Number(m.volume_ml) || 750;
     const sizeOptions = [...(!sizes.includes(currentSize) ? [currentSize] : []), ...sizes]
       .map((v) => `<option value="${v}" ${v === currentSize ? 'selected' : ''}>${v >= 1000 ? (v / 1000) + ' L' : v + ' ml'}</option>`).join('');
-    const unit = m.stock_unit || 'bottle';
+    const unit = m.sale_unit && m.sale_unit !== 'piece' ? m.sale_unit
+      : (m.stock_mode === 'pour' ? (m.stock_unit === 'keg' ? 'glass' : 'shot') : (m.stock_unit || 'bottle'));
+    const stockMode = m.stock_mode || 'unit';
+    const sourceContainerMl = stockMode === 'pour' && m.stock_deduction
+      ? Math.round((m.serving_ml || m.volume_ml || 1) / m.stock_deduction) : 750;
+    const sourceOptions = State.stock.map((x) => `<option value="${x.id}" ${x.id === m.stock_item_id ? 'selected' : ''}>${esc(x.name)} · ${x.qty} ${esc(x.unit)}</option>`).join('');
     const retailIdentity = `<div class="grid3" style="margin-top:12px">
       <div><label class="fld">Size</label><select class="inp" id="ivol">${sizeOptions}</select></div>
       <div><label class="fld">Category</label><select class="inp" id="icat">${State.categories.map((c) =>
         `<option value="${c.id}" ${c.id === m.category_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
-      <div><label class="fld">Selling unit</label><select class="inp" id="iunit">${['bottle','can','pack','crate','carton','piece'].map((u) =>
+      <div><label class="fld">Selling unit</label><select class="inp" id="iunit">${['bottle','can','pack','crate','carton','piece','keg','shot','glass'].map((u) =>
         `<option value="${u}" ${u === unit ? 'selected' : ''}>${u[0].toUpperCase() + u.slice(1)}</option>`).join('')}</select></div>
     </div>`;
     const legacyIdentity = `<div class="grid3" style="margin-top:12px">
@@ -378,6 +384,16 @@ const Manager = (() => {
       title: isNew ? 'New product' : 'Edit — ' + m.name,
       body: `<label class="fld">Product name</label><input class="inp" id="in" value="${esc(m.name)}" placeholder="e.g. Jameson Irish Whiskey">
         ${retail ? retailIdentity : legacyIdentity}
+        ${retail ? `<div class="card" style="margin-top:12px;background:#101820"><div class="card-b">
+          <div class="grid2"><div><label class="fld">Stock deduction</label><select class="inp" id="imode" ${isNew ? '' : 'disabled'}>
+            <option value="unit" ${stockMode === 'unit' ? 'selected' : ''}>Whole unit — bottle, can, pack or keg</option>
+            <option value="pour" ${stockMode === 'pour' ? 'selected' : ''}>Pour / shot from a tracked bottle or keg</option></select></div>
+            <div class="tiny muted" style="align-self:end;padding-bottom:10px">Pour mode deducts only the serving fraction from its source stock.</div></div>
+          <div class="grid2 ${stockMode === 'pour' ? '' : 'hidden'}" id="pourFields" style="margin-top:12px">
+            <div><label class="fld">Source bottle or keg</label><select class="inp" id="isource"><option value="">Choose tracked stock…</option>${sourceOptions}</select></div>
+            <div><label class="fld">Full source size (ml)</label><input class="inp" id="isourcevol" type="number" min="1" value="${sourceContainerMl}" placeholder="750 bottle or 20000 keg"></div>
+          </div>
+        </div></div>` : ''}
         <div class="grid3" style="margin-top:12px">
           <div><label class="fld">SKU / shop code</label><input class="inp mono" id="isku" value="${esc(m.sku || '')}" placeholder="WHI-JAM-750"></div>
           <div><label class="fld">Barcode</label><input class="inp mono" id="ibar" value="${esc(m.barcode || '')}" inputmode="numeric" placeholder="Scan or type EAN/UPC"></div>
@@ -388,7 +404,7 @@ const Manager = (() => {
           <div><label class="fld">Unit cost (${sym()})</label><input class="inp" id="ic" type="number" min="0" step="0.01" value="${(m.cost/100).toFixed(2)}"></div>
           <div><label class="fld">Gross margin</label><input class="inp" id="im" disabled></div>
         </div>
-        ${retail ? `<div class="grid2" style="margin-top:12px">
+        ${retail ? `<div class="grid2 ${stockMode === 'pour' ? 'hidden' : ''}" id="ownStockFields" style="margin-top:12px">
           ${isNew ? '<div><label class="fld">Opening stock</label><input class="inp" id="ioq" type="number" min="0" step="1" value="0"></div>' : ''}
           <div><label class="fld">Low-stock alert at</label><input class="inp" id="imin" type="number" min="0" step="1" value="${m.stock_min_qty ?? 4}"></div>
         </div>` : ''}
@@ -397,6 +413,16 @@ const Manager = (() => {
       footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>${isNew ? 'Create product' : 'Save changes'}</button>`
     });
     const ov = document.querySelector('#modalRoot .ov');
+    const modeSelect = ov.querySelector('#imode');
+    const toggleStockMode = () => {
+      const pour = modeSelect && modeSelect.value === 'pour';
+      ov.querySelector('#pourFields')?.classList.toggle('hidden', !pour);
+      ov.querySelector('#ownStockFields')?.classList.toggle('hidden', pour);
+      if (pour && ov.querySelector('#iunit') && !['shot', 'glass'].includes(ov.querySelector('#iunit').value)) ov.querySelector('#iunit').value = 'shot';
+      if (pour && isNew && Number(ov.querySelector('#ivol')?.value) > 250) ov.querySelector('#ivol').value = '50';
+    };
+    if (modeSelect) modeSelect.onchange = toggleStockMode;
+    toggleStockMode();
     const upd = () => {
       const price = Number(ov.querySelector('#ip').value) || 0, cost = Number(ov.querySelector('#ic').value) || 0;
       ov.querySelector('#im').value = price ? Math.round(((price - cost) / price) * 100) + '%' : '—';
@@ -418,11 +444,16 @@ const Manager = (() => {
         volume_ml: volume,
         kra_item_code: ov.querySelector('#ikra').value.trim(), opening_qty: Number(ov.querySelector('#ioq')?.value || 0),
         min_qty: Number(ov.querySelector('#imin')?.value || 0), unit: ov.querySelector('#iunit')?.value || 'piece',
+        stock_mode: ov.querySelector('#imode')?.value || 'unit',
+        source_stock_item_id: Number(ov.querySelector('#isource')?.value) || null,
+        serving_ml: volume, source_volume_ml: Number(ov.querySelector('#isourcevol')?.value) || null,
         available: ov.querySelector('#ia').checked ? 1 : 0
       };
       if (!payload.name) return toast('Product name is required', 'err');
       if (!payload.category_id) return toast('Choose a category', 'err');
       if (!(payload.price >= 0)) return toast('Enter a valid selling price', 'err');
+      if (payload.stock_mode === 'pour' && (!payload.source_stock_item_id || !(payload.source_volume_ml >= payload.serving_ml)))
+        return toast('Choose source stock and enter its full bottle/keg size', 'err');
       try {
         if (isNew) await api('/api/menu-items', { body: payload });
         else await api('/api/menu-items/' + m.id, { method: 'PUT', body: payload });

@@ -44,7 +44,7 @@ const Retail = (() => {
   async function deliveries(body) {
     const rows = await api('/api/goods-receipts');
     body.innerHTML = `<div class="row" style="margin-bottom:14px"><div><h3 style="margin:0">Stock deliveries</h3>
-      <div class="tiny muted">Receive supplier invoices; quantities and latest costs update automatically</div></div>
+      <div class="tiny muted">Select delivered products and quantities. Costs come from owner-controlled Product Settings.</div></div>
       <span class="grow"></span><button class="btn primary" id="receiveDelivery">+ Receive delivery</button></div>
       <div class="card"><div class="scroll-x"><table class="tbl"><thead><tr><th>Received</th><th>Invoice / note</th><th>Supplier</th><th class="right">Lines</th><th class="right">Cost</th><th>Received by</th></tr></thead>
       <tbody>${rows.map((r) => `<tr><td class="nowrap muted">${esc(r.received_at)}</td><td class="mono"><b>${esc(r.invoice_no)}</b></td>
@@ -66,19 +66,17 @@ const Retail = (() => {
       footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Receive into stock</button>' });
     const ov = document.querySelector('#modalRoot .ov'), lines = ov.querySelector('#deliveryLines');
     const addLine = () => {
-      const row = document.createElement('div'); row.className = 'grid delivery-line';
+      const row = document.createElement('div'); row.className = 'grid delivery-line delivery-line-simple';
       row.innerHTML = `<div><label class="fld">Product</label><select class="inp" data-stock>${optionHtml}</select></div>
-        <div><label class="fld">Qty</label><input class="inp" data-qty type="number" min="0.01" step="0.01"></div>
-        <div><label class="fld">Unit cost</label><input class="inp" data-cost type="number" min="0" step="0.01"></div>
-        <div><label class="fld">Batch</label><input class="inp" data-batch></div>
-        <div><label class="fld">Expiry</label><input class="inp" data-expiry type="date"></div><button class="btn red" data-remove>×</button>`;
+        <div><label class="fld">Quantity received</label><input class="inp" data-qty type="number" min="0.01" step="0.01" inputmode="decimal"></div>
+        <button class="btn red" data-remove title="Remove line">×</button>`;
       row.querySelector('[data-remove]').onclick = () => row.remove(); lines.appendChild(row);
     };
     addLine(); ov.querySelector('#addDeliveryLine').onclick = addLine; ov.querySelector('[data-no]').onclick = closeModal;
     ov.querySelector('[data-yes]').onclick = async () => {
-      const items = [...lines.children].map((r) => ({ stock_item_id: Number(r.querySelector('[data-stock]').value),
-        qty: Number(r.querySelector('[data-qty]').value), unit_cost: Number(r.querySelector('[data-cost]').value),
-        batch_no: r.querySelector('[data-batch]').value.trim(), expiry_date: r.querySelector('[data-expiry]').value || null }));
+      const items = [...lines.children].map((r) => ({
+        stock_item_id: Number(r.querySelector('[data-stock]').value), qty: Number(r.querySelector('[data-qty]').value)
+      }));
       try {
         await api('/api/goods-receipts', { body: { supplier_id: Number(ov.querySelector('#grSupplier').value) || null,
           invoice_no: ov.querySelector('#grInvoice').value.trim(), notes: ov.querySelector('#grNotes').value.trim(), items } });

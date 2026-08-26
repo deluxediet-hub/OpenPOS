@@ -39,7 +39,7 @@ A blank setup is also supported. Creating a retail product automatically creates
 
 ### Owner
 
-Use **Shop management** for the sales dashboard, barcode/SKU products, pricing and costs, suppliers, delivery history, full stocktakes, stock alerts, staff, cash reconciliation, reports, KRA/eTIMS configuration and full audit history. The owner/admin account has all rights.
+Use **Shop management** for the sales dashboard, barcode/SKU products, pricing and costs, suppliers, delivery history, full stocktakes, stock alerts, staff, cash reconciliation, reports, KRA/eTIMS configuration and full audit history. The owner/admin account has all rights. The owner may sell through an already-open seller till; the sale and receipt identify the owner as the seller. If no till is open, starting an owner sale opens a zero-balance owner till automatically instead of interrupting checkout.
 
 ## Retail controls included
 
@@ -47,8 +47,9 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 - Guided product setup with size, category and selling-unit dropdowns; restaurant preparation fields never appear in retail mode
 - Stocktake product jumper with automatic save, previous/next navigation and input auto-selection
 - Live stock shown at the till with optional negative-stock prevention
-- Supplier directory and invoice/delivery-note receiving
-- Batch/expiry capture on delivery lines
+- Supplier directory and fast receiving: staff select only product and quantity while configured costs remain owner-controlled
+- Whole-keg sales plus shot/glass products that show available servings and deduct the correct fraction from a tracked bottle or keg
+- Focused dashboards/PDF summaries with Top 5 products instead of long ranking lists
 - Full stocktakes with expected, counted and audited variance
 - Fast checkout with no buyer-age prompt; the configured 18+ notice remains on receipts
 - Duplicate M-Pesa confirmation-code rejection

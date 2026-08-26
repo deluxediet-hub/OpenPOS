@@ -139,7 +139,10 @@ const listMenu = () => db.prepare(`
     (SELECT si.id FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
       WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_item_id,
     (SELECT si.unit FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
-      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_unit
+      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_unit,
+    (SELECT r.qty FROM recipes r WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_deduction,
+    (SELECT si.name FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
+      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_source_name
   FROM menu_items m JOIN categories c ON c.id = m.category_id
   ORDER BY c.sort_order, m.sort_order, m.name`).all();
 
@@ -202,21 +205,37 @@ app.get('/api/menu', requireAuth, (req, res) => res.json(listMenu()));
 app.post('/api/menu-items', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const { name, category_id, price, cost = 0, station = 'bar', available = 1,
     sku = '', barcode = '', volume_ml = null, kra_item_code = '', tax_type = 'B',
-    opening_qty = 0, min_qty = 0, unit = 'bottle' } = req.body;
+    opening_qty = 0, min_qty = 0, unit = 'bottle', stock_mode = 'unit',
+    source_stock_item_id = null, serving_ml = null, source_volume_ml = null } = req.body;
   if (!name || !category_id) return bad(res, 'Name and category required');
-  const effectiveStation = getSetting('business_type') === 'wines_spirits' ? 'retail' : station;
+  const retail = getSetting('business_type') === 'wines_spirits';
+  const effectiveStation = retail ? 'retail' : station;
+  const mode = retail && stock_mode === 'pour' ? 'pour' : 'unit';
+  let sourceStock = null, deduction = 1;
+  if (mode === 'pour') {
+    sourceStock = db.prepare('SELECT * FROM stock_items WHERE id=?').get(Number(source_stock_item_id));
+    const serving = Number(serving_ml || volume_ml), container = Number(source_volume_ml);
+    if (!sourceStock) return bad(res, 'Choose the bottle or keg stock used for this pour');
+    if (!(serving > 0) || !(container >= serving)) return bad(res, 'Serving and source container sizes are required');
+    deduction = serving / container;
+  }
   if (barcode && db.prepare('SELECT id FROM menu_items WHERE barcode=?').get(String(barcode).trim())) return bad(res, 'Barcode already belongs to another product');
   if (sku && db.prepare('SELECT id FROM menu_items WHERE sku=?').get(String(sku).trim())) return bad(res, 'SKU already belongs to another product');
   let itemId;
   const tx = db.transaction(() => {
-    itemId = db.prepare(`INSERT INTO menu_items(category_id,name,price,cost,station,available,sort_order,sku,barcode,volume_ml,kra_item_code,tax_type)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(category_id, name.trim(), Math.round(Number(price) * 100),
-      Math.round(Number(cost) * 100), effectiveStation, available ? 1 : 0, 999, String(sku).trim() || null,
-      String(barcode).trim() || null, Number(volume_ml) || null, String(kra_item_code).trim() || null, tax_type || 'B').lastInsertRowid;
-    if (getSetting('business_type') === 'wines_spirits') {
+    const enteredCost = Math.round(Number(cost) * 100);
+    const effectiveCost = mode === 'pour' && !enteredCost ? Math.round(sourceStock.cost * deduction) : enteredCost;
+    itemId = db.prepare(`INSERT INTO menu_items(category_id,name,price,cost,station,available,sort_order,sku,barcode,volume_ml,stock_mode,serving_ml,sale_unit,kra_item_code,tax_type)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(category_id, name.trim(), Math.round(Number(price) * 100),
+      effectiveCost, effectiveStation, available ? 1 : 0, 999, String(sku).trim() || null,
+      String(barcode).trim() || null, Number(volume_ml) || null, mode, mode === 'pour' ? Number(serving_ml || volume_ml) : null,
+      unit || (mode === 'pour' ? 'shot' : 'piece'), String(kra_item_code).trim() || null, tax_type || 'B').lastInsertRowid;
+    if (retail && mode === 'pour') {
+      db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,?)').run(itemId, sourceStock.id, deduction);
+    } else if (retail) {
       const opening = Number(opening_qty) || 0;
       const stockId = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost) VALUES(?,?,?,?,?)')
-        .run(name.trim(), unit || 'bottle', opening, Number(min_qty) || 0, Math.round(Number(cost) * 100)).lastInsertRowid;
+        .run(name.trim(), unit || 'bottle', opening, Number(min_qty) || 0, effectiveCost).lastInsertRowid;
       db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,1)').run(itemId, stockId);
       if (opening) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
         .run(stockId, opening, 'Opening stock', req.user.id);
@@ -235,21 +254,43 @@ app.put('/api/menu-items/:id', requireAuth, requireRole('manager', 'admin'), (re
     sku = b.sku !== undefined ? String(b.sku).trim() : cur.sku;
   if (barcode && db.prepare('SELECT id FROM menu_items WHERE barcode=? AND id!=?').get(barcode, cur.id)) return bad(res, 'Barcode already belongs to another product');
   if (sku && db.prepare('SELECT id FROM menu_items WHERE sku=? AND id!=?').get(sku, cur.id)) return bad(res, 'SKU already belongs to another product');
-  const effectiveStation = getSetting('business_type') === 'wines_spirits' ? 'retail' : (b.station ?? cur.station);
+  const retail = getSetting('business_type') === 'wines_spirits';
+  const effectiveStation = retail ? 'retail' : (b.station ?? cur.station);
+  const mode = cur.stock_mode || 'unit';
+  let pourSource = null, pourDeduction = null;
+  if (retail && mode === 'pour') {
+    const currentRecipe = db.prepare('SELECT * FROM recipes WHERE menu_item_id=? ORDER BY id LIMIT 1').get(cur.id);
+    pourSource = db.prepare('SELECT * FROM stock_items WHERE id=?').get(Number(b.source_stock_item_id) || (currentRecipe || {}).stock_item_id);
+    const serving = Number(b.serving_ml || b.volume_ml || cur.serving_ml || cur.volume_ml);
+    const inferredContainer = currentRecipe && currentRecipe.qty ? serving / currentRecipe.qty : 0;
+    const container = Number(b.source_volume_ml) || inferredContainer;
+    if (!pourSource || !(serving > 0) || !(container >= serving)) return bad(res, 'Valid pour source and sizes are required');
+    pourDeduction = serving / container;
+  }
   const tx = db.transaction(() => {
-    db.prepare(`UPDATE menu_items SET category_id=?,name=?,price=?,cost=?,station=?,available=?,sku=?,barcode=?,volume_ml=?,kra_item_code=?,tax_type=? WHERE id=?`)
+    db.prepare(`UPDATE menu_items SET category_id=?,name=?,price=?,cost=?,station=?,available=?,sku=?,barcode=?,volume_ml=?,stock_mode=?,serving_ml=?,sale_unit=?,kra_item_code=?,tax_type=? WHERE id=?`)
       .run(b.category_id ?? cur.category_id, b.name ?? cur.name,
         b.price != null ? Math.round(Number(b.price) * 100) : cur.price,
         b.cost != null ? Math.round(Number(b.cost) * 100) : cur.cost,
         effectiveStation, b.available != null ? (b.available ? 1 : 0) : cur.available,
         sku || null, barcode || null, b.volume_ml !== undefined ? (Number(b.volume_ml) || null) : cur.volume_ml,
+        mode, mode === 'pour' ? Number(b.serving_ml || b.volume_ml || cur.serving_ml || cur.volume_ml) : null,
+        b.unit || cur.sale_unit || 'piece',
         b.kra_item_code !== undefined ? (String(b.kra_item_code).trim() || null) : cur.kra_item_code,
         b.tax_type ?? cur.tax_type, cur.id);
     const stock = db.prepare(`SELECT si.* FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id WHERE r.menu_item_id=? ORDER BY r.id LIMIT 1`).get(cur.id);
-    if (stock && getSetting('business_type') === 'wines_spirits')
+    if (retail && mode === 'pour') {
+      db.prepare('DELETE FROM recipes WHERE menu_item_id=?').run(cur.id);
+      db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,?)').run(cur.id, pourSource.id, pourDeduction);
+    } else if (stock && retail) {
+      const sourceCost = b.cost != null ? Math.round(Number(b.cost) * 100) : cur.cost;
       db.prepare('UPDATE stock_items SET name=?,cost=?,min_qty=COALESCE(?,min_qty),unit=COALESCE(?,unit) WHERE id=?')
-        .run(b.name ?? cur.name, b.cost != null ? Math.round(Number(b.cost) * 100) : cur.cost,
-          b.min_qty !== undefined ? Number(b.min_qty) : null, b.unit || null, stock.id);
+        .run(b.name ?? cur.name, sourceCost, b.min_qty !== undefined ? Number(b.min_qty) : null, b.unit || null, stock.id);
+      if (b.cost != null) db.prepare(`UPDATE menu_items SET cost=ROUND(? *
+        (SELECT r.qty FROM recipes r WHERE r.menu_item_id=menu_items.id AND r.stock_item_id=?))
+        WHERE stock_mode='pour' AND id IN (SELECT menu_item_id FROM recipes WHERE stock_item_id=?)`)
+        .run(sourceCost, stock.id, stock.id);
+    }
   });
   try { tx(); } catch (e) { return bad(res, e.message); }
   audit(req.user, 'product.update', `${cur.name} sku=${sku || '-'} barcode=${barcode || '-'}`);
@@ -325,6 +366,17 @@ app.delete('/api/tables/:id', requireAuth, requireRole('manager', 'admin'), (req
 });
 
 /* -------------------------------- orders -------------------------------- */
+function ensureRetailTill(user) {
+  const active = db.prepare("SELECT * FROM shifts WHERE status IN ('open','reconciling') ORDER BY id DESC LIMIT 1").get();
+  if (active) return active.status === 'open' ? active : null;
+  if (!['admin', 'manager'].includes(user.role)) return null;
+  const id = db.prepare("INSERT INTO shifts(opened_by,opening_float,opening_mpesa,notes) VALUES(?,0,0,'Automatically opened for owner sale')")
+    .run(user.id).lastInsertRowid;
+  audit(user, 'shift.auto_open', 'Owner started sale with zero opening Cash/M-Pesa balances');
+  broadcast('sales');
+  return db.prepare('SELECT * FROM shifts WHERE id=?').get(id);
+}
+
 app.get('/api/orders', requireAuth, (req, res) => {
   const status = req.query.status;
   const rows = status
@@ -340,8 +392,8 @@ app.get('/api/orders/:id', requireAuth, (req, res) => {
 });
 
 app.post('/api/orders', requireAuth, requireRole('seller', 'waiter', 'cashier', 'manager', 'admin'), (req, res) => {
-  if (getSetting('business_type') === 'wines_spirits' && !db.prepare("SELECT id FROM shifts WHERE status='open'").get())
-    return bad(res, 'Open the till before starting a sale');
+  if (getSetting('business_type') === 'wines_spirits' && !ensureRetailTill(req.user))
+    return bad(res, req.user.role === 'seller' ? 'Open the till before starting a sale' : 'Finish the current till reconciliation before starting another sale');
   const table_id = Number(req.body.table_id) || null;
   const people = Number(req.body.people) || Number(getSettings().default_people) || 1;
   /* Order channel (Phase 4) — how the sale reached us, and what an aggregator took. */
@@ -380,12 +432,14 @@ app.post('/api/orders/:id/items', requireAuth, requireRole('seller', 'waiter', '
       if (!m.available && !['manager', 'admin'].includes(req.user.role)) throw new Error(`${m.name} is unavailable`);
       const requestedQty = Number(l.qty) || 1;
       if (getSetting('business_type') === 'wines_spirits' && getSetting('prevent_negative_stock') === '1') {
-        const tracked = db.prepare(`SELECT si.qty FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
+        const tracked = db.prepare(`SELECT si.qty,r.qty deduction FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
           WHERE r.menu_item_id=? ORDER BY r.id LIMIT 1`).get(m.id);
         const already = db.prepare(`SELECT COALESCE(SUM(qty),0) q FROM order_items
           WHERE order_id=? AND menu_item_id=? AND status!='void'`).get(o.id, m.id).q;
-        if (tracked && already + requestedQty > tracked.qty)
-          throw new Error(`${m.name}: only ${tracked.qty} in stock`);
+        if (tracked && (already + requestedQty) * tracked.deduction > tracked.qty) {
+          const servings = Math.floor(tracked.qty / tracked.deduction);
+          throw new Error(`${m.name}: only ${servings} sale unit(s) available`);
+        }
       }
 
       /* base price, less any active daypart discount */
@@ -530,8 +584,8 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
   if (!o) return bad(res, 'Order not found', 404);
   const d = decorate(o);
   const s = getSettings();
-  if (s.business_type === 'wines_spirits' && !db.prepare("SELECT id FROM shifts WHERE status='open'").get())
-    return bad(res, 'The till is closed. Open it before taking payment.');
+  if (s.business_type === 'wines_spirits' && !ensureRetailTill(req.user))
+    return bad(res, req.user.role === 'seller' ? 'The till is closed. Open it before taking payment.' : 'Finish the current till reconciliation before taking payment.');
   const method = req.body.method;
   const METHODS = ['cash', 'card', 'mpesa', 'giftcard', 'points'];
   if (!METHODS.includes(method)) return bad(res, 'Unknown payment method');
@@ -778,15 +832,14 @@ app.post('/api/goods-receipts', requireAuth, requireRole('seller', 'manager', 'a
     const ins = db.prepare('INSERT INTO goods_receipt_items(receipt_id,stock_item_id,qty,unit_cost,batch_no,expiry_date) VALUES(?,?,?,?,?,?)');
     for (const line of lines) {
       const stock = db.prepare('SELECT * FROM stock_items WHERE id=?').get(Number(line.stock_item_id));
-      const qty = Number(line.qty), unitCost = Math.round(Number(line.unit_cost || 0) * 100);
+      const qty = Number(line.qty);
       if (!stock || !(qty > 0)) throw new Error('Every delivery line needs a valid product and positive quantity');
-      ins.run(receiptId, stock.id, qty, unitCost || stock.cost, line.batch_no || null, line.expiry_date || null);
-      db.prepare('UPDATE stock_items SET qty=qty+?,cost=? WHERE id=?').run(qty, unitCost || stock.cost, stock.id);
-      if (unitCost) db.prepare(`UPDATE menu_items SET cost=? WHERE id IN
-        (SELECT menu_item_id FROM recipes WHERE stock_item_id=? AND qty=1)`).run(unitCost, stock.id);
+      /* Product cost is owner-controlled in Product Settings. Receiving staff only enter quantity. */
+      ins.run(receiptId, stock.id, qty, stock.cost, null, null);
+      db.prepare('UPDATE stock_items SET qty=qty+? WHERE id=?').run(qty, stock.id);
       db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
         .run(stock.id, qty, `Delivery ${String(b.invoice_no).trim()}`, req.user.id);
-      total += qty * (unitCost || stock.cost);
+      total += qty * stock.cost;
     }
     db.prepare('UPDATE goods_receipts SET total_cost=? WHERE id=?').run(Math.round(total), receiptId);
   });

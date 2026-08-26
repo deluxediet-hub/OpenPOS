@@ -38,7 +38,8 @@ The workspace now has a focused bottle-shop workflow: barcode/SKU products, live
 - Duplicate M-Pesa confirmation references are rejected.
 - VAT-inclusive KES defaults and no restaurant service charge: an entered KSh 200 price remains KSh 200 while VAT is extracted for reporting.
 - Product selling price, unit cost and gross-margin visibility for management.
-- Guided product creation puts standard bottle/can size, retail category and selling unit directly after the product name, followed by barcode/SKU, VAT-inclusive price, cost and stock controls.
+- Guided product creation puts standard shot/bottle/keg size, retail category and selling unit directly after the product name, followed by barcode/SKU, VAT-inclusive price, cost and stock controls.
+- Whole units deduct one stock unit. Pour/shot products link to a tracked bottle or keg and deduct `serving ml ÷ source container ml`, preventing a 50ml shot from removing a whole keg.
 - Retail categories and products use a neutral internal `retail` route; kitchen/bar preparation fields, docket actions and station columns are suppressed throughout retail screens and reports.
 
 ### Alcohol controls
@@ -58,8 +59,8 @@ A 2025 national policy proposed raising the threshold to 21, but reporting descr
 - Current stock and low/out indicators appear in product management and the till.
 - Negative stock can be blocked server-side.
 - Sellers can receive deliveries against a mandatory supplier invoice/delivery-note number, but cannot directly edit or quick-adjust stock.
-- Delivery lines capture quantity, unit cost, optional batch and expiry.
-- Receiving updates quantity, latest cost, stock movement history and audit history transactionally.
+- Delivery entry asks staff only for product and quantity; valuation always uses the owner-controlled cost already stored in Product Settings.
+- Receiving updates quantity, stock movement history and audit history transactionally without allowing staff to alter cost.
 - Supplier directory stores contact/address/KRA details.
 - End-of-day stocktake freezes sales and presents one item at a time. The operator can jump through a product dropdown, move previous/next, and all entered values auto-save while the active quantity remains auto-selected.
 - Full stocktakes calculate variance, post all corrections together and audit the operator. Direct quick corrections remain owner-only.
@@ -77,7 +78,7 @@ A 2025 national policy proposed raising the threshold to 21, but reporting descr
 - Five failed logins from one address trigger a 60-second lockout.
 - Staff cannot assign themselves administrator rights.
 - Price changes, discounts, voids, refunds, payments, expenses, deliveries and stock corrections are audited.
-- A retail till must be opened before sales. Starting end-of-day stocktake moves it into reconciliation, blocks further sales, and closing requires both Cash and M-Pesa actual balances.
+- Sellers must open the retail till before sales. Owners may use that shared till with attribution to their own account; if none is open, an owner sale automatically opens a zero-balance owner till. Starting end-of-day stocktake moves it into reconciliation, blocks further sales, and closing requires both Cash and M-Pesa actual balances.
 - Cash and M-Pesa expenses reduce their respective expected balances; both variances are stored and audited at close.
 - Runtime database files are no longer committed to Git.
 

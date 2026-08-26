@@ -50,7 +50,7 @@ If the starter catalogue is loaded, immediately change the sample seller PINs (`
 
 Under **Management**:
 
-- **Products & Pricing:** enter each real product's name, SKU, barcode, bottle volume, cost, selling price, category and KRA classification code.
+- **Products & Pricing:** enter each real product's name, SKU, barcode, size, selling unit, cost, selling price, category and KRA classification code. For shots/glasses, choose Pour mode and link the serving size to its source bottle or keg size.
 - **Stock:** enter reorder levels and conduct an opening full stocktake.
 - **Suppliers:** add distributors and KRA/contact details.
 - **Settings:** enter the alcohol licence number/expiry, KRA details, minimum age control and receipt printer.
@@ -142,7 +142,7 @@ Database migrations run automatically, but a backup is still mandatory.
 - [ ] Card and M-Pesa references print correctly.
 - [ ] Duplicate M-Pesa reference is rejected.
 - [ ] Paid sale reduces product stock.
-- [ ] Supplier delivery increases stock and updates cost; seller cannot directly edit/adjust stock.
+- [ ] Supplier delivery asks only for product and quantity, increases stock, preserves configured cost, and seller cannot directly edit/adjust stock.
 - [ ] Cash and M-Pesa expenses reduce the correct expected balance.
 - [ ] End-of-day stocktake blocks further sales and presents products one at a time.
 - [ ] Added stock, physical stock at hand and No change / Skip all behave correctly.

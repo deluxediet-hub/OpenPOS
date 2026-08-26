@@ -18,6 +18,7 @@ const mk = () => {
   console.log('\n=== wines & spirits retail workflow ===\n');
   const admin = mk(), seller = mk();
   let r = await admin.post('/api/login', { pin: '0000' });
+  const ownerId = r.data.user && r.data.user.id;
   ck('owner login', r.status === 200 && r.data.user.role === 'admin');
   r = await seller.post('/api/login', { pin: '1234' });
   ck('starter seller login', r.status === 200 && r.data.user.role === 'seller');
@@ -39,6 +40,12 @@ const mk = () => {
   ck('owner creates sized retail product and matching stock', r.status === 200 && r.data.barcode === '616000000001' &&
     r.data.volume_ml === 750 && r.data.stock_unit === 'bottle' && r.data.station === 'retail' && r.data.stock_qty === 3, JSON.stringify(r.data));
   const product = r.data;
+  r = await admin.post('/api/menu-items', { name: 'Audit Test Gin Shot', category_id: cat.id, price: 200, cost: 0,
+    volume_ml: 50, stock_mode: 'pour', serving_ml: 50, source_volume_ml: 750,
+    source_stock_item_id: product.stock_item_id, unit: 'shot' });
+  ck('shot product draws a fractional quantity from its source bottle', r.status === 200 && r.data.stock_mode === 'pour' &&
+    r.data.sale_unit === 'shot' && r.data.stock_item_id === product.stock_item_id && Math.abs(r.data.stock_deduction - 50/750) < 0.000001,
+    JSON.stringify(r.data));
   r = await seller.post('/api/menu-items', { name: 'Forbidden', category_id: cat.id, price: 1 });
   ck('seller cannot change product catalogue', r.status === 403);
   r = await seller.put('/api/settings', { barcode_scanner_enabled: '0' });
@@ -57,8 +64,9 @@ const mk = () => {
 
   const supplier = (await admin.post('/api/suppliers', { name: 'Audit Distributor', kra_pin: 'P000000000A', phone: '0700000000' })).data;
   r = await seller.post('/api/goods-receipts', { supplier_id: supplier.id, invoice_no: 'INV-AUDIT-1',
-    items: [{ stock_item_id: product.stock_item_id, qty: 6, unit_cost: 650, batch_no: 'B1' }] });
-  ck('seller receives supplier delivery', r.status === 200 && r.data.total_cost === 390000, JSON.stringify(r.data));
+    items: [{ stock_item_id: product.stock_item_id, qty: 6 }] });
+  ck('seller receives delivery using only product and quantity; configured cost is preserved',
+    r.status === 200 && r.data.total_cost === 420000, JSON.stringify(r.data));
   stock = await seller.get('/api/stock');
   ck('delivery increases stock to seven', stock.data.find((x) => x.id === product.stock_item_id).qty === 7);
 
@@ -100,7 +108,10 @@ const mk = () => {
   r = await seller.post(`/api/shifts/${current.shift.id}/close`, { counted_cash: 6900, counted_mpesa: 1050, notes: 'Retail test close' });
   ck('seller closes till after stocktake with cash and M-Pesa reconciled', r.status === 200 && r.data.variance === 0 && r.data.mpesa_variance === 0, JSON.stringify(r.data));
   r = await seller.post('/api/orders', {});
-  ck('sales blocked after till close', r.status === 400 && /open the till/i.test(r.data.error), JSON.stringify(r.data));
+  ck('seller sales blocked after till close', r.status === 400 && /open the till/i.test(r.data.error), JSON.stringify(r.data));
+  r = await admin.post('/api/orders', {});
+  ck('owner can sell without a separate open-till prompt and sale is attributed to owner',
+    r.status === 200 && r.data.waiter_id === ownerId, JSON.stringify(r.data));
 
   console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);
   process.exit(failed ? 1 : 0);

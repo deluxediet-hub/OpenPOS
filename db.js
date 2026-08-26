@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS menu_items (
   sku         TEXT,
   barcode     TEXT,
   volume_ml   INTEGER,
+  stock_mode  TEXT NOT NULL DEFAULT 'unit',     -- unit|pour
+  serving_ml  INTEGER,
+  sale_unit   TEXT NOT NULL DEFAULT 'piece',
   kra_item_code TEXT,
   tax_type    TEXT NOT NULL DEFAULT 'B'
 );
@@ -367,6 +370,9 @@ function migrate() {
   add('menu_items', 'sku', 'sku TEXT');
   add('menu_items', 'barcode', 'barcode TEXT');
   add('menu_items', 'volume_ml', 'volume_ml INTEGER');
+  add('menu_items', 'stock_mode', "stock_mode TEXT NOT NULL DEFAULT 'unit'");
+  add('menu_items', 'serving_ml', 'serving_ml INTEGER');
+  add('menu_items', 'sale_unit', "sale_unit TEXT NOT NULL DEFAULT 'piece'");
   add('menu_items', 'kra_item_code', 'kra_item_code TEXT');
   add('menu_items', 'tax_type', "tax_type TEXT NOT NULL DEFAULT 'B'");
   add('orders', 'age_verified', 'age_verified INTEGER NOT NULL DEFAULT 0');

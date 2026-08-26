@@ -242,6 +242,7 @@ table.tbl tr:last-child td{border-bottom:0}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 .delivery-line{grid-template-columns:minmax(180px,2fr) minmax(72px,.65fr) minmax(90px,.8fr) minmax(90px,.8fr) minmax(120px,.8fr) auto;
   gap:8px;margin-bottom:8px;align-items:end}
+.delivery-line-simple{grid-template-columns:minmax(220px,2fr) minmax(130px,1fr) auto}
 
 /* ---------- thermal receipt: tuned for 80mm (42 chars) and 58mm (32 chars) ---------- */
 .receipt{box-sizing:border-box;background:#fff;color:#000;width:302px;margin:0 auto;padding:12px 10px 16px;

@@ -174,7 +174,7 @@ const Pos = (() => {
               return `<button class="item${m.available ? '' : ' out'}" data-mid="${m.id}" ${m.available ? '' : `title="${retail ? 'Out of stock / unavailable' : '86 — unavailable'}"`}>
                 <span class="n">${esc(m.name)}${groupsFor(m.id).length ? ' <span class="tiny" style="color:var(--teal)">▸</span>' : ''}</span>
                 ${retail && (m.sku || m.barcode) ? `<span class="tiny muted mono">${esc(m.sku || m.barcode)}</span>` : ''}
-                ${retail && m.stock_qty != null ? `<span class="tiny" style="color:${m.stock_qty <= 0 ? 'var(--red)' : m.stock_qty <= m.stock_min_qty ? 'var(--amber)' : 'var(--dim)'}">Stock ${m.stock_qty}</span>` : ''}
+                ${retail && m.stock_qty != null ? `<span class="tiny" style="color:${m.stock_qty <= 0 ? 'var(--red)' : m.stock_qty <= m.stock_min_qty ? 'var(--amber)' : 'var(--dim)'}">${m.stock_mode === 'pour' && m.stock_deduction ? `Available ${Math.floor(m.stock_qty / m.stock_deduction)} serving(s)` : `Stock ${m.stock_qty}`}</span>` : ''}
                 ${off ? `<span class="tiny" style="color:var(--dim2);text-decoration:line-through">${fmt(m.price)}</span>` : ''}
                 <span class="p" style="${off ? 'color:var(--green)' : ''}">${m.available ? fmt(live) : (retail ? 'Unavailable' : '86')}</span>
                 ${rule ? `<span class="tiny" style="color:var(--green)">${esc(rule)}</span>` : ''}
@@ -504,7 +504,7 @@ const Pos = (() => {
     const product = State.menu.find((m) => [m.barcode, m.sku].some((v) => String(v || '').trim().toLowerCase() === normalized));
     if (!product) return toast(`Barcode not found: ${code}`, 'err');
     if (!product.available) return toast(product.name + ' is unavailable', 'err');
-    if (State.settings.business_type === 'wines_spirits' && State.shift?.status !== 'open')
+    if (State.settings.business_type === 'wines_spirits' && State.shift?.status !== 'open' && State.user.role === 'seller')
       return toast('Open the till before scanning products', 'err');
     const host = document.getElementById('view');
     if (State.view !== 'tables') await navigate('tables');
