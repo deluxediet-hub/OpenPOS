@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>Point of Sale</title>
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍽️</text></svg>">
+</head>
+<body>
+
+<!-- ===================== FIRST-RUN ONBOARDING ===================== -->
+<div id="setup" class="login-wrap hidden">
+  <div class="login-card setup-card">
+    <div class="brand">
+      <div class="brand-mark">🍽️</div>
+      <div><h1>Set up your restaurant</h1><small>First-run configuration — takes about a minute</small></div>
+    </div>
+    <form id="setupForm" autocomplete="off">
+      <label class="fld">Business name</label>
+      <input class="inp" id="suName" placeholder="e.g. Mama Njeri's Kitchen" required>
+      <div class="grid2" style="margin-top:10px">
+        <div><label class="fld">Address</label><input class="inp" id="suAddr" placeholder="Street, town"></div>
+        <div><label class="fld">Phone</label><input class="inp" id="suPhone" placeholder="+254 …"></div>
+      </div>
+      <div class="grid2" style="margin-top:10px">
+        <div><label class="fld">KRA PIN</label><input class="inp mono" id="suKra" placeholder="P0…"></div>
+        <div><label class="fld">Receipt footer</label><input class="inp" id="suFooter" placeholder="Thank you!"></div>
+      </div>
+
+      <div class="fld" style="margin-top:16px">Money &amp; tax</div>
+      <div class="grid2">
+        <div><label class="fld">Currency</label><input class="inp" id="suCur" value="KES"></div>
+        <div><label class="fld">Symbol</label><input class="inp" id="suSym" value="KSh"></div>
+        <div><label class="fld">VAT %</label><input class="inp" id="suVat" type="number" step="0.5" value="16"></div>
+        <div><label class="fld">Service charge %</label><input class="inp" id="suSvc" type="number" step="0.5" value="10"></div>
+      </div>
+
+      <div class="fld" style="margin-top:16px">Owner / administrator account</div>
+      <div class="grid2">
+        <div><label class="fld">Your name</label><input class="inp" id="suOwner" placeholder="Owner" required></div>
+        <div><label class="fld">PIN (4-6 digits)</label>
+          <input class="inp mono" id="suPin" inputmode="numeric" maxlength="6" pattern="\d{4,6}" required>
+          <input class="inp mono" id="suPin2" inputmode="numeric" maxlength="6" placeholder="Confirm PIN" style="margin-top:8px" required></div>
+      </div>
+
+      <label class="row" style="gap:8px;cursor:pointer;margin-top:16px">
+        <input type="checkbox" id="suSample"> Start me off with a sample Kenyan restaurant &amp; lounge menu
+      </label>
+      <p class="tiny muted" style="margin-top:6px">You can edit or delete everything it adds later, or leave it unticked to start from a blank menu.</p>
+
+      <div class="login-err" id="setupErr"></div>
+      <button class="btn primary" id="suGo" style="width:100%;justify-content:center;margin-top:12px">Finish setup</button>
+    </form>
+  </div>
+</div>
+
+<!-- ===================== LOGIN ===================== -->
+<div id="login" class="login-wrap hidden">
+  <div class="login-card">
+    <div class="brand">
+      <div class="brand-mark">🍽️</div>
+      <div>
+        <h1 id="lgName">Point of Sale</h1>
+        <small id="lgSub">Enter your staff PIN to begin</small>
+      </div>
+    </div>
+    <div class="pin-label">Staff PIN</div>
+    <div class="pin-dots" id="pinDots"></div>
+    <div class="keypad" id="keypad">
+      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+      <button class="fn" data-k="clear">Clear</button>
+      <button data-k="0">0</button><button class="fn" data-k="back">⌫</button>
+    </div>
+    <div class="login-err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- ===================== APP ===================== -->
+<div id="app" class="app hidden">
+  <nav class="rail" id="rail"></nav>
+  <div class="main">
+    <header class="topbar">
+      <h2 id="viewTitle">Floor</h2>
+      <span class="sub" id="viewSub"></span>
+      <span class="grow"></span>
+      <span class="live" id="live"><i></i><span>Live</span></span>
+      <span class="clock" id="clock"></span>
+    </header>
+    <main class="view" id="view"></main>
+  </div>
+</div>
+
+<div id="modalRoot"></div>
+<div class="toasts" id="toasts"></div>
+<div id="printRoot"></div>
+
+<script src="/assets/api.js"></script>
+<script src="/assets/print.js"></script>
+<script src="/assets/pos.js"></script>
+<script src="/assets/cashier.js"></script>
+<script src="/assets/kds.js"></script>
+<script src="/assets/manager.js"></script>
+<script src="/assets/manager2.js"></script>
+<script src="/assets/app.js"></script>
+</body>
+</html>

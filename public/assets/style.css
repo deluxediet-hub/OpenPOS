@@ -1,0 +1,492 @@
+/* Restaurant / lounge POS — UI */
+:root{
+  --bg:#0d1117; --panel:#151b23; --panel2:#1b232d; --line:#263140;
+  --txt:#e6edf3; --dim:#8b98a5; --dim2:#5d6b7a;
+  --amber:#f0a020; --amber2:#c97f10;
+  --teal:#2dd4bf; --green:#3fb950; --red:#f85149; --blue:#58a6ff; --purple:#bc8cff;
+  --r:10px; --r2:14px;
+  --shadow:0 8px 24px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  background:var(--bg);color:var(--txt);font-size:14px;-webkit-font-smoothing:antialiased;
+  overscroll-behavior:none;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:none}
+a{color:var(--blue);text-decoration:none}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:#2b3644;border-radius:9px}
+::-webkit-scrollbar-track{background:transparent}
+.hidden{display:none!important}
+.mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+
+/* ---------- login ---------- */
+.login-wrap{position:fixed;inset:0;display:grid;place-items:center;
+  background:radial-gradient(1100px 600px at 20% 0%,#17222e 0%,#0b0f14 60%,#07090c 100%)}
+.login-card{width:min(420px,92vw);background:linear-gradient(180deg,#171f29,#111820);
+  border:1px solid var(--line);border-radius:20px;padding:30px 28px;box-shadow:var(--shadow)}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.brand-mark{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;
+  background:linear-gradient(135deg,var(--amber),#e0600f);font-size:22px}
+.brand h1{font-size:20px;margin:0;letter-spacing:.3px}
+.brand small{color:var(--dim);font-size:12px;display:block;margin-top:2px}
+.pin-label{margin:22px 0 10px;color:var(--dim);font-size:13px}
+.pin-dots{display:flex;gap:12px;justify-content:center;margin-bottom:18px}
+.pin-dot{width:16px;height:16px;border-radius:50%;border:2px solid #38485a;background:transparent}
+.pin-dot.on{background:var(--amber);border-color:var(--amber);box-shadow:0 0 12px rgba(240,160,32,.5)}
+.keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.keypad button{background:#1e2833;border:1px solid #2c3947;border-radius:12px;padding:15px 0;
+  font-size:20px;font-weight:600;transition:.12s}
+.keypad button:hover{background:#26323f;border-color:#3d4d5f}
+.keypad button:active{transform:scale(.96)}
+.keypad .fn{font-size:13px;color:var(--dim);font-weight:500}
+.login-err{color:var(--red);text-align:center;min-height:18px;margin-top:12px;font-size:13px}
+.login-hint{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);color:var(--dim2);font-size:11.5px;line-height:1.7}
+.login-hint b{color:var(--dim)}
+
+/* ---------- shell ---------- */
+.app{display:grid;grid-template-columns:74px 1fr;height:100vh}
+.rail{background:#0f141b;border-right:1px solid var(--line);display:flex;flex-direction:column;
+  align-items:center;padding:12px 0;gap:6px}
+.rail-logo{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;font-size:19px;
+  background:linear-gradient(135deg,var(--amber),#e0600f);margin-bottom:10px}
+.rail-btn{width:54px;height:52px;border-radius:12px;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:3px;color:var(--dim);font-size:9.5px;font-weight:600;letter-spacing:.2px;transition:.12s}
+.rail-btn svg{width:20px;height:20px}
+.rail-btn:hover{background:#1a222c;color:var(--txt)}
+.rail-btn.active{background:#1e2b38;color:var(--amber)}
+.rail-btn .dot{position:absolute;transform:translate(16px,-13px);min-width:16px;height:16px;border-radius:9px;
+  background:var(--red);color:#fff;font-size:9.5px;display:grid;place-items:center;padding:0 4px;font-weight:700}
+.rail-btn{position:relative}
+.rail-spacer{flex:1}
+.rail-user{display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 4px;border-radius:12px}
+.rail-user .av{width:32px;height:32px;border-radius:50%;background:#243040;display:grid;place-items:center;font-weight:700;font-size:12px;color:var(--amber)}
+.rail-user span{font-size:8.5px;color:var(--dim);max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.main{display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.topbar{height:52px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;
+  padding:0 16px;background:#10161d;flex-shrink:0}
+.topbar h2{font-size:15px;margin:0;font-weight:600;letter-spacing:.2px}
+.topbar .sub{color:var(--dim);font-size:12px}
+.topbar .grow{flex:1}
+.clock{color:var(--dim);font-size:12.5px;font-variant-numeric:tabular-nums}
+.live{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim)}
+.live i{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
+.live.off i{background:var(--red);box-shadow:0 0 8px var(--red)}
+.view{flex:1;overflow:auto;padding:16px}
+
+/* ---------- generic ---------- */
+.btn{background:#212b36;border:1px solid #303d4c;border-radius:9px;padding:8px 14px;font-weight:600;
+  font-size:13px;transition:.12s;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.btn:hover{background:#2a3644;border-color:#41526a}
+.btn:active{transform:translateY(1px)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.primary{background:var(--amber);border-color:var(--amber2);color:#20160a}
+.btn.primary:hover{background:#ffb534}
+.btn.green{background:var(--green);border-color:#2c8a3c;color:#06180a}
+.btn.green:hover{background:#4fd264}
+.btn.red{background:transparent;border-color:#5c2a2a;color:var(--red)}
+.btn.red:hover{background:#2a1618}
+.btn.ghost{background:transparent;border-color:#2c3947;color:var(--dim)}
+.btn.sm{padding:5px 10px;font-size:12px}
+.btn.xs{padding:3px 8px;font-size:11px;border-radius:7px}
+.inp{background:#0f151c;border:1px solid #2c3947;border-radius:9px;padding:9px 11px;width:100%;
+  transition:.12s;font-size:13.5px}
+.inp:focus{outline:none;border-color:var(--amber);box-shadow:0 0 0 3px rgba(240,160,32,.14)}
+select.inp{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b98a5' stroke-width='3'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
+label.fld{display:block;font-size:11.5px;color:var(--dim);margin-bottom:5px;font-weight:600;letter-spacing:.3px;text-transform:uppercase}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r2);overflow:hidden}
+.card-h{padding:12px 15px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+.card-h h3{margin:0;font-size:13.5px;font-weight:650}
+.card-h .grow{flex:1}
+.card-b{padding:15px}
+.grid{display:grid;gap:14px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.muted{color:var(--dim)}
+.small{font-size:12px}
+.tiny{font-size:11px}
+.right{text-align:right}
+.center{text-align:center}
+.tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase}
+.tag.kitchen{background:#2a2318;color:var(--amber)}
+.tag.bar{background:#152a33;color:var(--teal)}
+.tag.ok{background:#12281a;color:var(--green)}
+.tag.warn{background:#2d2113;color:#e3a008}
+.tag.bad{background:#2d1618;color:var(--red)}
+.tag.info{background:#14243a;color:var(--blue)}
+
+table.tbl{width:100%;border-collapse:collapse;font-size:13px}
+table.tbl th{text-align:left;padding:9px 12px;color:var(--dim);font-size:10.5px;text-transform:uppercase;
+  letter-spacing:.6px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:1}
+table.tbl td{padding:9px 12px;border-bottom:1px solid #1d2732}
+table.tbl tbody tr:hover{background:#18212b}
+table.tbl tr:last-child td{border-bottom:0}
+
+.stat{background:linear-gradient(160deg,#18212b,#141a22);border:1px solid var(--line);border-radius:var(--r2);padding:15px 16px}
+.stat .l{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+.stat .v{font-size:24px;font-weight:700;margin-top:6px;font-variant-numeric:tabular-nums}
+.stat .d{font-size:11.5px;color:var(--dim2);margin-top:3px}
+
+/* ---------- table map ---------- */
+.area-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.area-tab{padding:7px 15px;border-radius:20px;background:#18212b;border:1px solid #2c3947;font-size:12.5px;
+  font-weight:600;color:var(--dim);transition:.12s}
+.area-tab:hover{color:var(--txt)}
+.area-tab.active{background:var(--amber);border-color:var(--amber2);color:#20160a}
+.table-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(116px,1fr));gap:11px}
+.tbl-card{aspect-ratio:1/1;border-radius:14px;border:1.5px solid #2c3947;background:#161e27;padding:9px;
+  display:flex;flex-direction:column;transition:.14s;position:relative;overflow:hidden}
+.tbl-card:hover{transform:translateY(-2px);border-color:#4a5c72}
+.tbl-card .nm{font-size:17px;font-weight:700}
+.tbl-card .st{font-size:10px;color:var(--dim);margin-top:1px}
+.tbl-card .amt{margin-top:auto;font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
+.tbl-card .meta{font-size:10px;color:var(--dim2)}
+.tbl-card.free{background:#132018;border-color:#25402c}
+.tbl-card.free .nm{color:var(--green)}
+.tbl-card.occupied{background:#231c12;border-color:#4a3a1c}
+.tbl-card.occupied .nm{color:var(--amber)}
+.tbl-card.billed{background:#122130;border-color:#1e3d5c}
+.tbl-card.billed .nm{color:var(--blue)}
+.tbl-card .bar{position:absolute;left:0;top:0;height:3px;width:100%}
+.tbl-card.occupied .bar{background:var(--amber)}
+.tbl-card.billed .bar{background:var(--blue)}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--dim);margin-bottom:12px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px}
+
+/* ---------- POS split ---------- */
+.pos{display:grid;grid-template-columns:1fr 380px;gap:14px;height:100%;min-height:0}
+.menu-panel,.bill-panel{display:flex;flex-direction:column;min-height:0;background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--r2);overflow:hidden}
+.cats{display:flex;gap:7px;padding:11px 12px;overflow-x:auto;border-bottom:1px solid var(--line);flex-shrink:0}
+.cat{padding:7px 13px;border-radius:9px;background:#1b242e;border:1px solid #2c3947;font-size:12.5px;
+  font-weight:600;color:var(--dim);white-space:nowrap;transition:.12s}
+.cat:hover{color:var(--txt)}
+.cat.active{background:var(--amber);border-color:var(--amber2);color:#20160a}
+.search{padding:10px 12px;border-bottom:1px solid var(--line);flex-shrink:0}
+.items{flex:1;overflow:auto;padding:12px;display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px;align-content:start}
+.item{background:#1a232d;border:1px solid #2c3947;border-radius:11px;padding:11px;text-align:left;
+  display:flex;flex-direction:column;gap:5px;transition:.12s;min-height:78px}
+.item:hover{border-color:var(--amber);background:#1f2a35}
+.item:active{transform:scale(.98)}
+.item .n{font-size:13px;font-weight:600;line-height:1.25}
+.item .p{margin-top:auto;color:var(--amber);font-weight:700;font-size:13.5px;font-variant-numeric:tabular-nums}
+.item.out{opacity:.35;filter:grayscale(.6)}
+.item.out .p{color:var(--red)}
+
+.bill-head{padding:12px 14px;border-bottom:1px solid var(--line);flex-shrink:0}
+.bill-lines{flex:1;overflow:auto;padding:6px 0}
+.line{display:grid;grid-template-columns:1fr auto;gap:4px 10px;padding:8px 14px;border-bottom:1px solid #1b242d}
+.line:hover{background:#18212b}
+.line .nm{font-size:13px;font-weight:600}
+.line .amt{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.line .sub{grid-column:1/3;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);margin-top:3px}
+.line .note{grid-column:1/3;font-size:11px;color:var(--teal);font-style:italic}
+.qty{display:flex;align-items:center;gap:2px}
+.qty button{width:20px;height:20px;border-radius:5px;background:#26323f;font-size:13px;line-height:1;
+  display:grid;place-items:center;color:var(--dim)}
+.qty button:hover{background:#35475a;color:var(--txt)}
+.qty span{min-width:22px;text-align:center;font-weight:700;font-size:12.5px}
+.bill-foot{border-top:1px solid var(--line);padding:11px 14px;flex-shrink:0;background:#131a22}
+.tline{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0;color:var(--dim)}
+.tline b{color:var(--txt);font-variant-numeric:tabular-nums}
+.tline.total{font-size:17px;font-weight:700;color:var(--txt);padding-top:8px;margin-top:6px;border-top:1px dashed #2c3947}
+.tline.total b{color:var(--amber);font-size:19px}
+.empty{padding:34px 18px;text-align:center;color:var(--dim2);font-size:13px}
+
+/* ---------- orders list ---------- */
+.ord-list{display:flex;flex-direction:column;gap:9px}
+.ord{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;
+  cursor:pointer;transition:.12s}
+.ord:hover{border-color:#41556d;background:#18212b}
+.ord.sel{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber)}
+.ord .t{display:flex;justify-content:space-between;align-items:center;font-weight:650}
+.ord .m{display:flex;gap:12px;font-size:11.5px;color:var(--dim);margin-top:5px;flex-wrap:wrap}
+
+/* ---------- KDS ---------- */
+.kds{padding:14px}
+.kds-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px;align-items:start}
+.ticket{background:#161d26;border:1px solid #2a3644;border-left:4px solid var(--amber);border-radius:10px;
+  margin-bottom:12px;overflow:hidden}
+.ticket.bar{border-left-color:var(--teal)}
+.ticket.late{border-left-color:var(--red);background:#1f1618}
+.ticket-h{display:flex;justify-content:space-between;padding:9px 12px;background:#1b242e;font-size:12.5px;font-weight:700}
+.ticket-h .age{font-size:11px;color:var(--dim);font-weight:600}
+.ticket.late .ticket-h .age{color:var(--red)}
+.ticket li{display:flex;justify-content:space-between;gap:10px;padding:6px 12px;font-size:13px;border-bottom:1px solid #1d2732}
+.ticket li .q{font-weight:800;color:var(--amber)}
+.ticket li .nt{font-size:11px;color:var(--teal);font-style:italic}
+.ticket ul{list-style:none;margin:0;padding:0}
+.ticket-f{padding:8px 12px;display:flex;gap:8px}
+.ticket-f .btn{flex:1;justify-content:center}
+
+/* ---------- modal ---------- */
+.ov{position:fixed;inset:0;background:rgba(4,7,10,.72);backdrop-filter:blur(3px);display:grid;place-items:center;
+  z-index:100;padding:16px;overflow:auto}
+.modal{background:#141b23;border:1px solid #2c3947;border-radius:16px;width:min(560px,94vw);
+  box-shadow:var(--shadow);max-height:92vh;display:flex;flex-direction:column}
+.modal.wide{width:min(900px,96vw)}
+.modal-h{padding:15px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+.modal-h h3{margin:0;font-size:15px;font-weight:650}
+.modal-h .grow{flex:1}
+.modal-b{padding:18px;overflow:auto}
+.modal-f{padding:13px 18px;border-top:1px solid var(--line);display:flex;gap:9px;justify-content:flex-end;flex-shrink:0}
+.x{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:var(--dim);font-size:19px}
+.x:hover{background:#212b36;color:var(--txt)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+
+/* ---------- receipt ---------- */
+.receipt{background:#fff;color:#000;width:302px;margin:0 auto;padding:16px 14px;
+  font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5}
+.receipt h4{text-align:center;margin:0 0 2px;font-size:15px}
+.receipt .c{text-align:center}
+.receipt hr{border:0;border-top:1px dashed #999;margin:8px 0}
+.receipt .r{display:flex;justify-content:space-between;gap:10px}
+.receipt table{width:100%;border-collapse:collapse}
+.receipt table td{vertical-align:top;padding:1px 0}
+.receipt .tot{font-weight:700;font-size:13px}
+
+/* ---------- toast ---------- */
+.toasts{position:fixed;bottom:18px;right:18px;z-index:200;display:flex;flex-direction:column;gap:9px}
+.toast{background:#1b242e;border:1px solid #2f3d4d;border-left:3px solid var(--amber);border-radius:9px;
+  padding:11px 15px;font-size:13px;box-shadow:var(--shadow);min-width:230px;max-width:340px;
+  animation:slide .22s ease}
+.toast.ok{border-left-color:var(--green)}
+.toast.err{border-left-color:var(--red)}
+@keyframes slide{from{opacity:0;transform:translateX(22px)}to{opacity:1;transform:none}}
+
+.bar-chart{display:flex;align-items:flex-end;gap:6px;height:130px;padding-top:10px}
+.bar-chart .b{flex:1;background:linear-gradient(180deg,var(--amber),#a86a10);border-radius:5px 5px 0 0;
+  min-height:3px;position:relative;transition:.2s}
+.bar-chart .b:hover{background:linear-gradient(180deg,#ffc44d,var(--amber))}
+.bar-chart .b span{position:absolute;bottom:-19px;left:0;right:0;text-align:center;font-size:9.5px;color:var(--dim2)}
+.bar-lbl{display:flex;gap:6px;margin-top:22px;font-size:10px;color:var(--dim2)}
+.pbar{height:7px;background:#1e2833;border-radius:6px;overflow:hidden}
+.pbar i{display:block;height:100%;background:var(--amber);border-radius:6px}
+
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px;overflow-x:auto}
+.tab{padding:9px 15px;font-size:13px;font-weight:600;color:var(--dim);border-bottom:2px solid transparent;white-space:nowrap}
+.tab:hover{color:var(--txt)}
+.tab.active{color:var(--amber);border-bottom-color:var(--amber)}
+
+.scroll-x{overflow-x:auto}
+.nowrap{white-space:nowrap}
+.kbd{background:#1e2833;border:1px solid #32414f;border-bottom-width:2px;border-radius:5px;padding:1px 6px;font-size:11px;font-family:monospace}
+
+
+
+/* second-level nav inside the grouped manager console */
+.subtabs{margin-top:-2px}
+.subtabs .tab{min-height:38px;font-size:12px;color:var(--dim)}
+.subtabs .tab.active{color:var(--teal);border-bottom-color:var(--teal)}
+
+/* ---------- printable A4 report sheet ---------- */
+.sheet{background:#fff;color:#000;max-width:760px;margin:0 auto;padding:28px 30px;
+  font-family:Georgia,'Times New Roman',serif;font-size:13px}
+.rpt-head{text-align:center;border-bottom:3px double #000;padding-bottom:10px;margin-bottom:12px}
+.rpt-biz{font-size:22px;font-weight:700;letter-spacing:.5px;text-transform:uppercase}
+.rpt-head div{margin:2px 0}
+.rpt-title{text-align:center;font-size:16px;font-weight:700;margin-top:6px;text-transform:uppercase;letter-spacing:1px}
+.rpt-sub{text-align:center;font-size:11px;color:#444;margin:4px 0 14px}
+.rpt-table{margin-bottom:14px}
+.rpt-tt{font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;border-bottom:1px solid #000}
+.rpt-table table{width:100%;border-collapse:collapse}
+.rpt-table th{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;text-align:left;border-bottom:1.5px solid #000;padding:4px 6px}
+.rpt-table td{padding:4px 6px;border-bottom:1px solid #ccc;vertical-align:top}
+.rpt-table .right,.rpt-table th.right{text-align:right}
+.rpt-sum{margin:14px 0 22px;border-top:2px solid #000;padding-top:8px}
+.rpt-sum .r{display:flex;justify-content:space-between;padding:2px 4px}
+.rpt-sum b{font-size:14px}
+.rpt-sign{display:flex;gap:26px;margin-top:46px}
+.rpt-sign-col{flex:1;text-align:center}
+.rpt-line{border-top:1px solid #000;height:34px}
+.rpt-sign-l{font-size:10.5px;margin-top:4px;color:#222}
+@media print{ .sheet{padding:0;max-width:none} }
+/* ---------- first-run onboarding ---------- */
+.setup-card{width:min(560px,94vw);max-height:94vh;overflow:auto}
+.setup-card .fld{margin-top:4px}
+.setup-card .btn{min-height:48px}
+/* ======================================================================
+   RESPONSIVE LAYOUT — presentation only.
+   Phone   320–480px   single column, bottom nav, large touch targets
+   Tablet  481–1024px  two-column layouts
+   Desktop >1024px     the default rules above (deliberately untouched)
+   No DOM, class-name, endpoint or behaviour changes live in this file.
+   ====================================================================== */
+
+/* ---------- touch ergonomics: phones and tablets ---------- */
+@media (max-width:1024px){
+  :root{--rail-h:60px}
+  .btn{min-height:44px;padding:10px 16px}
+  .btn.sm{min-height:38px;padding:8px 13px;font-size:12.5px}
+  .btn.xs{min-height:32px;padding:6px 10px}
+  /* 16px input text stops iOS Safari zooming the page on focus */
+  .inp{min-height:44px;padding:11px 12px;font-size:16px}
+  select.inp{padding-right:32px;background-position:right 12px center}
+  .cat{min-height:44px;padding:10px 16px}
+  .area-tab{min-height:44px;padding:10px 18px}
+  .tab{min-height:44px;padding:11px 14px}
+  .item{min-height:74px}
+  .qty button{width:30px;height:30px;font-size:15px}
+  .x{width:38px;height:38px}
+  .stat{padding:12px 13px}
+  .stat .v{font-size:21px}
+}
+
+/* =============================== PHONE =============================== */
+@media (max-width:480px){
+  /* --- shell: rail becomes a bottom tab bar --- */
+  .app{grid-template-columns:1fr;grid-template-rows:1fr auto;
+       grid-template-areas:"main" "rail";height:100vh;height:100dvh}
+  .main{grid-area:main;min-height:0}
+  .rail{grid-area:rail;flex-direction:row;align-items:stretch;justify-content:space-between;
+        gap:2px;padding:4px 4px calc(4px + env(safe-area-inset-bottom,0px));
+        border-right:0;border-top:1px solid var(--line)}
+  .rail-logo,.rail-spacer{display:none}
+  .rail-btn{flex:1 1 0;width:auto;height:auto;min-height:52px;border-radius:10px;
+            gap:2px;font-size:9px;padding:6px 2px;position:relative}
+  .rail-btn svg{width:20px;height:20px}
+  .rail-btn .dot{transform:translate(13px,-4px)}
+  .rail-user{flex:0 0 auto;padding:4px 6px}
+  .rail-user .av{width:24px;height:24px;font-size:10px}
+  .rail-user span:not(.av){display:none}
+
+  .topbar{height:48px;padding:0 10px;gap:8px}
+  .topbar h2{font-size:14px}
+  .topbar .sub,.clock{display:none}
+  .live{font-size:10px}
+  .live i{width:6px;height:6px}
+  .view{padding:10px}
+
+  /* --- floor plan --- */
+  .table-grid{grid-template-columns:repeat(auto-fill,minmax(94px,1fr));gap:8px}
+  .tbl-card{aspect-ratio:auto;min-height:86px;padding:8px}
+  .tbl-card .nm{font-size:16px}
+  .tbl-card .st{font-size:9.5px}
+  .tbl-card .amt{font-size:13px}
+  .tbl-card .meta{font-size:9.5px}
+  .area-tabs{gap:6px;margin-bottom:11px}
+  .legend{gap:9px;font-size:10.5px;margin-bottom:10px}
+  .row{gap:8px}
+  .row .btn{flex:1 1 auto;justify-content:center}
+
+  /* --- POS: menu on top, bill docked underneath, each scrolling internally --- */
+  .pos{display:flex;flex-direction:column;gap:8px;height:100%;min-height:0}
+  .menu-panel{flex:1 1 auto;min-height:0;border-radius:12px}
+  .bill-panel{flex:0 0 auto;max-height:46%;min-height:0;border-radius:12px}
+  .search{padding:8px 10px}
+  .cats{padding:9px 10px;gap:6px}
+  .items{grid-template-columns:repeat(auto-fill,minmax(124px,1fr));gap:8px;padding:10px}
+  .item{padding:10px;min-height:70px;border-radius:10px}
+  .item .n{font-size:12.5px}
+  .item .p{font-size:13px}
+  .bill-head{padding:10px 12px}
+  .line{padding:9px 12px}
+  .line .nm{font-size:12.5px}
+  .bill-foot{padding:10px 12px}
+  .tline{font-size:12px}
+  .tline.total{font-size:15px}
+  .tline.total b{font-size:17px}
+
+  /* --- grids collapse to one column --- */
+  .grid{gap:10px}
+  .grid2,.grid3{grid-template-columns:1fr;gap:10px}
+  .card-h{padding:11px 12px;flex-wrap:wrap;gap:8px}
+  .card-b{padding:12px}
+
+  /* --- modals go full-screen so forms and keyboards have room --- */
+  .ov{padding:0;align-items:stretch}
+  .modal,.modal.wide{width:100%;max-width:100%;height:100%;max-height:100%;
+                     border-radius:0;border:0}
+  .modal-h{padding:13px 14px;position:sticky;top:0;background:#141b23;z-index:3}
+  .modal-h h3{font-size:14.5px}
+  .modal-b{padding:14px}
+  .modal-f{padding:12px 14px;flex-wrap:wrap;
+           padding-bottom:calc(12px + env(safe-area-inset-bottom,0px))}
+  .modal-f .btn{flex:1 1 auto;justify-content:center}
+
+  /* --- wide tables scroll sideways instead of crushing --- */
+  table.tbl{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;min-width:100%}
+  table.tbl th,table.tbl td{white-space:nowrap;padding:10px 12px}
+  .scroll-x{overflow-x:auto;-webkit-overflow-scrolling:touch}
+
+  /* --- orders / bills lists --- */
+  .ord{padding:11px 12px}
+  .ord .m{font-size:11px;gap:9px}
+  .bar-chart{height:104px}
+
+  /* --- toasts clear the bottom tab bar --- */
+  .toasts{left:10px;right:10px;bottom:calc(var(--rail-h) + 14px + env(safe-area-inset-bottom,0px))}
+  .toast{min-width:0;max-width:none}
+
+  /* --- login --- */
+  .login-card{padding:22px 18px;border-radius:16px;width:min(420px,94vw)}
+  .brand-mark{width:40px;height:40px;font-size:20px}
+  .brand h1{font-size:18px}
+  .pin-dots{gap:11px;margin-bottom:16px}
+  .keypad{gap:9px}
+  .keypad button{min-height:52px;padding:0;font-size:19px}
+  .login-hint{font-size:10.5px;line-height:1.65}
+}
+
+/* Extra-small screens (320px class) */
+@media (max-width:359px){
+  .table-grid{grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:7px}
+  .items{grid-template-columns:repeat(auto-fill,minmax(108px,1fr))}
+  .rail-btn{font-size:8px;min-height:48px}
+  .stat .v{font-size:18px}
+  .modal-b{padding:12px}
+}
+
+/* ============================== TABLET =============================== */
+@media (min-width:481px) and (max-width:1024px){
+  .app{grid-template-columns:64px 1fr}
+  .rail-btn{width:50px;height:50px;font-size:9px}
+  .rail-logo{width:36px;height:36px;font-size:17px}
+  .rail-user .av{width:28px;height:28px;font-size:11px}
+  .rail-user span:not(.av){font-size:8px}
+
+  .topbar{height:50px;padding:0 14px}
+  .topbar .sub{display:none}
+  .view{padding:14px}
+
+  /* POS keeps its two columns, bill column narrowed to fit */
+  .pos{grid-template-columns:minmax(0,1fr) minmax(250px,36%);gap:12px}
+  .items{grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:9px;padding:11px}
+  .table-grid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px}
+
+  /* two-column form and stat grids */
+  .grid{gap:12px}
+  .grid3{grid-template-columns:repeat(2,1fr)}
+  .modal{width:min(620px,92vw)}
+  .modal.wide{width:min(880px,94vw)}
+  .toasts{bottom:18px}
+}
+
+/* ================================ KDS ================================
+   Unchanged for landscape wall displays: .kds-cols already collapses to a
+   single column via auto-fit below ~660px, so a phone held sideways still
+   gets one usable ticket column. Nothing here constrains it further.
+   ================================================================== */
+@media (max-width:480px) and (orientation:portrait){
+  .kds{padding:10px}
+  .kds-cols{grid-template-columns:1fr;gap:12px}
+  .ticket li{font-size:12.5px}
+}
+@media (orientation:landscape) and (max-height:520px){
+  .kds{padding:10px}
+  .ticket{margin-bottom:9px}
+  .ticket li{padding:5px 11px;font-size:12.5px}
+}
+
+@media print{
+  body>*{display:none!important}
+  #printRoot{display:block!important;position:static}
+  .app,.rail,.topbar{display:none!important}
+}
+#printRoot{display:none}

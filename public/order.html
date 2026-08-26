@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>Order at your table</title>
+<style>
+:root{--bg:#0d1117;--panel:#151b23;--line:#263140;--txt:#e6edf3;--dim:#8b98a5;--amber:#f0a020;--green:#3fb950;--red:#f85149;--teal:#2dd4bf}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt);font-size:15px;-webkit-font-smoothing:antialiased;padding-bottom:90px}
+header{position:sticky;top:0;background:#10161d;border-bottom:1px solid var(--line);padding:14px 16px;z-index:10}
+h1{margin:0;font-size:17px}
+.sub{color:var(--dim);font-size:12.5px;margin-top:2px}
+.cats{display:flex;gap:7px;overflow-x:auto;padding:11px 12px;border-bottom:1px solid var(--line);position:sticky;top:60px;background:var(--bg);z-index:9}
+.cat{flex:0 0 auto;padding:7px 13px;border-radius:20px;background:#1b242e;border:1px solid #2c3947;font-size:13px;color:var(--dim);font-weight:600}
+.cat.on{background:var(--amber);color:#20160a;border-color:var(--amber)}
+.items{padding:12px;display:flex;flex-direction:column;gap:9px}
+.it{display:flex;justify-content:space-between;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+.it .n{font-weight:600;line-height:1.3}
+.it .p{color:var(--amber);font-weight:700;margin-top:5px;font-variant-numeric:tabular-nums}
+.it .was{color:var(--dim);text-decoration:line-through;font-size:12px;font-weight:400;margin-right:6px}
+.it .r{color:var(--green);font-size:11px}
+.add{flex:0 0 auto;width:38px;height:38px;border-radius:50%;background:var(--amber);color:#20160a;font-size:22px;font-weight:700;border:0;align-self:center}
+.add:active{transform:scale(.94)}
+.bar{position:fixed;bottom:0;left:0;right:0;background:#10161d;border-top:1px solid var(--line);padding:12px 16px;display:flex;gap:12px;align-items:center}
+.bar button{flex:1;background:var(--green);color:#06180a;border:0;border-radius:11px;padding:14px;font-size:15px;font-weight:700}
+.bar button:disabled{opacity:.4}
+.cnt{background:#212b36;border-radius:9px;padding:9px 13px;font-weight:700;font-variant-numeric:tabular-nums}
+.sheet{position:fixed;inset:0;background:rgba(4,7,10,.8);display:none;place-items:end center;z-index:20}
+.sheet.on{display:grid}
+.panel{background:#141b23;border:1px solid #2c3947;border-radius:18px 18px 0 0;width:100%;max-width:520px;padding:18px;max-height:80vh;overflow:auto}
+.panel h3{margin:0 0 14px;font-size:16px}
+.opt{display:flex;justify-content:space-between;gap:10px;padding:11px;border:1px solid #2c3947;border-radius:10px;margin-bottom:7px;cursor:pointer}
+.opt.sel{border-color:var(--amber);background:#1f1710}
+.grp{margin-bottom:14px}
+.grp .h{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px;font-weight:700}
+.x{float:right;background:none;border:0;color:var(--dim);font-size:22px}
+.toast{position:fixed;left:16px;right:16px;bottom:86px;background:#1b242e;border:1px solid #2f3d4d;border-left:3px solid var(--amber);border-radius:10px;padding:12px 14px;font-size:14px;z-index:30;display:none}
+.toast.on{display:block}
+.toast.err{border-left-color:var(--red)}
+.empty{padding:40px 16px;text-align:center;color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="biz">Loading…</h1>
+  <div class="sub" id="tbl"></div>
+</header>
+<div class="cats" id="cats"></div>
+<div class="items" id="items"></div>
+<div class="bar">
+  <span class="cnt" id="cnt">0</span>
+  <button id="send" disabled>Send to kitchen</button>
+</div>
+<div class="sheet" id="sheet"><div class="panel" id="panel"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+const TOKEN = location.pathname.split('/').filter(Boolean).pop();
+let D = null, cat = null, cart = [];
+
+const $ = (s) => document.querySelector(s);
+const money = (c) => (D.currency_symbol || 'KSh') + ' ' + (c / 100).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (x) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[x]));
+function toast(msg, err) {
+  const t = $('#toast'); t.textContent = msg; t.className = 'toast on' + (err ? ' err' : '');
+  setTimeout(() => { t.className = 'toast'; }, 3000);
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/qr/' + TOKEN);
+    if (!r.ok) throw new Error((await r.json()).error || 'Table not found');
+    D = await r.json();
+    $('#biz').textContent = D.business;
+    $('#tbl').textContent = 'Table ' + D.table.name + ' · ' + D.table.area;
+    cat = D.categories[0] ? D.categories[0].id : null;
+    draw();
+  } catch (e) {
+    $('#biz').textContent = 'Point of Sale';
+    $('#items').innerHTML = '<div class="empty">' + esc(e.message) + '<br><br>Please ask a member of staff.</div>';
+  }
+}
+
+function draw() {
+  $('#cats').innerHTML = D.categories.map((c) =>
+    '<button class="cat' + (c.id === cat ? ' on' : '') + '" data-c="' + c.id + '">' + esc(c.name) + '</button>').join('');
+  document.querySelectorAll('[data-c]').forEach((b) => b.onclick = () => { cat = Number(b.dataset.c); draw(); });
+
+  const list = D.menu.filter((m) => m.category_id === cat);
+  $('#items').innerHTML = list.length ? list.map((m) => '<div class="it"><div>' +
+    '<div class="n">' + esc(m.name) + '</div>' +
+    '<div class="p">' + (m.was ? '<span class="was">' + money(m.was) + '</span>' : '') + money(m.price) + '</div>' +
+    (m.rule ? '<div class="r">' + esc(m.rule) + '</div>' : '') +
+    (m.groups.length ? '<div class="r" style="color:var(--teal)">choose options</div>' : '') +
+    '</div><button class="add" data-m="' + m.id + '">+</button></div>').join('')
+    : '<div class="empty">Nothing in this category right now.</div>';
+
+  document.querySelectorAll('[data-m]').forEach((b) => b.onclick = () => add(Number(b.dataset.m)));
+  $('#cnt').textContent = cart.reduce((a, c) => a + c.qty, 0);
+  $('#send').disabled = cart.length === 0;
+  $('#send').textContent = cart.length ? 'Send ' + cart.reduce((a, c) => a + c.qty, 0) + ' item(s) to kitchen' : 'Send to kitchen';
+}
+
+function add(id) {
+  const m = D.menu.find((x) => x.id === id);
+  if (!m) return;
+  if (m.groups.length) return sheet(m);
+  cart.push({ menu_item_id: m.id, qty: 1, modifiers: [] });
+  draw();
+  toast(m.name + ' added');
+}
+
+function sheet(m) {
+  const picked = new Set();
+  const render = () => {
+    $('#panel').innerHTML = '<button class="x" id="x">&times;</button><h3>' + esc(m.name) + '</h3>' +
+      m.groups.map((g) => '<div class="grp"><div class="h">' + esc(g.name) +
+        (g.required ? ' *' : ' (optional)') + '</div>' +
+        g.options.map((o) => '<div class="opt' + (picked.has(o.id) ? ' sel' : '') + '" data-o="' + o.id + '" data-g="' + g.id + '" data-max="' + g.max_pick + '">' +
+          '<span>' + esc(o.name) + '</span><span>' + (o.price ? '+' + money(o.price) : '—') + '</span></div>').join('') +
+        '</div>').join('') +
+      '<button class="add" id="ok" style="width:100%;height:46px;border-radius:11px;font-size:15px">Add to order</button>';
+    $('#x').onclick = () => { $('#sheet').className = 'sheet'; };
+    $('#ok').onclick = () => {
+      for (const g of m.groups) {
+        if (!g.required) continue;
+        if (![...picked].some((i) => (m.groups.find((x) => x.options.some((o) => o.id === i)) || {}).id === g.id))
+          return toast('Please choose: ' + g.name, true);
+      }
+      cart.push({ menu_item_id: m.id, qty: 1, modifiers: [...picked].map((i) => ({ id: i })) });
+      $('#sheet').className = 'sheet'; draw(); toast(m.name + ' added');
+    };
+    document.querySelectorAll('[data-o]').forEach((b) => b.onclick = () => {
+      const id = Number(b.dataset.o), gid = Number(b.dataset.g), max = Number(b.dataset.max);
+      if (picked.has(id)) { picked.delete(id); return render(); }
+      const sameGroup = m.groups.find((g) => g.id === gid).options.map((o) => o.id);
+      if (max <= 1) sameGroup.forEach((i) => picked.delete(i));
+      else if (sameGroup.filter((i) => picked.has(i)).length >= max) return toast('Maximum ' + max + ' from ' + gid, true);
+      picked.add(id); render();
+    });
+  };
+  render();
+  $('#sheet').className = 'sheet on';
+}
+
+$('#send').onclick = async () => {
+  if (!cart.length) return;
+  $('#send').disabled = true;
+  try {
+    const r = await fetch('/api/qr/' + TOKEN + '/items', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: cart })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Could not send');
+    cart = []; draw();
+    toast('Sent to the kitchen — order #' + d.number);
+  } catch (e) { toast(e.message, true); $('#send').disabled = false; }
+};
+
+load();
+</script>
+</body>
+</html>
