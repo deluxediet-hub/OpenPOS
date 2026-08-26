@@ -114,7 +114,7 @@ const Pos = (() => {
   }
 
   /* -------------------------- ORDER EDITOR --------------------------- */
-  let search = '';
+  let search = '', searchTimer = null;
   async function openEditor(host, orderId) {
     State.openOrderId = orderId;
     /* A freshly created order is not in State.orders yet — pull it before rendering,
@@ -224,12 +224,18 @@ const Pos = (() => {
     /* wire up */
     host.querySelector('#back').onclick = () => closeEditor(host);
     const searchInput = host.querySelector('#search');
-    searchInput.oninput = (e) => { search = e.target.value; renderEditor(host); };
+    searchInput.oninput = (e) => {
+      search = e.target.value;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => renderEditor(host), 100);
+    };
     searchInput.onkeydown = (e) => {
       if (e.key !== 'Enter') return;
+      clearTimeout(searchTimer);
       const code = searchInput.value.trim().toLowerCase();
       const exact = State.menu.find((m) => [m.barcode, m.sku].some((v) => String(v || '').toLowerCase() === code));
       if (exact) { e.preventDefault(); search = ''; addItem(host, exact.id); }
+      else renderEditor(host);
     };
     if (search) setTimeout(() => { const i = host.querySelector('#search'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 0);
     host.querySelectorAll('[data-cat]').forEach((b) => b.onclick = () => {
@@ -492,6 +498,29 @@ const Pos = (() => {
     };
   }
 
+  async function scanItem(code) {
+    const normalized = String(code || '').trim().toLowerCase();
+    const product = State.menu.find((m) => [m.barcode, m.sku].some((v) => String(v || '').trim().toLowerCase() === normalized));
+    if (!product) return toast(`Barcode not found: ${code}`, 'err');
+    if (!product.available) return toast(product.name + ' is unavailable', 'err');
+    if (State.settings.business_type === 'wines_spirits' && State.shift?.status !== 'open')
+      return toast('Open the till before scanning products', 'err');
+    const host = document.getElementById('view');
+    if (State.view !== 'tables') await navigate('tables');
+    await refresh();
+    let sale = activeOrder();
+    if (!sale || !['open', 'billed'].includes(sale.status))
+      sale = State.orders.find((o) => o.waiter_id === State.user.id && o.status === 'open' && !o.table_id);
+    if (!sale) {
+      sale = await api('/api/orders', { body: { people: 1 } });
+      await refresh();
+    }
+    search = '';
+    await openEditor(host, sale.id);
+    await addItem(host, product.id);
+    toast(`Scanned: ${product.name}`, 'ok');
+  }
+
   async function refresh() {
     State.orders = await api('/api/orders');
   }
@@ -514,5 +543,5 @@ const Pos = (() => {
     }
   }
 
-  return { renderFloor, openEditor, closeEditor, renderEditor, refresh, totalRows };
+  return { renderFloor, openEditor, closeEditor, renderEditor, scanItem, refresh, totalRows };
 })();

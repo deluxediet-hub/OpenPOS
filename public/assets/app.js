@@ -14,6 +14,36 @@ const HOME = { seller: 'tables', admin: 'manager', manager: 'manager', waiter: '
 
 let pin = '';
 let clockTimer = null;
+let scannerBuffer = '', scannerStarted = 0, scannerLast = 0, scannerBusy = false;
+
+function updateScannerState() {
+  const el = document.getElementById('scannerState');
+  if (el) el.classList.toggle('hidden', State.settings.barcode_scanner_enabled !== '1');
+}
+
+/* Keyboard-wedge scanners type a barcode very quickly and finish with Enter.
+   Normal typing in inputs/forms is left completely alone. */
+function initGlobalScanner() {
+  window.addEventListener('keydown', async (e) => {
+    if (State.settings.barcode_scanner_enabled !== '1' || !State.user || scannerBusy) return;
+    if (document.querySelector('#modalRoot .ov')) { scannerBuffer = ''; return; }
+    const active = document.activeElement;
+    if (active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)) { scannerBuffer = ''; return; }
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    const now = performance.now();
+    if (e.key === 'Enter') {
+      const fast = scannerBuffer.length >= 4 && now - scannerLast < 180 && now - scannerStarted < scannerBuffer.length * 120 + 400;
+      const code = scannerBuffer.trim(); scannerBuffer = ''; scannerStarted = scannerLast = 0;
+      if (!fast) return;
+      e.preventDefault(); e.stopPropagation(); scannerBusy = true;
+      try { await Pos.scanItem(code); } finally { scannerBusy = false; }
+      return;
+    }
+    if (e.key.length !== 1) return;
+    if (!scannerLast || now - scannerLast > 140) { scannerBuffer = ''; scannerStarted = now; }
+    scannerBuffer += e.key; scannerLast = now;
+  }, true);
+}
 
 /* ------------------------------ login ------------------------------- */
 function paintDots() {
@@ -61,6 +91,7 @@ async function startApp(user) {
   /* Always pull the full catalogue — a fresh PIN login has no bootstrap data yet,
      and a returning session may be holding a stale menu or floor plan. */
   try { await loadBootstrap(); } catch (e) { toast('Could not load data: ' + e.message, 'err'); }
+  updateScannerState();
   if (State.settings.business_type === 'wines_spirits' && State.settings.licence_expiry) {
     const days = Math.ceil((new Date(State.settings.licence_expiry + 'T23:59:59') - new Date()) / 86400000);
     if (days < 0) toast('Alcohol licence appears expired — owner action required', 'err');
@@ -196,6 +227,7 @@ function initSetup() {
             currency: document.getElementById('suCur').value,
             currency_symbol: document.getElementById('suSym').value,
             vat_rate: document.getElementById('suVat').value,
+            tax_mode: 'inclusive',
             service_charge_rate: document.getElementById('suSvc').value,
             service_charge_enabled: false, business_type: 'wines_spirits'
           },
@@ -217,6 +249,7 @@ function initSetup() {
 (async function boot() {
   initLogin();
   initSetup();
+  initGlobalScanner();
   try {
     const me = await api('/api/me');
     await startApp(me.user);

@@ -463,6 +463,7 @@ const DEFAULT_SETTINGS = {
   minimum_sale_age: '18',
   age_verification_required: '0',
   prevent_negative_stock: '1',
+  barcode_scanner_enabled: '0',
   licence_number: '',
   licence_expiry: '',
   sales_hours_enforced: '0',

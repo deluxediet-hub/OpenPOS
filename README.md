@@ -43,7 +43,7 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 
 ## Retail controls included
 
-- USB/Bluetooth keyboard-wedge barcode scanning and SKU lookup
+- Owner-controlled USB/Bluetooth barcode scanner mode; when enabled, scanning from any normal page opens the current sale and adds the matching barcode/SKU
 - Live stock shown at the till with optional negative-stock prevention
 - Supplier directory and invoice/delivery-note receiving
 - Batch/expiry capture on delivery lines
@@ -56,7 +56,7 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 ## Kenya-specific notes
 
 - Currency: KES / KSh
-- VAT: 16% inclusive by default; service charge disabled
+- VAT: 16% inclusive by default; a KSh 200 selling price remains KSh 200 and VAT is extracted for reporting
 - Payments: Cash, Card and manually confirmed M-Pesa
 - Business name, KRA PIN, address and phone print on receipts
 - Receipts display **18+ ONLY · PLEASE DRINK RESPONSIBLY**

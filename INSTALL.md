@@ -63,10 +63,10 @@ Do not assume sample prices, costs or quantities are correct.
 
 Most USB/Bluetooth scanners work as a keyboard.
 
-1. Configure the scanner to append Enter after each barcode.
-2. Put the cursor in **Search products** on the New Sale screen.
-3. Scan a configured barcode.
-4. An exact barcode/SKU adds the product to the sale.
+1. Configure the scanner in keyboard-wedge mode and set it to append Enter after each barcode.
+2. As owner, enable **Management → Settings → Barcode scanner → Enabled everywhere**.
+3. Scan a configured barcode from any normal app page. The POS opens/resumes the current sale and adds the matching product.
+4. When actively editing a form or modal, scanner capture pauses so scanned values can still be entered safely into fields.
 
 Test every barcode format used by the shop before opening.
 

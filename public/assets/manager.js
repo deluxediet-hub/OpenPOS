@@ -614,7 +614,7 @@ const Manager = (() => {
             <div><label class="fld">VAT rate (%)</label><input class="inp" id="s_vat" type="number" step="0.5" value="${s.vat_rate}"></div>
             <div><label class="fld">Tax mode</label>
               <select class="inp" id="s_mode">
-                <option value="inclusive" ${s.tax_mode === 'inclusive' ? 'selected' : ''}>Prices include VAT</option>
+                <option value="inclusive" ${s.tax_mode === 'inclusive' ? 'selected' : ''}>VAT included in selling price (recommended)</option>
                 <option value="exclusive" ${s.tax_mode === 'exclusive' ? 'selected' : ''}>Add VAT on top</option>
               </select></div>
             <div><label class="fld">Service charge (%)</label><input class="inp" id="s_sc" type="number" step="0.5" value="${s.service_charge_rate}"></div>
@@ -622,12 +622,14 @@ const Manager = (() => {
               <select class="inp" id="s_sce"><option value="1" ${s.service_charge_enabled ? 'selected' : ''}>Yes</option>
                 <option value="0" ${!s.service_charge_enabled ? 'selected' : ''}>No</option></select></div>
           </div>
-          <p class="tiny muted" style="margin-top:12px">Kenyan retail prices are normally VAT-inclusive. Service charge is normally disabled. Current setup: ${s.tax_mode === 'inclusive' ? 'inclusive' : 'exclusive'}, ${s.vat_rate}% VAT, ${s.service_charge_enabled ? s.service_charge_rate + '% service charge' : 'no service charge'}.</p>
+          <p class="tiny muted" style="margin-top:12px">Retail selling prices normally already contain VAT. With inclusive mode, a product entered at KSh 200 sells for exactly KSh 200; the VAT portion is extracted for reporting, not added again. Service charge should remain disabled.</p>
         </div></div>
       </div>
-      ${s.business_type === 'wines_spirits' ? `<div class="card" style="margin-top:14px"><div class="card-h"><h3>Retail safeguards</h3></div><div class="card-b grid2">
+      ${s.business_type === 'wines_spirits' ? `<div class="card" style="margin-top:14px"><div class="card-h"><h3>Retail safeguards &amp; scanner</h3></div><div class="card-b grid3">
         <div><label class="fld">Receipt age notice</label><input class="inp" id="s_age" type="number" min="18" value="${esc(s.minimum_sale_age || 18)}"><div class="tiny muted" style="margin-top:5px">Printed on receipts only; checkout has no age prompt.</div></div>
         <div><label class="fld">Prevent negative stock</label><select class="inp" id="s_neg"><option value="1" ${s.prevent_negative_stock === '1' ? 'selected' : ''}>Yes</option><option value="0" ${s.prevent_negative_stock !== '1' ? 'selected' : ''}>No</option></select></div>
+        <div><label class="fld">Barcode scanner</label><select class="inp" id="s_scan"><option value="0" ${s.barcode_scanner_enabled !== '1' ? 'selected' : ''}>Disabled</option><option value="1" ${s.barcode_scanner_enabled === '1' ? 'selected' : ''}>Enabled everywhere</option></select>
+          <div class="tiny muted" style="margin-top:5px">Use a USB/Bluetooth scanner in keyboard mode with Enter suffix. Scanning from any normal page opens the sale and adds the product.</div></div>
       </div></div>` : ''}
       <div class="card" style="margin-top:14px"><div class="card-h"><h3>Receipt</h3></div><div class="card-b">
         <label class="fld">Footer message</label><input class="inp" id="s_ft" value="${esc(s.receipt_footer)}">
@@ -636,7 +638,7 @@ const Manager = (() => {
         <button class="btn primary" id="saveS">Save settings</button>
         <span class="muted tiny">Changes apply to new totals immediately; closed receipts keep their original figures.</span>
       </div>
-      <div class="card" style="margin-top:22px"><div class="card-h"><h3>Floor layout</h3>
+      ${s.business_type !== 'wines_spirits' ? `<div class="card" style="margin-top:22px"><div class="card-h"><h3>Floor layout</h3>
         <span class="grow"></span><button class="btn ghost sm" id="addT">+ Add table</button></div>
         <div class="scroll-x"><table class="tbl">
           <thead><tr><th>Table</th><th>Area</th><th>Seats</th><th>Status</th><th></th></tr></thead>
@@ -648,7 +650,7 @@ const Manager = (() => {
               <td class="right nowrap"><button class="btn xs ghost" data-te="${t.id}">Edit</button>
                 <button class="btn xs red" data-td="${t.id}">×</button></td></tr>`;
           }).join('')}</tbody></table></div>
-      </div>`;
+      </div>` : ''}`;
 
     const ls = body.querySelector('#loadSample');
     if (ls) ls.onclick = () => confirmBox('Load sample menu',
@@ -672,9 +674,11 @@ const Manager = (() => {
           licence_number: body.querySelector('#s_lic')?.value || '', licence_expiry: body.querySelector('#s_lice')?.value || '',
           minimum_sale_age: body.querySelector('#s_age')?.value || s.minimum_sale_age || 18,
           age_verification_required: '0',
-          prevent_negative_stock: body.querySelector('#s_neg')?.value || s.prevent_negative_stock || '1'
+          prevent_negative_stock: body.querySelector('#s_neg')?.value || s.prevent_negative_stock || '1',
+          barcode_scanner_enabled: body.querySelector('#s_scan')?.value || '0'
         } });
         toast('Settings saved', 'ok');
+        if (typeof updateScannerState === 'function') updateScannerState();
         document.getElementById('lgName') && (document.getElementById('lgName').textContent = State.settings.business_name);
       } catch (e) { toast(e.message, 'err'); }
     };
@@ -702,7 +706,7 @@ const Manager = (() => {
         } catch (e) { toast(e.message, 'err'); }
       };
     };
-    body.querySelector('#addT').onclick = () => tableForm(null);
+    body.querySelector('#addT')?.addEventListener('click', () => tableForm(null));
     body.querySelectorAll('[data-te]').forEach((b) => b.onclick = () => tableForm(State.tables.find((x) => x.id === Number(b.dataset.te))));
     body.querySelectorAll('[data-td]').forEach((b) => b.onclick = () => {
       const t = State.tables.find((x) => x.id === Number(b.dataset.td));

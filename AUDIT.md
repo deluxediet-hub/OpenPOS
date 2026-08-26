@@ -31,11 +31,12 @@ The workspace now has a focused bottle-shop workflow: barcode/SKU products, live
 
 - Retail **New sale** flow with no table, waiter or kitchen dependency.
 - Cash, card and manually confirmed M-Pesa payments.
-- Barcode, SKU or product-name search; exact scanned barcode/SKU adds the product.
+- Barcode, SKU or product-name search; owner-controlled global scanner mode can pull a matching product into the current sale from any normal page.
+- Scanner capture pauses in forms and modals so owner-entered data is not corrupted.
 - Quantity changes, parked/open sales, part-payments and receipt reprints.
 - Server-side change calculation and overpayment guards.
 - Duplicate M-Pesa confirmation references are rejected.
-- VAT-inclusive KES defaults and no restaurant service charge.
+- VAT-inclusive KES defaults and no restaurant service charge: an entered KSh 200 price remains KSh 200 while VAT is extracted for reporting.
 - Product selling price, unit cost and gross-margin visibility for management.
 - Product volume, barcode, SKU and KRA item-classification fields.
 

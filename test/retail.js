@@ -23,6 +23,9 @@ const mk = () => {
   ck('starter seller login', r.status === 200 && r.data.user.role === 'seller');
   const boot = (await admin.get('/api/bootstrap')).data;
   ck('retail mode configured', boot.settings.business_type === 'wines_spirits');
+  ck('VAT-inclusive pricing is the retail default', boot.settings.tax_mode === 'inclusive');
+  r = await admin.put('/api/settings', { barcode_scanner_enabled: '1' });
+  ck('owner can enable global barcode scanner mode', r.status === 200 && r.data.barcode_scanner_enabled === '1');
   ck('no restaurant tables in retail starter', boot.tables.length === 0, String(boot.tables.length));
   ck('starter products have one-to-one stock', boot.menu.length > 20 && boot.menu.every((m) => m.stock_item_id && m.stock_qty === 12));
   r = await seller.post('/api/shifts', { opening_float: 5000, opening_mpesa: 100 });
@@ -35,10 +38,14 @@ const mk = () => {
   const product = r.data;
   r = await seller.post('/api/menu-items', { name: 'Forbidden', category_id: cat.id, price: 1 });
   ck('seller cannot change product catalogue', r.status === 403);
+  r = await seller.put('/api/settings', { barcode_scanner_enabled: '0' });
+  ck('seller cannot change scanner setting', r.status === 403);
 
   const sale = (await seller.post('/api/orders', { people: 1 })).data;
   r = await seller.post(`/api/orders/${sale.id}/items`, { items: [{ menu_item_id: product.id, qty: 2 }] });
   ck('seller adds product', r.status === 200 && r.data.items[0].qty === 2);
+  ck('selling price already includes VAT', r.data.totals.total === 200000 && r.data.totals.vat === 27586,
+    JSON.stringify(r.data.totals));
   const due = r.data.totals.grand_total / 100;
   r = await seller.post(`/api/orders/${sale.id}/pay`, { method: 'cash', amount: due, tendered: due });
   ck('retail payment closes without an age prompt', r.status === 200 && r.data.order.status === 'closed', JSON.stringify(r.data));
