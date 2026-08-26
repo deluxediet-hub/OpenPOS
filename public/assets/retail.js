@@ -105,40 +105,88 @@ const Retail = (() => {
   function startCount(body) {
     modal({ title: 'Start full stocktake', body: `<label class="fld">Reference</label><input class="inp mono" id="countRef" value="COUNT-${today()}">
       <div style="margin-top:12px"><label class="fld">Notes</label><input class="inp" id="countNotes" placeholder="End of month / shift handover…"></div>
-      <p class="tiny muted" style="margin-top:12px">The current expected quantity of every product will be saved. Only one stocktake can be open.</p>`,
+      <p class="tiny muted" style="margin-top:12px">This begins end-of-day reconciliation: sales stop, expected quantities are frozen, and the till can only close after every item is counted or skipped.</p>`,
       footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Start counting</button>' });
     const ov = document.querySelector('#modalRoot .ov'); ov.querySelector('[data-no]').onclick = closeModal;
     ov.querySelector('[data-yes]').onclick = async () => {
       try { const r = await api('/api/stock-counts', { body: { reference: ov.querySelector('#countRef').value, notes: ov.querySelector('#countNotes').value } });
-        closeModal(); countForm(r.id, body); } catch (e) { toast(e.message, 'err'); }
+        closeModal(); await loadBootstrap(); countForm(r.id, body); } catch (e) { toast(e.message, 'err'); }
     };
   }
 
   async function countForm(id, body) {
     const count = await api('/api/stock-counts/' + id);
-    modal({ title: 'Stocktake — ' + count.reference, wide: true, body: `<p class="tiny muted">Enter the physical quantity for every product. Expected quantities remain visible for checking.</p>
-      <input class="inp" id="countSearch" placeholder="Filter products…" style="margin-bottom:10px">
-      <div class="scroll-x" style="max-height:58vh"><table class="tbl"><thead><tr><th>Product</th><th>Unit</th><th class="right">Expected</th><th style="width:160px">Counted</th><th class="right">Variance</th></tr></thead>
-      <tbody>${count.items.map((x) => `<tr data-count-row data-name="${esc(x.name.toLowerCase())}"><td><b>${esc(x.name)}</b></td><td>${esc(x.unit)}</td>
-        <td class="right mono">${x.expected}</td><td><input class="inp mono" data-count="${x.stock_item_id}" data-expected="${x.expected}" type="number" min="0" step="0.01" value="${x.counted ?? ''}"></td>
-        <td class="right mono" data-var>—</td></tr>`).join('')}</tbody></table></div>`, footer: '<button class="btn" data-no>Save for later</button><button class="btn primary" data-yes>Complete & post variances</button>' });
-    const ov = document.querySelector('#modalRoot .ov');
-    ov.querySelector('#countSearch').oninput = (e) => ov.querySelectorAll('[data-count-row]').forEach((r) => { r.style.display = r.dataset.name.includes(e.target.value.toLowerCase()) ? '' : 'none'; });
-    ov.querySelectorAll('[data-count]').forEach((i) => i.oninput = () => { const v = Number(i.value) - Number(i.dataset.expected); i.closest('tr').querySelector('[data-var]').textContent = Number.isFinite(v) ? (v > 0 ? '+' : '') + v : '—'; });
-    ov.querySelector('[data-no]').onclick = async () => {
-      const inputs = [...ov.querySelectorAll('[data-count]')];
+    let index = Math.max(0, count.items.findIndex((x) => x.counted == null));
+    if (index < 0) index = 0;
+    modal({ title: 'Stocktake — ' + count.reference, wide: true, body: '<div id="countWizard"></div>',
+      footer: '<button class="btn" data-exit>Save & exit</button><span class="grow"></span><button class="btn primary" data-finish style="display:none">Complete stocktake</button>' });
+    const ov = document.querySelector('#modalRoot .ov'), wizard = ov.querySelector('#countWizard');
+
+    const saveItem = async (item, counted, added) => {
+      await api(`/api/stock-counts/${id}/save`, { body: { items: [{ stock_item_id: item.stock_item_id, counted, added_qty: added }] } });
+      item.counted = counted; item.added_qty = added; item.variance = counted - item.expected;
+    };
+    const draw = () => {
+      const item = count.items[index], done = count.items.filter((x) => x.counted != null).length;
+      wizard.innerHTML = `<div class="row" style="margin-bottom:14px"><span class="tag info">Product ${index + 1} of ${count.items.length}</span>
+          <span class="muted small">${done} completed</span><span class="grow"></span><div style="width:180px" class="pbar"><i style="width:${Math.round(done / Math.max(1, count.items.length) * 100)}%"></i></div></div>
+        <div class="card" style="background:#101820"><div class="card-b" style="padding:24px">
+          <div class="tiny muted" style="text-transform:uppercase;letter-spacing:.08em">Count this product</div>
+          <h2 style="margin:6px 0 4px;font-size:24px">${esc(item.name)}</h2>
+          <div class="muted">System quantity before count: <b class="mono">${item.expected} ${esc(item.unit)}</b></div>
+          <div class="grid2" style="margin-top:22px">
+            <div><label class="fld">Stock added but not yet received in POS</label>
+              <input class="inp mono" id="countAdded" type="number" min="0" step="0.01" value="${item.added_qty || 0}" style="font-size:21px;padding:12px">
+              <div class="tiny muted" style="margin-top:5px">Leave zero if all deliveries were already entered.</div></div>
+            <div><label class="fld">Physical stock at hand</label>
+              <input class="inp mono" id="countAtHand" type="number" min="0" step="0.01" value="${item.counted ?? ''}" placeholder="Enter actual count" style="font-size:21px;padding:12px"></div>
+          </div>
+          <div class="card" style="margin-top:16px"><div class="card-b"><div class="tline"><span>Difference from system</span><b id="countDifference">—</b></div></div></div>
+        </div></div>
+        <div class="row" style="margin-top:16px">
+          <button class="btn" id="countPrev" ${index === 0 ? 'disabled' : ''}>← Previous</button>
+          <button class="btn ghost" id="countSkip">No change / Skip</button><span class="grow"></span>
+          <button class="btn primary" id="countNext">${index === count.items.length - 1 ? 'Save item' : 'Save & next →'}</button>
+        </div>`;
+      const hand = wizard.querySelector('#countAtHand'), added = wizard.querySelector('#countAdded'), diff = wizard.querySelector('#countDifference');
+      const update = () => {
+        if (hand.value === '') { diff.textContent = '—'; return; }
+        const v = Number(hand.value) - item.expected;
+        diff.textContent = (v > 0 ? '+' : '') + v + ' ' + item.unit;
+        diff.style.color = v === 0 ? 'var(--green)' : 'var(--amber)';
+      };
+      hand.oninput = update; update(); setTimeout(() => hand.focus(), 20);
+      wizard.querySelector('#countPrev').onclick = () => { if (index > 0) { index--; draw(); } };
+      wizard.querySelector('#countSkip').onclick = async () => {
+        try { await saveItem(item, item.expected, 0); if (index < count.items.length - 1) index++; draw(); }
+        catch (e) { toast(e.message, 'err'); }
+      };
+      wizard.querySelector('#countNext').onclick = async () => {
+        if (hand.value === '') return toast('Enter stock at hand, or use No change / Skip', 'err');
+        try {
+          await saveItem(item, Number(hand.value), Number(added.value) || 0);
+          if (index < count.items.length - 1) index++;
+          else {
+            const pending = count.items.findIndex((x) => x.counted == null);
+            if (pending >= 0) index = pending;
+          }
+          draw();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+      const allDone = count.items.every((x) => x.counted != null);
+      ov.querySelector('[data-finish]').style.display = allDone ? '' : 'none';
+    };
+    ov.querySelector('[data-exit]').onclick = () => { closeModal(); stocktakes(body); toast('Stocktake progress saved', 'ok'); };
+    ov.querySelector('[data-finish]').onclick = async () => {
       try {
-        await api(`/api/stock-counts/${id}/save`, { body: { items: inputs.map((i) => ({ stock_item_id: Number(i.dataset.count), counted: i.value })) } });
-        closeModal(); stocktakes(body); toast('Stocktake progress saved', 'ok');
+        const r = await api(`/api/stock-counts/${id}/complete`, { body: { items: count.items.map((x) => ({
+          stock_item_id: x.stock_item_id, counted: x.counted, added_qty: x.added_qty || 0 })) } });
+        closeModal(); await loadBootstrap();
+        Manager.tab = 'money'; Manager.render(document.getElementById('view'));
+        toast(`Stocktake posted · ${r.variances} variance(s). Now reconcile Cash and M-Pesa.`, r.variances ? 'err' : 'ok');
       } catch (e) { toast(e.message, 'err'); }
     };
-    ov.querySelector('[data-yes]').onclick = async () => {
-      const inputs = [...ov.querySelectorAll('[data-count]')];
-      if (inputs.some((i) => i.value === '')) return toast('Count every product before completing', 'err');
-      try { const r = await api(`/api/stock-counts/${id}/complete`, { body: { items: inputs.map((i) => ({ stock_item_id: Number(i.dataset.count), counted: Number(i.value) })) } });
-        closeModal(); await loadBootstrap(); stocktakes(body); toast(`Stocktake posted · ${r.variances} variance(s)`, 'ok');
-      } catch (e) { toast(e.message, 'err'); }
-    };
+    draw();
   }
 
   return { suppliers, deliveries, stocktakes };

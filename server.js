@@ -186,7 +186,7 @@ app.get('/api/bootstrap', requireAuth, (req, res) => {
     modifier_groups: db.prepare('SELECT * FROM modifier_groups ORDER BY name').all(),
     modifier_options: db.prepare('SELECT * FROM modifier_options ORDER BY group_id, sort_order, name').all(),
     item_modifiers: db.prepare('SELECT * FROM menu_item_modifiers').all(),
-    shift: db.prepare("SELECT * FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get() || null,
+    shift: db.prepare("SELECT * FROM shifts WHERE status IN ('open','reconciling') ORDER BY id DESC LIMIT 1").get() || null,
     reservations: db.prepare(`SELECT r.*, t.name AS table_name FROM reservations r
       LEFT JOIN tables t ON t.id = r.table_id
       WHERE r.res_date = date('now','localtime') AND r.status = 'booked' ORDER BY r.res_time`).all(),
@@ -334,6 +334,8 @@ app.get('/api/orders/:id', requireAuth, (req, res) => {
 });
 
 app.post('/api/orders', requireAuth, requireRole('seller', 'waiter', 'cashier', 'manager', 'admin'), (req, res) => {
+  if (getSetting('business_type') === 'wines_spirits' && !db.prepare("SELECT id FROM shifts WHERE status='open'").get())
+    return bad(res, 'Open the till before starting a sale');
   const table_id = Number(req.body.table_id) || null;
   const people = Number(req.body.people) || Number(getSettings().default_people) || 1;
   /* Order channel (Phase 4) — how the sale reached us, and what an aggregator took. */
@@ -522,6 +524,8 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
   if (!o) return bad(res, 'Order not found', 404);
   const d = decorate(o);
   const s = getSettings();
+  if (s.business_type === 'wines_spirits' && !db.prepare("SELECT id FROM shifts WHERE status='open'").get())
+    return bad(res, 'The till is closed. Open it before taking payment.');
   const method = req.body.method;
   const METHODS = ['cash', 'card', 'mpesa', 'giftcard', 'points'];
   if (!METHODS.includes(method)) return bad(res, 'Unknown payment method');
@@ -715,7 +719,7 @@ app.delete('/api/stock/:id', requireAuth, requireRole('manager', 'admin'), (req,
   res.json({ ok: true });
 });
 
-app.post('/api/stock/:id/adjust', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
+app.post('/api/stock/:id/adjust', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const s = db.prepare('SELECT * FROM stock_items WHERE id=?').get(req.params.id);
   if (!s) return bad(res, 'Not found', 404);
   const delta = Number(req.body.delta) || 0;
@@ -797,6 +801,19 @@ app.get('/api/stock-counts', requireAuth, (req, res) => res.json(db.prepare(`
 
 app.post('/api/stock-counts', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
   if (db.prepare("SELECT id FROM stock_counts WHERE status='open'").get()) return bad(res, 'Complete the open stocktake first');
+  const retailShift = getSetting('business_type') === 'wines_spirits'
+    ? db.prepare("SELECT * FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get() : null;
+  if (getSetting('business_type') === 'wines_spirits' && !retailShift) return bad(res, 'Open the till before starting an end-of-day stocktake');
+  if (getSetting('business_type') === 'wines_spirits') {
+    const empty = db.prepare(`SELECT o.id,o.number FROM orders o WHERE o.status='open'
+      AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id=o.id AND oi.status!='void')`).all();
+    for (const order of empty) {
+      db.prepare("UPDATE orders SET status='void',closed_at=datetime('now','localtime'),closed_by=? WHERE id=?").run(req.user.id, order.id);
+      audit(req.user, 'order.auto_void_empty', `#${order.number} before stocktake`);
+    }
+  }
+  const openSales = db.prepare("SELECT COUNT(*) c FROM orders WHERE status IN ('open','billed')").get().c;
+  if (getSetting('business_type') === 'wines_spirits' && openSales) return bad(res, `Close or void ${openSales} non-empty sale(s) before stocktake`);
   const reference = String(req.body.reference || `COUNT-${todayLocal()}`).trim();
   let id;
   const tx = db.transaction(() => {
@@ -804,8 +821,10 @@ app.post('/api/stock-counts', requireAuth, requireRole('seller', 'manager', 'adm
       .run(reference, req.body.notes || null, req.user.id).lastInsertRowid;
     const ins = db.prepare('INSERT INTO stock_count_items(stock_count_id,stock_item_id,expected) VALUES(?,?,?)');
     for (const stock of db.prepare('SELECT id,qty FROM stock_items ORDER BY name').all()) ins.run(id, stock.id, stock.qty);
+    if (retailShift) db.prepare("UPDATE shifts SET status='reconciling' WHERE id=?").run(retailShift.id);
   }); tx();
   audit(req.user, 'stocktake.start', reference);
+  broadcast('orders'); broadcast('sales');
   res.json({ id, reference, ok: true });
 });
 
@@ -820,12 +839,13 @@ app.get('/api/stock-counts/:id', requireAuth, (req, res) => {
 app.post('/api/stock-counts/:id/save', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
   const count = db.prepare('SELECT * FROM stock_counts WHERE id=?').get(req.params.id);
   if (!count || count.status !== 'open') return bad(res, 'Open stocktake not found', 404);
-  const upd = db.prepare('UPDATE stock_count_items SET counted=?,variance=? WHERE stock_count_id=? AND stock_item_id=?');
+  const upd = db.prepare('UPDATE stock_count_items SET counted=?,variance=?,added_qty=? WHERE stock_count_id=? AND stock_item_id=?');
   const tx = db.transaction(() => {
     for (const line of (Array.isArray(req.body.items) ? req.body.items : [])) {
       if (line.counted === '' || line.counted == null || !Number.isFinite(Number(line.counted))) continue;
       const row = db.prepare('SELECT expected FROM stock_count_items WHERE stock_count_id=? AND stock_item_id=?').get(count.id, Number(line.stock_item_id));
-      if (row) upd.run(Number(line.counted), Number(line.counted) - row.expected, count.id, Number(line.stock_item_id));
+      if (row) upd.run(Number(line.counted), Number(line.counted) - row.expected, Number(line.added_qty) || 0,
+        count.id, Number(line.stock_item_id));
     }
   }); tx();
   audit(req.user, 'stocktake.save', count.reference);
@@ -835,14 +855,16 @@ app.post('/api/stock-counts/:id/save', requireAuth, requireRole('seller', 'manag
 app.post('/api/stock-counts/:id/complete', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
   const count = db.prepare('SELECT * FROM stock_counts WHERE id=?').get(req.params.id);
   if (!count || count.status !== 'open') return bad(res, 'Open stocktake not found', 404);
-  const entered = new Map((Array.isArray(req.body.items) ? req.body.items : []).map((x) => [Number(x.stock_item_id), Number(x.counted)]));
+  const submitted = new Map((Array.isArray(req.body.items) ? req.body.items : []).map((x) => [Number(x.stock_item_id), x]));
   const rows = db.prepare('SELECT * FROM stock_count_items WHERE stock_count_id=?').all(count.id);
-  if (rows.some((r) => !entered.has(r.stock_item_id) || !Number.isFinite(entered.get(r.stock_item_id))))
-    return bad(res, 'Enter a count for every product');
+  const valueOf = (row) => submitted.has(row.stock_item_id) ? Number(submitted.get(row.stock_item_id).counted) : row.counted;
+  if (rows.some((r) => valueOf(r) == null || !Number.isFinite(Number(valueOf(r)))))
+    return bad(res, 'Enter or skip every product before completing the stocktake');
   const tx = db.transaction(() => {
     for (const row of rows) {
-      const counted = entered.get(row.stock_item_id), variance = counted - row.expected;
-      db.prepare('UPDATE stock_count_items SET counted=?,variance=? WHERE id=?').run(counted, variance, row.id);
+      const counted = Number(valueOf(row)), variance = counted - row.expected;
+      const added = submitted.has(row.stock_item_id) ? Number(submitted.get(row.stock_item_id).added_qty) || 0 : row.added_qty || 0;
+      db.prepare('UPDATE stock_count_items SET counted=?,variance=?,added_qty=? WHERE id=?').run(counted, variance, added, row.id);
       db.prepare('UPDATE stock_items SET qty=? WHERE id=?').run(counted, row.stock_item_id);
       if (variance) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
         .run(row.stock_item_id, variance, `Stocktake ${count.reference}`, req.user.id);
@@ -1167,7 +1189,7 @@ app.get('/api/shifts', requireAuth, requireRole('seller', 'cashier', 'manager', 
     LEFT JOIN users uc ON uc.id = s.closed_by ORDER BY s.id DESC LIMIT 100`).all());
 });
 app.get('/api/shifts/current', requireAuth, (req, res) => {
-  const s = db.prepare("SELECT * FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get();
+  const s = db.prepare("SELECT * FROM shifts WHERE status IN ('open','reconciling') ORDER BY id DESC LIMIT 1").get();
   if (!s) return res.json({ shift: null, drawer: null });
   res.json({ shift: s, drawer: drawerFigures(s) });
 });
@@ -1176,22 +1198,28 @@ function drawerFigures(s) {
   const g = (sql, ...p) => db.prepare(sql).get(...p).v || 0;
   const cashSales = g(`SELECT COALESCE(SUM(amount),0) v FROM payments
     WHERE method='cash' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
+  const mpesaSales = g(`SELECT COALESCE(SUM(amount),0) v FROM payments
+    WHERE method='mpesa' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
   const cashRefunds = -g(`SELECT COALESCE(SUM(amount),0) v FROM payments
     WHERE method='refund' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
-  const payouts = g(`SELECT COALESCE(SUM(amount),0) v FROM cash_payouts
-    WHERE shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
-  const expected = domain.expectedCash({
-    openingFloat: s.opening_float, cashSales, cashRefunds, payouts
-  });
-  return { cash_sales: cashSales, cash_refunds: cashRefunds, payouts, expected };
+  const cashExpenses = g(`SELECT COALESCE(SUM(amount),0) v FROM cash_payouts
+    WHERE shift_id=? AND method='cash' AND created_at BETWEEN ? AND ?`, s.id, a, b);
+  const mpesaExpenses = g(`SELECT COALESCE(SUM(amount),0) v FROM cash_payouts
+    WHERE shift_id=? AND method='mpesa' AND created_at BETWEEN ? AND ?`, s.id, a, b);
+  const expected = domain.expectedCash({ openingFloat: s.opening_float, cashSales, cashRefunds, payouts: cashExpenses });
+  const expectedMpesa = (s.opening_mpesa || 0) + mpesaSales - mpesaExpenses;
+  return { cash_sales: cashSales, mpesa_sales: mpesaSales, cash_refunds: cashRefunds,
+    payouts: cashExpenses + mpesaExpenses, cash_expenses: cashExpenses, mpesa_expenses: mpesaExpenses,
+    expected, expected_mpesa: expectedMpesa };
 }
 app.post('/api/shifts', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
-  const open = db.prepare("SELECT * FROM shifts WHERE status='open'").get();
-  if (open) return bad(res, 'A shift is already open — close it first');
+  const open = db.prepare("SELECT * FROM shifts WHERE status IN ('open','reconciling')").get();
+  if (open) return bad(res, 'A till is already open or reconciling — close it first');
   const float = Math.round(Number(req.body.opening_float || 0) * 100);
-  const r = db.prepare('INSERT INTO shifts(opened_by,opening_float,notes) VALUES(?,?,?)')
-    .run(req.user.id, float, req.body.notes || null);
-  audit(req.user, 'shift.open', `float KSh${(float / 100).toFixed(2)}`);
+  const openingMpesa = Math.round(Number(req.body.opening_mpesa || 0) * 100);
+  const r = db.prepare('INSERT INTO shifts(opened_by,opening_float,opening_mpesa,notes) VALUES(?,?,?,?)')
+    .run(req.user.id, float, openingMpesa, req.body.notes || null);
+  audit(req.user, 'shift.open', `cash KSh${(float / 100).toFixed(2)}, M-Pesa KSh${(openingMpesa / 100).toFixed(2)}`);
   broadcast('sales');
   res.json(db.prepare('SELECT * FROM shifts WHERE id=?').get(r.lastInsertRowid));
 });
@@ -1200,33 +1228,45 @@ app.post('/api/shifts/:id/close', requireAuth, requireRole('seller', 'cashier', 
   if (!s) return bad(res, 'Shift not found', 404);
   if (s.status === 'closed') return bad(res, 'Shift already closed');
   if (req.body.counted_cash == null) return bad(res, 'Counted cash is required');
+  if (getSetting('business_type') === 'wines_spirits' && req.body.counted_mpesa == null) return bad(res, 'M-Pesa balance is required');
+  const openSales = db.prepare("SELECT COUNT(*) c FROM orders WHERE status IN ('open','billed')").get().c;
+  if (openSales) return bad(res, `Close or void ${openSales} open sale(s) before closing the till`);
+  if (getSetting('business_type') === 'wines_spirits' && !db.prepare("SELECT id FROM stock_counts WHERE status='completed' AND completed_at>=? ORDER BY id DESC LIMIT 1").get(s.opened_at))
+    return bad(res, 'Complete the end-of-day stocktake before closing the till');
   const counted = Math.round(Number(req.body.counted_cash) * 100);
+  const countedMpesa = Math.round(Number(req.body.counted_mpesa || 0) * 100);
   const fig = drawerFigures(s);
   const variance = domain.drawerVariance(counted, fig.expected);
-  db.prepare(`UPDATE shifts SET closed_at=datetime('now','localtime'), closed_by=?, counted_cash=?,
-    expected_cash=?, variance=?, status='closed', notes=? WHERE id=?`)
-    .run(req.user.id, counted, fig.expected, variance, req.body.notes || s.notes, s.id);
-  audit(req.user, 'shift.close',
-    `expected KSh${(fig.expected / 100).toFixed(2)}, counted KSh${(counted / 100).toFixed(2)}, variance KSh${(variance / 100).toFixed(2)}`);
-  if (Math.abs(variance) > 0) audit(req.user, 'drawer.variance', `KSh${(variance / 100).toFixed(2)} ${variance > 0 ? 'over' : 'short'}`);
+  const mpesaVariance = countedMpesa - fig.expected_mpesa;
+  db.prepare(`UPDATE shifts SET closed_at=datetime('now','localtime'),closed_by=?,counted_cash=?,
+    expected_cash=?,variance=?,counted_mpesa=?,expected_mpesa=?,mpesa_variance=?,status='closed',notes=? WHERE id=?`)
+    .run(req.user.id, counted, fig.expected, variance, countedMpesa, fig.expected_mpesa, mpesaVariance,
+      req.body.notes || s.notes, s.id);
+  audit(req.user, 'shift.close', `cash expected KSh${(fig.expected / 100).toFixed(2)}, counted KSh${(counted / 100).toFixed(2)}, variance KSh${(variance / 100).toFixed(2)}; M-Pesa expected KSh${(fig.expected_mpesa / 100).toFixed(2)}, counted KSh${(countedMpesa / 100).toFixed(2)}, variance KSh${(mpesaVariance / 100).toFixed(2)}`);
+  if (variance) audit(req.user, 'drawer.variance', `Cash KSh${(variance / 100).toFixed(2)} ${variance > 0 ? 'over' : 'short'}`);
+  if (mpesaVariance) audit(req.user, 'mpesa.variance', `KSh${(mpesaVariance / 100).toFixed(2)} ${mpesaVariance > 0 ? 'over' : 'short'}`);
   broadcast('sales');
   res.json({ ...db.prepare('SELECT * FROM shifts WHERE id=?').get(s.id), drawer: fig });
 });
 app.post('/api/shifts/:id/payout', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const s = db.prepare('SELECT * FROM shifts WHERE id=?').get(req.params.id);
   if (!s) return bad(res, 'Shift not found', 404);
+  if (s.status === 'closed') return bad(res, 'Cannot add an expense to a closed till');
   const amount = Math.round(Number(req.body.amount) * 100);
+  const method = req.body.method === 'mpesa' ? 'mpesa' : 'cash';
+  const reason = String(req.body.reason || '').trim();
   if (!amount || amount <= 0) return bad(res, 'Amount must be greater than zero');
-  db.prepare('INSERT INTO cash_payouts(shift_id,amount,reason,user_id) VALUES(?,?,?,?)')
-    .run(s.id, amount, req.body.reason || 'Cash out', req.user.id);
-  audit(req.user, 'cash.payout', `KSh${(amount / 100).toFixed(2)} — ${req.body.reason || ''}`);
+  if (!reason) return bad(res, 'Expense reason is required');
+  db.prepare('INSERT INTO cash_payouts(shift_id,amount,reason,user_id,method) VALUES(?,?,?,?,?)')
+    .run(s.id, amount, reason, req.user.id, method);
+  audit(req.user, 'expense.record', `${method.toUpperCase()} KSh${(amount / 100).toFixed(2)} — ${reason}`);
   broadcast('sales');
   res.json(drawerFigures(s));
 });
 
 /* End-of-shift clearing sheet: everything a cashier needs to cash up. */
 app.get('/api/shift-clearing', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
-  const s = db.prepare("SELECT * FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get()
+  const s = db.prepare("SELECT * FROM shifts WHERE status IN ('open','reconciling') ORDER BY id DESC LIMIT 1").get()
         || db.prepare('SELECT * FROM shifts ORDER BY id DESC LIMIT 1').get();
   const q = (sql) => s ? db.prepare(sql).all(s.id) : [];
   const one = (sql) => s ? db.prepare(sql).get(s.id).v : 0;
@@ -1240,8 +1280,9 @@ app.get('/api/shift-clearing', requireAuth, requireRole('seller', 'cashier', 'ma
   const covers = one(`SELECT COALESCE(SUM(people),0) v FROM orders WHERE shift_id=? AND status='closed'`);
   const ordersN = one(`SELECT COUNT(*) v FROM orders WHERE shift_id=? AND status='closed'`);
   let drawer = null;
-  if (s) drawer = s.status === 'open' ? drawerFigures(s)
-    : { expected: s.expected_cash, counted: s.counted_cash, variance: s.variance, payouts };
+  if (s) drawer = s.status !== 'closed' ? drawerFigures(s)
+    : { expected: s.expected_cash, counted: s.counted_cash, variance: s.variance,
+      expected_mpesa: s.expected_mpesa, counted_mpesa: s.counted_mpesa, mpesa_variance: s.mpesa_variance, payouts };
   res.json({ shift: s || null, by_method: byMethod, by_station: byStation, tips, payouts, covers, orders: ordersN, drawer });
 });
 

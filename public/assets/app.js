@@ -2,7 +2,7 @@
 'use strict';
 
 const NAV = {
-  seller:    [['tables', 'Sale', 'floor'], ['bills', 'Receipts', 'cash'], ['manager', 'Stock', 'chart']],
+  seller:    [['tables', 'Sale', 'floor'], ['bills', 'Receipts', 'cash'], ['manager', 'Operations', 'chart']],
   admin:     [['tables', 'Floor', 'floor'], ['bills', 'Bills', 'cash'], ['kds', 'Kitchen', 'chef'], ['manager', 'Manager', 'chart']],
   manager:   [['tables', 'Floor', 'floor'], ['bills', 'Bills', 'cash'], ['kds', 'Kitchen', 'chef'], ['manager', 'Manager', 'chart']],
   waiter:    [['tables', 'Floor', 'floor'], ['bills', 'Bills', 'cash'], ['kds', 'Kitchen', 'chef']],
@@ -70,8 +70,13 @@ async function startApp(user) {
   document.getElementById('app').classList.remove('hidden');
   document.title = `${State.settings.business_name || 'POS'} — ${user.name}`;
   buildRail();
-  State.view = HOME[user.role] || 'tables';
+  const retailSeller = State.settings.business_type === 'wines_spirits' && user.role === 'seller';
+  const sellingOpen = State.shift && State.shift.status === 'open';
+  State.view = retailSeller && !sellingOpen ? 'manager' : (HOME[user.role] || 'tables');
+  if (retailSeller && !sellingOpen) Manager.tab = 'money';
   await navigate(State.view);
+  if (retailSeller && !State.shift) toast('Open the till to begin today’s sales', 'err');
+  else if (retailSeller && State.shift.status === 'reconciling') toast('Complete stocktake and reconcile Cash/M-Pesa to close the till', 'err');
   connectEvents();
   document.addEventListener('pos:update', onLiveUpdate);
   clearInterval(clockTimer);
@@ -122,6 +127,16 @@ async function navigate(view) {
   try {
     if (view === 'tables') {
       State.orders = await api('/api/orders');
+      const retailSeller = State.settings.business_type === 'wines_spirits' && State.user.role === 'seller';
+      if (retailSeller && State.shift?.status !== 'open') { Manager.tab = 'money'; return navigate('manager'); }
+      if (retailSeller && State.shift?.status === 'open' && !State.openOrderId) {
+        let sale = State.orders.find((o) => o.waiter_id === State.user.id && o.status === 'open' && !o.table_id);
+        if (!sale) {
+          sale = await api('/api/orders', { body: { people: 1 } });
+          State.orders = await api('/api/orders');
+        }
+        return Pos.openEditor(host, sale.id);
+      }
       if (State.openOrderId && State.orders.some((o) => o.id === State.openOrderId)) Pos.renderEditor(host);
       else { State.openOrderId = null; Pos.renderFloor(host); }
     } else if (view === 'bills') { State.orders = await api('/api/orders'); Cashier.renderBills(host); }

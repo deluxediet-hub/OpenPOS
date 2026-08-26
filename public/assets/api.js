@@ -175,7 +175,7 @@ function connectEvents() {
         State.orders = await api('/api/orders');
         if (ev === 'tables') { /* tables list only changes via manager */ }
       }
-      if (ev === 'users' || ev === 'settings' || ev === 'stock') await loadBootstrap();
+      if (ev === 'users' || ev === 'settings' || ev === 'stock' || ev === 'sales') await loadBootstrap();
       document.dispatchEvent(new CustomEvent('pos:update', { detail: { ev } }));
     } catch (e) { /* transient */ }
   };

@@ -132,6 +132,8 @@ Database migrations run automatically, but a backup is still mandatory.
 ## 9. Pre-opening acceptance test
 
 - [ ] Owner and each seller can log in with unique PINs.
+- [ ] Seller is prompted to open the till, then lands directly in a ready New Sale basket.
+- [ ] Opening Cash and M-Pesa balances are correct.
 - [ ] Five invalid PINs trigger temporary lockout.
 - [ ] Every product scans correctly.
 - [ ] Out-of-stock product is blocked when negative stock protection is enabled.
@@ -140,10 +142,13 @@ Database migrations run automatically, but a backup is still mandatory.
 - [ ] Card and M-Pesa references print correctly.
 - [ ] Duplicate M-Pesa reference is rejected.
 - [ ] Paid sale reduces product stock.
-- [ ] Supplier delivery increases stock and updates cost.
-- [ ] Full stocktake posts and audits variances.
+- [ ] Supplier delivery increases stock and updates cost; seller cannot directly edit/adjust stock.
+- [ ] Cash and M-Pesa expenses reduce the correct expected balance.
+- [ ] End-of-day stocktake blocks further sales and presents products one at a time.
+- [ ] Added stock, physical stock at hand and No change / Skip all behave correctly.
 - [ ] Receipt and drawer hardware work.
-- [ ] Drawer close variance is correct.
+- [ ] Till cannot close before stocktake or with open sales.
+- [ ] Closing Cash and M-Pesa variances are correct and stored.
 - [ ] Owner can review audit log and reports.
 - [ ] KRA-approved eTIMS process is operational separately or through a completed integration.
 - [ ] Backup exists off-device and has been restored successfully.

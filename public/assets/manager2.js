@@ -276,10 +276,11 @@ const Manager2 = (() => {
   /* ----------------------------- DRAWER ----------------------------- */
   async function drawer(body) {
     const cur = await api('/api/shifts/current');
-    const list = await api('/api/shifts');
+    const [list, counts] = await Promise.all([api('/api/shifts'), State.settings.business_type === 'wines_spirits' ? api('/api/stock-counts') : Promise.resolve([])]);
+    const openCount = counts.find((c) => c.status === 'open');
     body.innerHTML = `
       <div class="card" style="margin-bottom:14px">
-        <div class="card-h"><h3>${cur.shift ? 'Open shift' : 'No shift open'}</h3><span class="grow"></span>
+        <div class="card-h"><h3>${cur.shift ? (cur.shift.status === 'reconciling' ? 'End-of-day reconciliation' : 'Till open') : 'Till closed'}</h3><span class="grow"></span>
           ${cur.shift ? `<span class="tiny muted">opened ${cur.shift.opened_at}</span>` : ''}</div>
         <div class="card-b">
           ${cur.shift ? (() => {
@@ -287,26 +288,30 @@ const Manager2 = (() => {
             return `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
               <div class="stat"><div class="l">Opening float</div><div class="v">${fmt(cur.shift.opening_float)}</div></div>
               <div class="stat"><div class="l">Cash sales</div><div class="v" style="color:var(--green)">${fmt(d.cash_sales)}</div></div>
-              <div class="stat"><div class="l">Refunds</div><div class="v" style="color:var(--red)">−${fmt(d.cash_refunds)}</div></div>
-              <div class="stat"><div class="l">Payouts</div><div class="v" style="color:var(--red)">−${fmt(d.payouts)}</div></div>
-              <div class="stat"><div class="l">Expected in drawer</div><div class="v">${fmt(d.expected)}</div></div>
+              <div class="stat"><div class="l">M-Pesa sales</div><div class="v" style="color:var(--green)">${fmt(d.mpesa_sales || 0)}</div></div>
+              <div class="stat"><div class="l">Cash expenses</div><div class="v" style="color:var(--red)">−${fmt(d.cash_expenses || 0)}</div></div>
+              <div class="stat"><div class="l">M-Pesa expenses</div><div class="v" style="color:var(--red)">−${fmt(d.mpesa_expenses || 0)}</div></div>
+              <div class="stat"><div class="l">Expected cash</div><div class="v">${fmt(d.expected)}</div></div>
+              <div class="stat"><div class="l">Expected M-Pesa</div><div class="v">${fmt(d.expected_mpesa || 0)}</div></div>
             </div>
             <div class="row" style="margin-top:14px">
-              <button class="btn ghost" id="payout">Cash out (payout)</button>
+              <button class="btn ghost" id="payout">+ Record expense</button>
               <span class="grow"></span>
-              <button class="btn primary" id="closeShift">Close shift &amp; reconcile</button>
+              ${openCount ? `<button class="btn primary" id="continueStocktake">Continue stocktake</button>` : `<button class="btn primary" id="closeShift">Close till &amp; reconcile</button>`}
             </div>`;
-          })() : `<p class="muted">Open a shift with a starting float to begin tracking the drawer.</p>
-            <div class="grid2" style="max-width:420px">
-              <div><label class="fld">Opening float (${sym()})</label><input class="inp" id="fl" type="number" step="0.01" value="5000"></div>
-              <div style="align-self:end"><button class="btn primary" id="openShift">Open shift</button></div>
+          })() : `<p class="muted">Open the till each morning. Enter the physical cash float and current M-Pesa business balance before selling.</p>
+            <div class="grid3" style="max-width:700px">
+              <div><label class="fld">Opening cash (${sym()})</label><input class="inp" id="fl" type="number" step="0.01" value="5000"></div>
+              <div><label class="fld">Opening M-Pesa balance (${sym()})</label><input class="inp" id="fmp" type="number" step="0.01" value="0"></div>
+              <div style="align-self:end"><button class="btn primary" id="openShift">Open till for sales</button></div>
             </div>`}
         </div>
       </div>
       <div class="card"><div class="card-h"><h3>Shift history</h3></div>
         <div class="scroll-x"><table class="tbl">
-          <thead><tr><th>Opened</th><th>Closed</th><th>By</th><th class="right">Float</th>
-            <th class="right">Expected</th><th class="right">Counted</th><th class="right">Variance</th></tr></thead>
+          <thead><tr><th>Opened</th><th>Closed</th><th>By</th><th class="right">Cash float</th>
+            <th class="right">Cash expected</th><th class="right">Cash counted</th><th class="right">Cash variance</th>
+            <th class="right">M-Pesa expected</th><th class="right">M-Pesa actual</th><th class="right">M-Pesa variance</th></tr></thead>
           <tbody>${list.map((s) => `<tr>
             <td class="small mono">${s.opened_at}</td>
             <td class="small mono">${s.closed_at || '<i>open</i>'}</td>
@@ -316,57 +321,77 @@ const Manager2 = (() => {
             <td class="right mono">${s.counted_cash == null ? '—' : fmt(s.counted_cash)}</td>
             <td class="right">${s.variance == null ? '—' : `<span class="tag ${s.variance === 0 ? 'ok' : Math.abs(s.variance) > 5000 ? 'bad' : 'warn'}">
               ${s.variance > 0 ? '+' : ''}${fmt(s.variance)}</span>`}</td>
-          </tr>`).join('') || '<tr><td colspan="7" class="empty">No shifts recorded.</td></tr>'}</tbody></table></div>
+            <td class="right mono">${s.expected_mpesa == null ? '—' : fmt(s.expected_mpesa)}</td>
+            <td class="right mono">${s.counted_mpesa == null ? '—' : fmt(s.counted_mpesa)}</td>
+            <td class="right">${s.mpesa_variance == null ? '—' : `<span class="tag ${s.mpesa_variance === 0 ? 'ok' : 'warn'}">${s.mpesa_variance > 0 ? '+' : ''}${fmt(s.mpesa_variance)}</span>`}</td>
+          </tr>`).join('') || '<tr><td colspan="10" class="empty">No shifts recorded.</td></tr>'}</tbody></table></div>
       </div>`;
 
     if (cur.shift) {
-      body.querySelector('#payout').onclick = () => confirmBox('Cash out', 'Money leaving the drawer (supplies, transport, bank run).', {
-        okLabel: 'Record payout', fields: [{ name: 'amount', label: `Amount (${sym()})`, type: 'number' },
-          { name: 'reason', label: 'Reason', placeholder: 'e.g. supplier payment' }],
-        onOk: async (v) => {
+      body.querySelector('#payout').onclick = () => {
+        modal({ title: 'Record business expense', body: `<p class="muted" style="margin-top:0">The amount is deducted from the expected Cash or M-Pesa balance for this till.</p>
+          <div class="grid2"><div><label class="fld">Paid from</label><select class="inp" id="exMethod"><option value="cash">Cash drawer</option><option value="mpesa">M-Pesa business account</option></select></div>
+          <div><label class="fld">Amount (${sym()})</label><input class="inp" id="exAmount" type="number" min="0.01" step="0.01"></div></div>
+          <div style="margin-top:12px"><label class="fld">Reason / receipt reference</label><input class="inp" id="exReason" placeholder="Supplier, transport, airtime, bank deposit…"></div>`,
+          footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Record expense</button>' });
+        const ov = document.querySelector('#modalRoot .ov');
+        ov.querySelector('[data-no]').onclick = closeModal;
+        ov.querySelector('[data-yes]').onclick = async () => {
           try {
-            await api(`/api/shifts/${cur.shift.id}/payout`, { body: { amount: Number(v.amount), reason: v.reason } });
-            drawer(body); toast('Payout recorded', 'ok');
+            await api(`/api/shifts/${cur.shift.id}/payout`, { body: { amount: Number(ov.querySelector('#exAmount').value),
+              method: ov.querySelector('#exMethod').value, reason: ov.querySelector('#exReason').value.trim() } });
+            closeModal(); drawer(body); toast('Expense recorded', 'ok');
           } catch (e) { toast(e.message, 'err'); }
-        } });
-      body.querySelector('#closeShift').onclick = () => {
+        };
+      };
+      const continueStocktake = body.querySelector('#continueStocktake');
+      if (continueStocktake) continueStocktake.onclick = () => Retail.stocktakes(body);
+      const closeShift = body.querySelector('#closeShift');
+      if (closeShift) closeShift.onclick = () => {
         const d = cur.drawer;
         modal({
-          title: 'Close shift — cash reconciliation',
+          title: 'Close till — end-of-day reconciliation',
           body: `<div class="grid2">
-              <div><label class="fld">Expected in drawer</label><input class="inp mono" value="${(d.expected / 100).toFixed(2)}" disabled></div>
-              <div><label class="fld">Counted cash (${sym()})</label><input class="inp mono" id="cnt" type="number" step="0.01" value="${(d.expected / 100).toFixed(2)}"></div>
+              <div><label class="fld">Expected cash</label><input class="inp mono" value="${(d.expected / 100).toFixed(2)}" disabled></div>
+              <div><label class="fld">Cash physically counted (${sym()})</label><input class="inp mono" id="cnt" type="number" step="0.01" value="${(d.expected / 100).toFixed(2)}"></div>
+              <div><label class="fld">Expected M-Pesa balance</label><input class="inp mono" value="${((d.expected_mpesa || 0) / 100).toFixed(2)}" disabled></div>
+              <div><label class="fld">Actual M-Pesa balance (${sym()})</label><input class="inp mono" id="cntMpesa" type="number" step="0.01" value="${((d.expected_mpesa || 0) / 100).toFixed(2)}"></div>
             </div>
             <div class="card" style="background:#101820;margin-top:12px"><div class="card-b">
-              <div class="tline"><span>Variance</span><b id="vr">KSh 0.00</b></div></div></div>
+              <div class="tline"><span>Cash variance</span><b id="vr">KSh 0.00</b></div>
+              <div class="tline"><span>M-Pesa variance</span><b id="vrMpesa">KSh 0.00</b></div></div></div>
             <div style="margin-top:12px"><label class="fld">Note</label>
               <input class="inp" id="sn" placeholder="e.g. explained by a missed payout"></div>`,
           footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Close shift</button>`
         });
         const ov = document.querySelector('#modalRoot .ov');
-        const cnt = ov.querySelector('#cnt');
-        const upd = () => {
-          const v = Math.round((Number(cnt.value) || 0) * 100) - d.expected;
-          const el = ov.querySelector('#vr');
-          el.textContent = (v > 0 ? '+' : v < 0 ? '−' : '') + fmt(Math.abs(v));
-          el.style.color = v === 0 ? 'var(--green)' : 'var(--red)';
+        const cnt = ov.querySelector('#cnt'), cntMpesa = ov.querySelector('#cntMpesa');
+        const paintVariance = (el, value) => {
+          el.textContent = (value > 0 ? '+' : value < 0 ? '−' : '') + fmt(Math.abs(value));
+          el.style.color = value === 0 ? 'var(--green)' : 'var(--red)';
         };
-        cnt.oninput = upd; upd();
+        const upd = () => {
+          paintVariance(ov.querySelector('#vr'), Math.round((Number(cnt.value) || 0) * 100) - d.expected);
+          paintVariance(ov.querySelector('#vrMpesa'), Math.round((Number(cntMpesa.value) || 0) * 100) - (d.expected_mpesa || 0));
+        };
+        cnt.oninput = upd; cntMpesa.oninput = upd; upd();
         ov.querySelector('[data-no]').onclick = closeModal;
         ov.querySelector('[data-yes]').onclick = async () => {
           try {
             const res = await api(`/api/shifts/${cur.shift.id}/close`, {
-              body: { counted_cash: Number(cnt.value), notes: ov.querySelector('#sn').value } });
-            closeModal(); drawer(body);
-            toast(`Shift closed · variance ${fmt(res.variance)}`, res.variance === 0 ? 'ok' : 'err');
+              body: { counted_cash: Number(cnt.value), counted_mpesa: Number(cntMpesa.value), notes: ov.querySelector('#sn').value } });
+            closeModal(); await loadBootstrap(); drawer(body);
+            const exact = res.variance === 0 && res.mpesa_variance === 0;
+            toast(`Till closed · cash ${fmt(res.variance)} · M-Pesa ${fmt(res.mpesa_variance)}`, exact ? 'ok' : 'err');
           } catch (e) { toast(e.message, 'err'); }
         };
       };
     } else {
       body.querySelector('#openShift').onclick = async () => {
         try {
-          await api('/api/shifts', { body: { opening_float: Number(body.querySelector('#fl').value) } });
-          drawer(body); toast('Shift opened', 'ok');
+          await api('/api/shifts', { body: { opening_float: Number(body.querySelector('#fl').value), opening_mpesa: Number(body.querySelector('#fmp').value) } });
+          await loadBootstrap(); toast('Till opened — ready for sales', 'ok');
+          if (State.user.role === 'seller') navigate('tables'); else drawer(body);
         } catch (e) { toast(e.message, 'err'); }
       };
     }

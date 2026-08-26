@@ -216,17 +216,22 @@ CREATE TABLE IF NOT EXISTS shifts (
   opened_by      INTEGER REFERENCES users(id),
   closed_by      INTEGER REFERENCES users(id),
   opening_float  INTEGER NOT NULL DEFAULT 0,
+  opening_mpesa  INTEGER NOT NULL DEFAULT 0,
   counted_cash   INTEGER,
   expected_cash  INTEGER,
   variance       INTEGER,
+  counted_mpesa  INTEGER,
+  expected_mpesa INTEGER,
+  mpesa_variance INTEGER,
   notes          TEXT,
-  status         TEXT NOT NULL DEFAULT 'open'   -- open|closed
+  status         TEXT NOT NULL DEFAULT 'open'   -- open|reconciling|closed
 );
 CREATE TABLE IF NOT EXISTS cash_payouts (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   shift_id   INTEGER REFERENCES shifts(id) ON DELETE SET NULL,
   amount     INTEGER NOT NULL,
   reason     TEXT,
+  method     TEXT NOT NULL DEFAULT 'cash',
   user_id    INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -366,6 +371,11 @@ function migrate() {
   add('menu_items', 'tax_type', "tax_type TEXT NOT NULL DEFAULT 'B'");
   add('orders', 'age_verified', 'age_verified INTEGER NOT NULL DEFAULT 0');
   add('orders', 'age_check_note', 'age_check_note TEXT');
+  add('shifts', 'opening_mpesa', 'opening_mpesa INTEGER NOT NULL DEFAULT 0');
+  add('shifts', 'counted_mpesa', 'counted_mpesa INTEGER');
+  add('shifts', 'expected_mpesa', 'expected_mpesa INTEGER');
+  add('shifts', 'mpesa_variance', 'mpesa_variance INTEGER');
+  add('cash_payouts', 'method', "method TEXT NOT NULL DEFAULT 'cash'");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS ux_menu_sku ON menu_items(sku) WHERE sku IS NOT NULL AND sku != '';
     CREATE UNIQUE INDEX IF NOT EXISTS ux_menu_barcode ON menu_items(barcode) WHERE barcode IS NOT NULL AND barcode != '';
@@ -392,9 +402,10 @@ function migrate() {
     CREATE TABLE IF NOT EXISTS stock_count_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT, stock_count_id INTEGER NOT NULL REFERENCES stock_counts(id) ON DELETE CASCADE,
       stock_item_id INTEGER NOT NULL REFERENCES stock_items(id), expected REAL NOT NULL,
-      counted REAL, variance REAL, UNIQUE(stock_count_id,stock_item_id)
+      counted REAL, variance REAL, added_qty REAL NOT NULL DEFAULT 0, UNIQUE(stock_count_id,stock_item_id)
     );
   `);
+  add('stock_count_items', 'added_qty', 'added_qty REAL NOT NULL DEFAULT 0');
 
   /* Upgrade any credentials left in plaintext by an older release.
      A stored value not starting with the hash marker is plaintext. */

@@ -25,6 +25,8 @@ const mk = () => {
   ck('retail mode configured', boot.settings.business_type === 'wines_spirits');
   ck('no restaurant tables in retail starter', boot.tables.length === 0, String(boot.tables.length));
   ck('starter products have one-to-one stock', boot.menu.length > 20 && boot.menu.every((m) => m.stock_item_id && m.stock_qty === 12));
+  r = await seller.post('/api/shifts', { opening_float: 5000, opening_mpesa: 100 });
+  ck('seller opens morning till with cash and M-Pesa balances', r.status === 200 && r.data.status === 'open', JSON.stringify(r.data));
 
   const cat = boot.categories[0];
   r = await admin.post('/api/menu-items', { name: 'Audit Test Gin 750ml', category_id: cat.id, price: 1000, cost: 700,
@@ -52,18 +54,10 @@ const mk = () => {
   stock = await seller.get('/api/stock');
   ck('delivery increases stock to seven', stock.data.find((x) => x.id === product.stock_item_id).qty === 7);
 
-  r = await seller.post('/api/stock-counts', { reference: 'AUDIT-COUNT-1' });
-  ck('seller starts full stocktake', r.status === 200, JSON.stringify(r.data));
-  const count = (await seller.get('/api/stock-counts/' + r.data.id)).data;
-  const counted = count.items.map((x) => ({ stock_item_id: x.stock_item_id, counted: x.stock_item_id === product.stock_item_id ? 6 : x.expected }));
-  r = await seller.post(`/api/stock-counts/${count.id}/complete`, { items: counted });
-  ck('stocktake posts one variance', r.status === 200 && r.data.variances === 1, JSON.stringify(r.data));
-  stock = await seller.get('/api/stock');
-  ck('stocktake sets physical quantity', stock.data.find((x) => x.id === product.stock_item_id).qty === 6);
 
   const sale2 = (await seller.post('/api/orders', {})).data;
-  r = await seller.post(`/api/orders/${sale2.id}/items`, { items: [{ menu_item_id: product.id, qty: 7 }] });
-  ck('negative stock is blocked', r.status === 400 && /only 6 in stock/i.test(r.data.error), JSON.stringify(r.data));
+  r = await seller.post(`/api/orders/${sale2.id}/items`, { items: [{ menu_item_id: product.id, qty: 8 }] });
+  ck('negative stock is blocked', r.status === 400 && /only 7 in stock/i.test(r.data.error), JSON.stringify(r.data));
 
   const sale3 = (await seller.post('/api/orders', {})).data;
   r = await seller.post(`/api/orders/${sale3.id}/items`, { items: [{ menu_item_id: product.id, qty: 1 }] });
@@ -75,6 +69,30 @@ const mk = () => {
   const due4 = r.data.totals.grand_total / 100;
   r = await seller.post(`/api/orders/${sale4.id}/pay`, { method: 'mpesa', amount: due4, reference: 'TESTMPESA1', age_verified: true });
   ck('duplicate M-Pesa reference rejected', r.status === 400 && /already been used/i.test(r.data.error), JSON.stringify(r.data));
+  await admin.post(`/api/orders/${sale2.id}/void`, { reason: 'Test cleanup' });
+  await admin.post(`/api/orders/${sale4.id}/void`, { reason: 'Duplicate payment test cleanup' });
+
+  r = await seller.post(`/api/stock/${product.stock_item_id}/adjust`, { delta: 1, reason: 'Not allowed' });
+  ck('seller cannot directly edit or adjust stock', r.status === 403);
+  r = await seller.post('/api/stock-counts', { reference: 'AUDIT-COUNT-1' });
+  ck('seller starts end-of-day stocktake', r.status === 200, JSON.stringify(r.data));
+  const count = (await seller.get('/api/stock-counts/' + r.data.id)).data;
+  const counted = count.items.map((x) => ({ stock_item_id: x.stock_item_id,
+    counted: x.stock_item_id === product.stock_item_id ? 5 : x.expected, added_qty: 0 }));
+  r = await seller.post(`/api/stock-counts/${count.id}/complete`, { items: counted });
+  ck('stocktake posts one variance', r.status === 200 && r.data.variances === 1, JSON.stringify(r.data));
+  stock = await seller.get('/api/stock');
+  ck('stocktake sets physical quantity', stock.data.find((x) => x.id === product.stock_item_id).qty === 5);
+
+  const current = (await seller.get('/api/shifts/current')).data;
+  r = await seller.post(`/api/shifts/${current.shift.id}/payout`, { amount: 100, method: 'cash', reason: 'Transport receipt' });
+  ck('cash expense is recorded', r.status === 200 && r.data.cash_expenses === 10000, JSON.stringify(r.data));
+  r = await seller.post(`/api/shifts/${current.shift.id}/payout`, { amount: 50, method: 'mpesa', reason: 'Airtime receipt' });
+  ck('M-Pesa expense is recorded', r.status === 200 && r.data.mpesa_expenses === 5000, JSON.stringify(r.data));
+  r = await seller.post(`/api/shifts/${current.shift.id}/close`, { counted_cash: 6900, counted_mpesa: 1050, notes: 'Retail test close' });
+  ck('seller closes till after stocktake with cash and M-Pesa reconciled', r.status === 200 && r.data.variance === 0 && r.data.mpesa_variance === 0, JSON.stringify(r.data));
+  r = await seller.post('/api/orders', {});
+  ck('sales blocked after till close', r.status === 400 && /open the till/i.test(r.data.error), JSON.stringify(r.data));
 
   console.log(`\n=== ${passed} passed, ${failed} failed ===\n`);
   process.exit(failed ? 1 : 0);

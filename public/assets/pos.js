@@ -251,7 +251,10 @@ const Pos = (() => {
       } catch (e) { toast(e.message, 'err'); }
     };
     host.querySelector('#printBill').onclick = () => printReceipt(o.id, { paid: false });
-    host.querySelector('#toBill').onclick = () => Cashier.payModal(o.id, () => { closeEditor(host); });
+    host.querySelector('#toBill').onclick = () => Cashier.payModal(o.id, () => {
+      if (retail && State.user.role === 'seller') navigate('tables');
+      else closeEditor(host);
+    });
     const transferBtn = host.querySelector('#transfer');
     if (transferBtn) transferBtn.onclick = () => transferModal(o, host);
     const voidBtn = host.querySelector('#voidBtn');

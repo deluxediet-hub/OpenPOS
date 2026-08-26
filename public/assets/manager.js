@@ -33,8 +33,10 @@ const Manager = (() => {
       if (k === 'menu') children = children.filter(([id]) => id === 'menu');
       return [k, label, children];
     });
-    const visibleTop = State.user.role === 'seller' ? TOP.filter(([k]) => k === 'stock') : (retail ? retailTop : TOP);
-    if (State.user.role === 'seller') top = 'stock';
+    const sellerTop = TOP.filter(([k]) => ['stock', 'money'].includes(k)).map(([k, label, children]) =>
+      [k, k === 'money' ? 'Till & Expenses' : label, k === 'money' ? children.filter(([id]) => id === 'drawer') : children]);
+    const visibleTop = State.user.role === 'seller' ? sellerTop : (retail ? retailTop : TOP);
+    if (!visibleTop.some(([k]) => k === top)) top = visibleTop[0][0];
     const group = visibleTop.find(([k]) => k === top) || visibleTop[0];
     if (!group[2].some(([k]) => k === sub)) sub = group[2][0][0];
     host.innerHTML = `
@@ -426,9 +428,9 @@ const Manager = (() => {
             <td class="right mono muted">${fmt(x.cost)}</td>
             <td class="right mono">${fmt(x.qty * x.cost)}</td>
             <td>${x.qty <= 0 ? '<span class="tag bad">Out</span>' : x.qty <= x.min_qty ? '<span class="tag warn">Low</span>' : '<span class="tag ok">OK</span>'}</td>
-            <td class="right nowrap">${canEdit() ? `<button class="btn xs green" data-rec="${x.id}">Received</button>
-              <button class="btn xs ghost" data-adj="${x.id}">Stock count</button>
-              ${canManage() ? `<button class="btn xs ghost" data-se="${x.id}">Edit</button>` : ''}` : ''}</td>
+            <td class="right nowrap">${canManage() ? `<button class="btn xs green" data-rec="${x.id}">Quick receive</button>
+              <button class="btn xs ghost" data-adj="${x.id}">Quick correction</button>
+              <button class="btn xs ghost" data-se="${x.id}">Edit</button>` : '<span class="tiny muted">Owner controlled</span>'}</td>
           </tr>`).join('')}</tbody></table></div>
       </div>
       <div class="card" style="margin-top:14px"><div class="card-h"><h3>Recent stock movement</h3><span class="grow"></span><span class="tiny muted">Sales, deliveries and counts</span></div>
@@ -437,7 +439,7 @@ const Manager = (() => {
           <td class="right mono"><span class="tag ${m.delta < 0 ? 'warn' : 'ok'}">${m.delta > 0 ? '+' : ''}${m.delta} ${esc(m.unit)}</span></td>
           <td class="small">${esc(m.reason || '—')}</td><td>${esc(m.user_name || 'system')}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">No stock movement yet.</td></tr>'}</tbody></table></div></div>`;
 
-    if (!canEdit()) return;
+    if (!canManage()) return;
     const addStock = body.querySelector('#addS');
     if (addStock) addStock.onclick = () => stockForm(null, body);
     body.querySelectorAll('[data-se]').forEach((b) => b.onclick = () =>

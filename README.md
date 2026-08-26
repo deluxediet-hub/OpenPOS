@@ -9,7 +9,7 @@ Node.js + Express + SQLite, with no frontend build step. Prices are in KES, VAT 
 | Role | Access |
 |---|---|
 | **Owner / Admin** | Unlimited access: sales, payments, receipts, stock, products and prices, reports, refunds, discounts, staff, settings, integrations and audit history |
-| **Seller** | Make sales, accept Cash/Card/M-Pesa, print/reprint receipts, run the cash drawer, receive deliveries, enter stock counts and record breakage/adjustments |
+| **Seller** | Open/close the till, make sales, accept Cash/Card/M-Pesa, print/reprint receipts, receive documented deliveries, report Cash/M-Pesa expenses and perform guided stocktakes; no direct stock editing |
 
 Sellers cannot change business settings, product prices, staff permissions, reports, refunds or the audit log. For a discount, void or refund, the seller signs out and the owner/admin performs the action. Legacy restaurant roles remain understood by the API so an existing OpenPOS database can still be migrated, but new shops only need `admin` and `seller`.
 
@@ -29,12 +29,13 @@ A blank setup is also supported. Creating a retail product automatically creates
 
 ### Seller
 
-1. Sign in with an individual PIN.
-2. Tap **New sale**, search/tap products, and adjust quantities.
-3. Tap **Take payment** and settle by Cash, Card or M-Pesa. M-Pesa requires a confirmation reference.
-4. Print the customer receipt. A completed sale deducts its bottle/unit quantities automatically.
-5. Use **Stock** to receive a supplier delivery or enter a signed stock-count correction with a reason.
-6. Reconcile and close the cash drawer at shift end.
+1. Sign in with an individual PIN and open the morning till with opening Cash and M-Pesa balances.
+2. The app opens directly into a ready **New sale** basket. Scan/search products and take Cash, Card or M-Pesa payment.
+3. Print the receipt; a completed sale automatically deducts bottle/unit stock.
+4. Receive supplier deliveries using an invoice/delivery-note number. Sellers cannot directly edit or quick-adjust stock.
+5. Record business expenses against Cash or M-Pesa so they reduce the correct expected balance.
+6. At day end, close every sale and start stocktake. Count one product at a time, entering unrecorded added stock and physical stock at hand, or choose **No change / Skip**.
+7. After stocktake, enter actual Cash and M-Pesa balances, review both variances and close the till.
 
 ### Owner
 

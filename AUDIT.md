@@ -56,12 +56,12 @@ A 2025 national policy proposed raising the threshold to 21, but reporting descr
 - New retail products automatically create matching stock and a one-unit deduction mapping.
 - Current stock and low/out indicators appear in product management and the till.
 - Negative stock can be blocked server-side.
-- Sellers can receive deliveries against a supplier invoice/delivery-note number.
+- Sellers can receive deliveries against a mandatory supplier invoice/delivery-note number, but cannot directly edit or quick-adjust stock.
 - Delivery lines capture quantity, unit cost, optional batch and expiry.
 - Receiving updates quantity, latest cost, stock movement history and audit history transactionally.
 - Supplier directory stores contact/address/KRA details.
-- Full stocktakes snapshot expected quantities, require a physical count for every item, calculate variance, post all corrections together and audit the operator.
-- Quick delivery and count corrections require a reason.
+- End-of-day stocktake freezes sales and presents one item at a time. The operator enters unrecorded added stock and physical stock at hand, or explicitly skips an unchanged item.
+- Full stocktakes calculate variance, post all corrections together and audit the operator. Direct quick corrections remain owner-only.
 - Low-stock and stock-value reporting remains available.
 
 ### People and controls
@@ -69,13 +69,15 @@ A 2025 national policy proposed raising the threshold to 21, but reporting descr
 | Role | Intended rights |
 |---|---|
 | Owner/Admin | All till, product, price, cost, supplier, report, refund, staff, settings, integration and audit functions |
-| Seller | Sell, receive payment, print/reprint, drawer operations, deliveries and stocktakes |
+| Seller | Open/close the till, sell, receive payment, print/reprint, receive documented deliveries, report Cash/M-Pesa expenses and perform guided stocktakes; no direct stock editing |
 
 - PINs are salted and hashed with Node's `scrypt`.
 - Duplicate PINs are checked by verifying hashes.
 - Five failed logins from one address trigger a 60-second lockout.
 - Staff cannot assign themselves administrator rights.
-- Price changes, discounts, voids, refunds, payments, deliveries and stock corrections are audited.
+- Price changes, discounts, voids, refunds, payments, expenses, deliveries and stock corrections are audited.
+- A retail till must be opened before sales. Starting end-of-day stocktake moves it into reconciliation, blocks further sales, and closing requires both Cash and M-Pesa actual balances.
+- Cash and M-Pesa expenses reduce their respective expected balances; both variances are stored and audited at close.
 - Runtime database files are no longer committed to Git.
 
 ## 3. Compliance assessment
