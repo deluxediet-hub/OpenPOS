@@ -48,7 +48,7 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 - Supplier directory and invoice/delivery-note receiving
 - Batch/expiry capture on delivery lines
 - Full stocktakes with expected, counted and audited variance
-- Mandatory configurable age confirmation before alcohol payment
+- Fast checkout with no buyer-age prompt; the configured 18+ notice remains on receipts
 - Duplicate M-Pesa confirmation-code rejection
 - Alcohol licence metadata and responsible-retail receipt warning
 - Temporary lockout after repeated invalid PIN attempts

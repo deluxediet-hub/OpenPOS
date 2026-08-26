@@ -66,8 +66,7 @@ const Retail = (() => {
       footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Receive into stock</button>' });
     const ov = document.querySelector('#modalRoot .ov'), lines = ov.querySelector('#deliveryLines');
     const addLine = () => {
-      const row = document.createElement('div'); row.className = 'grid';
-      row.style.cssText = 'grid-template-columns:2fr .65fr .8fr .8fr .8fr auto;gap:8px;margin-bottom:8px;align-items:end';
+      const row = document.createElement('div'); row.className = 'grid delivery-line';
       row.innerHTML = `<div><label class="fld">Product</label><select class="inp" data-stock>${optionHtml}</select></div>
         <div><label class="fld">Qty</label><input class="inp" data-qty type="number" min="0.01" step="0.01"></div>
         <div><label class="fld">Unit cost</label><input class="inp" data-cost type="number" min="0" step="0.01"></div>

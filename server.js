@@ -532,8 +532,6 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
   const tip = Math.max(0, Math.round(Number(req.body.tip || 0) * 100));
   const amount = Math.round(Number(req.body.amount) * 100);
   if (!amount || amount <= 0) return bad(res, 'Amount must be greater than zero');
-  if (s.business_type === 'wines_spirits' && s.age_verification_required === '1' && !req.body.age_verified)
-    return bad(res, `Confirm the customer is at least ${s.minimum_sale_age || 18} before taking payment`);
   const balance = d.totals.grand_total + tip - d.paid;
   if (method === 'mpesa' && !String(req.body.reference || '').trim())
     return bad(res, 'M-Pesa confirmation code is required');
@@ -594,9 +592,6 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
   }
 
   const tx = db.transaction(() => {
-    if (s.business_type === 'wines_spirits' && req.body.age_verified)
-      db.prepare('UPDATE orders SET age_verified=1,age_check_note=? WHERE id=?')
-        .run(String(req.body.age_check_note || `Confirmed ${s.minimum_sale_age || 18}+`).slice(0, 120), o.id);
     db.prepare('INSERT INTO payments(order_id,method,amount,reference,tip,cashier_id,shift_id) VALUES(?,?,?,?,?,?,?)')
       .run(o.id, method, amount, reference, tip, req.user.id, openShift ? openShift.id : null);
 

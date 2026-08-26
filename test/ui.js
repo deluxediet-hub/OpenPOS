@@ -10,7 +10,7 @@ const { JSDOM } = require('jsdom');
 
 const BASE = process.env.BASE || 'http://127.0.0.1:3000';
 const PUB = path.join(__dirname, '..', 'public');
-const ASSETS = ['api.js', 'print.js', 'pos.js', 'cashier.js', 'kds.js', 'manager.js', 'manager2.js', 'app.js'];
+const ASSETS = ['api.js', 'print.js', 'pos.js', 'cashier.js', 'kds.js', 'retail.js', 'manager.js', 'manager2.js', 'app.js'];
 
 let pass = 0, fail = 0;
 const ck = (name, cond, extra = '') => {

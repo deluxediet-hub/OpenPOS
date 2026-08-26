@@ -41,9 +41,7 @@ const mk = () => {
   ck('seller adds product', r.status === 200 && r.data.items[0].qty === 2);
   const due = r.data.totals.grand_total / 100;
   r = await seller.post(`/api/orders/${sale.id}/pay`, { method: 'cash', amount: due, tendered: due });
-  ck('payment blocked until age confirmed', r.status === 400 && /customer is at least/i.test(r.data.error), JSON.stringify(r.data));
-  r = await seller.post(`/api/orders/${sale.id}/pay`, { method: 'cash', amount: due, tendered: due, age_verified: true, age_check_note: 'ID checked' });
-  ck('age-verified retail payment closes sale', r.status === 200 && r.data.order.status === 'closed', JSON.stringify(r.data));
+  ck('retail payment closes without an age prompt', r.status === 200 && r.data.order.status === 'closed', JSON.stringify(r.data));
   let stock = await seller.get('/api/stock');
   ck('sale deducts two bottles', stock.data.find((x) => x.id === product.stock_item_id).qty === 1);
 
@@ -62,12 +60,12 @@ const mk = () => {
   const sale3 = (await seller.post('/api/orders', {})).data;
   r = await seller.post(`/api/orders/${sale3.id}/items`, { items: [{ menu_item_id: product.id, qty: 1 }] });
   const due3 = r.data.totals.grand_total / 100;
-  r = await seller.post(`/api/orders/${sale3.id}/pay`, { method: 'mpesa', amount: due3, reference: 'TESTMPESA1', age_verified: true });
+  r = await seller.post(`/api/orders/${sale3.id}/pay`, { method: 'mpesa', amount: due3, reference: 'TESTMPESA1' });
   ck('first M-Pesa reference accepted', r.status === 200);
   const sale4 = (await seller.post('/api/orders', {})).data;
   r = await seller.post(`/api/orders/${sale4.id}/items`, { items: [{ menu_item_id: product.id, qty: 1 }] });
   const due4 = r.data.totals.grand_total / 100;
-  r = await seller.post(`/api/orders/${sale4.id}/pay`, { method: 'mpesa', amount: due4, reference: 'TESTMPESA1', age_verified: true });
+  r = await seller.post(`/api/orders/${sale4.id}/pay`, { method: 'mpesa', amount: due4, reference: 'TESTMPESA1' });
   ck('duplicate M-Pesa reference rejected', r.status === 400 && /already been used/i.test(r.data.error), JSON.stringify(r.data));
   await admin.post(`/api/orders/${sale2.id}/void`, { reason: 'Test cleanup' });
   await admin.post(`/api/orders/${sale4.id}/void`, { reason: 'Duplicate payment test cleanup' });

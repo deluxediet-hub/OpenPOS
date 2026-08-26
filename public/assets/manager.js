@@ -625,9 +625,8 @@ const Manager = (() => {
           <p class="tiny muted" style="margin-top:12px">Kenyan retail prices are normally VAT-inclusive. Service charge is normally disabled. Current setup: ${s.tax_mode === 'inclusive' ? 'inclusive' : 'exclusive'}, ${s.vat_rate}% VAT, ${s.service_charge_enabled ? s.service_charge_rate + '% service charge' : 'no service charge'}.</p>
         </div></div>
       </div>
-      ${s.business_type === 'wines_spirits' ? `<div class="card" style="margin-top:14px"><div class="card-h"><h3>Responsible retail controls</h3></div><div class="card-b grid3">
-        <div><label class="fld">Minimum sale age</label><input class="inp" id="s_age" type="number" min="18" value="${esc(s.minimum_sale_age || 18)}"></div>
-        <div><label class="fld">Require age confirmation</label><select class="inp" id="s_age_req"><option value="1" ${s.age_verification_required === '1' ? 'selected' : ''}>Yes — block payment</option><option value="0" ${s.age_verification_required !== '1' ? 'selected' : ''}>No</option></select></div>
+      ${s.business_type === 'wines_spirits' ? `<div class="card" style="margin-top:14px"><div class="card-h"><h3>Retail safeguards</h3></div><div class="card-b grid2">
+        <div><label class="fld">Receipt age notice</label><input class="inp" id="s_age" type="number" min="18" value="${esc(s.minimum_sale_age || 18)}"><div class="tiny muted" style="margin-top:5px">Printed on receipts only; checkout has no age prompt.</div></div>
         <div><label class="fld">Prevent negative stock</label><select class="inp" id="s_neg"><option value="1" ${s.prevent_negative_stock === '1' ? 'selected' : ''}>Yes</option><option value="0" ${s.prevent_negative_stock !== '1' ? 'selected' : ''}>No</option></select></div>
       </div></div>` : ''}
       <div class="card" style="margin-top:14px"><div class="card-h"><h3>Receipt</h3></div><div class="card-b">
@@ -672,7 +671,7 @@ const Manager = (() => {
           receipt_footer: body.querySelector('#s_ft').value,
           licence_number: body.querySelector('#s_lic')?.value || '', licence_expiry: body.querySelector('#s_lice')?.value || '',
           minimum_sale_age: body.querySelector('#s_age')?.value || s.minimum_sale_age || 18,
-          age_verification_required: body.querySelector('#s_age_req')?.value || s.age_verification_required || '1',
+          age_verification_required: '0',
           prevent_negative_stock: body.querySelector('#s_neg')?.value || s.prevent_negative_stock || '1'
         } });
         toast('Settings saved', 'ok');

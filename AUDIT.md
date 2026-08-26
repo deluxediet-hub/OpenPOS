@@ -11,7 +11,7 @@
 
 **Strong single-shop pilot, but not yet safe to describe as fully eTIMS-integrated or automatically M-Pesa-integrated.**
 
-The workspace now has a focused bottle-shop workflow: barcode/SKU products, live unit stock, negative-stock prevention, supplier deliveries, full stocktakes, age confirmation, receipts, drawer reconciliation, role separation and audit logging. This is enough to run a controlled local pilot if the owner uses KRA's separate eTIMS solution and verifies M-Pesa confirmations independently.
+The workspace now has a focused bottle-shop workflow: barcode/SKU products, live unit stock, negative-stock prevention, supplier deliveries, full stocktakes, thermal receipts, drawer reconciliation, role separation and audit logging. Checkout assumes the shop's buyers have already met its adult-entry policy and therefore has no repetitive age prompt. This is enough to run a controlled local pilot if the owner uses KRA's separate eTIMS solution and verifies M-Pesa confirmations independently.
 
 ### Production blockers
 
@@ -41,10 +41,9 @@ The workspace now has a focused bottle-shop workflow: barcode/SKU products, live
 
 ### Alcohol controls
 
-- Payment is blocked until the seller confirms the customer meets the configured minimum age.
-- The default minimum age is 18, matching the currently published national Act reviewed during this audit.
-- The minimum is configurable because policy and county rules can change; the owner must verify current law before trading.
-- The system stores that the check happened, but deliberately advises staff **not** to store identity-card numbers.
+- Checkout has no age-confirmation interruption because the shop has specified that all admitted buyers are adults.
+- The default receipt notice remains 18+, matching the currently published national Act reviewed during this audit.
+- The printed threshold is configurable because policy and county rules can change; the owner must verify current law before trading.
 - Receipts print the configured age warning and responsible-drinking message.
 - Alcohol licence number and expiry can be stored and printed.
 
@@ -94,7 +93,7 @@ NACADA implementation guidance also describes licensing, licence display, age/ac
 Reference:
 https://nacada.go.ke/sites/default/files/2019-10/guidelines-for-implementing-alcoholic-drinks-control-act.pdf
 
-**POS coverage:** age confirmation, warning receipt text and licence metadata are present.
+**POS coverage:** warning receipt text and licence metadata are present; buyer eligibility is handled by the shop before checkout.
 **Outside POS:** premises licence, displayed statutory wall signs, county permit, operating hours, employee eligibility, distance/location rules, public-health/fire requirements and physical age access controls.
 
 ### KRA eTIMS

@@ -137,7 +137,7 @@ Database migrations run automatically, but a backup is still mandatory.
 - [ ] Five invalid PINs trigger temporary lockout.
 - [ ] Every product scans correctly.
 - [ ] Out-of-stock product is blocked when negative stock protection is enabled.
-- [ ] Age confirmation is required before payment.
+- [ ] Checkout proceeds without an age prompt and the configured 18+ notice prints on the receipt.
 - [ ] Cash payment calculates correct change.
 - [ ] Card and M-Pesa references print correctly.
 - [ ] Duplicate M-Pesa reference is rejected.

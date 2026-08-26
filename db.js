@@ -406,6 +406,10 @@ function migrate() {
     );
   `);
   add('stock_count_items', 'added_qty', 'added_qty REAL NOT NULL DEFAULT 0');
+  /* Retail policy: buyers are handled as adults at entry; checkout must stay fast. */
+  if ((db.prepare("SELECT value FROM settings WHERE key='business_type'").get() || {}).value === 'wines_spirits') {
+    db.prepare("INSERT INTO settings(key,value) VALUES('age_verification_required','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();
+  }
 
   /* Upgrade any credentials left in plaintext by an older release.
      A stored value not starting with the hash marker is plaintext. */
@@ -457,7 +461,7 @@ const DEFAULT_SETTINGS = {
   default_people: '1',
   business_type: 'wines_spirits',
   minimum_sale_age: '18',
-  age_verification_required: '1',
+  age_verification_required: '0',
   prevent_negative_stock: '1',
   licence_number: '',
   licence_expiry: '',
