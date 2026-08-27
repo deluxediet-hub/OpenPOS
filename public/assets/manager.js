@@ -57,11 +57,12 @@ const Manager = (() => {
   async function dashboard(body) {
     const retail = State.settings.business_type === 'wines_spirits';
     body.innerHTML = '<div class="empty">Loading dashboard…</div>';
-    const [s, items, z] = await Promise.all([
+    const [s, items, z, shifts] = await Promise.all([
       api(`/api/reports/summary?from=${range.from}&to=${range.to}`),
       api(`/api/reports/items?from=${range.from}&to=${range.to}`),
-      api('/api/zreport?date=' + range.from)
+      api('/api/zreport?date=' + range.from), api('/api/shifts')
     ]);
+    const latestReconciliation = shifts.find((x) => x.status === 'closed');
     const st = await api('/api/stock');
     const low = st.filter((x) => x.qty <= x.min_qty);
     const hourly = await api(`/api/reports/hourly?from=${range.from}`);
@@ -82,6 +83,8 @@ const Manager = (() => {
         ${stat('VAT collected', fmt(s.vat_collected), `${State.settings.vat_rate}% (${State.settings.tax_mode})`)}
         ${stat('Discounts & voids', fmt(s.discounts), s.orders_void + (retail ? ' voided sales' : ' voided checks'), 'warn')}
         ${retail ? stat('Complimentary', fmt(s.complimentary_value), `${s.complimentary_count} issue(s) · cost ${fmt(s.complimentary_cost)}`, s.complimentary_cost ? 'warn' : '') : ''}
+        ${retail && latestReconciliation ? stat('Latest reconciliation', fmt(latestReconciliation.overall_variance), latestReconciliation.reconciliation_status || 'Closed',
+          latestReconciliation.reconciliation_status === 'FULLY BALANCED' ? '' : 'warn') : ''}
       </div>
       <div class="grid" style="grid-template-columns:1.25fr 1fr">
         <div class="card"><div class="card-h"><h3>Sales by hour — ${range.from}</h3></div>
@@ -163,6 +166,7 @@ const Manager = (() => {
         ['expenses', 'Expenses only', 'Cash and M-Pesa expenses for the period'],
         ['complimentary', 'Complimentary issues', 'Owner, staff, friends, tasting and promotion stock'],
         ['stocktake', 'Latest stocktake', 'Expected, counted, quantity variance and financial impact'],
+        ['reconciliation', 'Latest reconciliation', 'Cash, M-Pesa, Card, stock and overall operational variance'],
         ['stock', 'Full stock position', 'On-hand quantity and inventory value']
       ];
       modal({ title: 'Build PDF report', wide: true,
@@ -177,11 +181,13 @@ const Manager = (() => {
         if (!selected.size) return toast('Select at least one report section', 'err');
         const { q, t, s: sm, items, waiters, cats, comps } = last;
         try {
-          const [stock, expenses, stocktakes] = await Promise.all([
+          const [stock, expenses, stocktakes, reconciliations] = await Promise.all([
             selected.has('low') || selected.has('stock') ? api('/api/stock') : Promise.resolve([]),
             selected.has('expenses') ? api(`/api/reports/expenses?from=${q}&to=${t}`) : Promise.resolve([]),
-            selected.has('stocktake') ? api('/api/stock-counts') : Promise.resolve([])
+            selected.has('stocktake') ? api('/api/stock-counts') : Promise.resolve([]),
+            selected.has('reconciliation') ? api('/api/shifts') : Promise.resolve([])
           ]);
+          const latestReconciliation = reconciliations.find((x) => x.status === 'closed' && (x.closed_at || '').slice(0,10) >= q && (x.closed_at || '').slice(0,10) <= t);
           const latestCount = stocktakes.find((x) => x.status === 'completed' && (x.completed_at || '').slice(0, 10) >= q && (x.completed_at || '').slice(0, 10) <= t);
           const stocktake = latestCount ? await api('/api/stock-counts/' + latestCount.id) : null;
           const tables = [];
@@ -218,6 +224,14 @@ const Manager = (() => {
                   `${x.variance > 0 ? '+' : ''}${roundStock(x.variance, 4)} ${x.unit}`, (x.cost_variance / 100).toFixed(2), (x.retail_variance / 100).toFixed(2)])
                 : [['No completed stocktake in this period', '', '', '', '', '']] });
           }
+          if (selected.has('reconciliation')) tables.push({ title: 'Latest operational reconciliation', head: ['Metric', 'Value'], right: [1],
+            rows: latestReconciliation ? [
+              ['Cash variance', fmt(latestReconciliation.variance)], ['M-Pesa variance', fmt(latestReconciliation.mpesa_variance)],
+              ['Card/EDC variance', fmt(latestReconciliation.card_variance)], ['Total tender variance', fmt(latestReconciliation.tender_variance)],
+              ['Stock variance at retail', fmt(latestReconciliation.stock_retail_variance)],
+              ['Overall operational variance', fmt(latestReconciliation.overall_variance)],
+              ['Status', latestReconciliation.reconciliation_status || '—'], ['Note', latestReconciliation.reconciliation_note || '—']
+            ] : [['No closed reconciliation in this period', '']] });
           if (selected.has('stock')) tables.push({ title: 'Stock position', head: ['Product', 'On hand', 'Unit cost', 'Value'], right: [1, 2, 3],
             rows: stock.map((x) => [x.name, stockQtyLabel(x.qty, x.unit, x.capacity_ml), (x.cost / 100).toFixed(2), (x.qty * x.cost / 100).toFixed(2)]) });
           closeModal();
@@ -769,6 +783,10 @@ const Manager = (() => {
         <div><label class="fld">Prevent negative stock</label><select class="inp" id="s_neg"><option value="1" ${s.prevent_negative_stock === '1' ? 'selected' : ''}>Yes</option><option value="0" ${s.prevent_negative_stock !== '1' ? 'selected' : ''}>No</option></select></div>
         <div><label class="fld">Barcode scanner</label><select class="inp" id="s_scan"><option value="0" ${s.barcode_scanner_enabled !== '1' ? 'selected' : ''}>Disabled</option><option value="1" ${s.barcode_scanner_enabled === '1' ? 'selected' : ''}>Enabled everywhere</option></select>
           <div class="tiny muted" style="margin-top:5px">Use a USB/Bluetooth scanner in keyboard mode with Enter suffix. Scanning from any normal page opens the sale and adds the product.</div></div>
+      </div></div>
+      <div class="card" style="margin-top:14px"><div class="card-h"><h3>Reconciliation controls</h3></div><div class="card-b grid2">
+        <div><label class="fld">Balanced tolerance (${sym()})</label><input class="inp" id="s_tol" type="number" min="0" step="1" value="${esc(s.reconciliation_tolerance || 20)}"><div class="tiny muted" style="margin-top:5px">Overall differences within this amount can be classified as reconciled.</div></div>
+        <div><label class="fld">Critical variance (${sym()})</label><input class="inp" id="s_crit" type="number" min="0" step="1" value="${esc(s.reconciliation_critical_threshold || 500)}"><div class="tiny muted" style="margin-top:5px">Larger unexplained shortages or overages are marked critical.</div></div>
       </div></div>` : ''}
       <div class="card" style="margin-top:14px"><div class="card-h"><h3>Receipt</h3></div><div class="card-b">
         <label class="fld">Footer message</label><input class="inp" id="s_ft" value="${esc(s.receipt_footer)}">
@@ -814,7 +832,9 @@ const Manager = (() => {
           minimum_sale_age: body.querySelector('#s_age')?.value || s.minimum_sale_age || 18,
           age_verification_required: '0',
           prevent_negative_stock: body.querySelector('#s_neg')?.value || s.prevent_negative_stock || '1',
-          barcode_scanner_enabled: body.querySelector('#s_scan')?.value || '0'
+          barcode_scanner_enabled: body.querySelector('#s_scan')?.value || '0',
+          reconciliation_tolerance: body.querySelector('#s_tol')?.value || '20',
+          reconciliation_critical_threshold: body.querySelector('#s_crit')?.value || '500'
         } });
         toast('Settings saved', 'ok');
         if (typeof updateScannerState === 'function') updateScannerState();

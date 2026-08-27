@@ -30,7 +30,7 @@ const mk = () => {
   ck('owner can enable global barcode scanner mode', r.status === 200 && r.data.barcode_scanner_enabled === '1');
   ck('no restaurant tables in retail starter', boot.tables.length === 0, String(boot.tables.length));
   ck('starter products have one-to-one stock', boot.menu.length > 20 && boot.menu.every((m) => m.stock_item_id && m.stock_qty === 12));
-  r = await seller.post('/api/shifts', { opening_float: 5000, opening_mpesa: 100 });
+  r = await seller.post('/api/shifts', { opening_float: 5000, opening_mpesa: 100, opening_card: 0 });
   ck('seller opens morning till with cash and M-Pesa balances', r.status === 200 && r.data.status === 'open', JSON.stringify(r.data));
 
   const cat = boot.categories[0];
@@ -171,8 +171,11 @@ const mk = () => {
   ck('cash expense is recorded', r.status === 200 && r.data.cash_expenses === 10000, JSON.stringify(r.data));
   r = await seller.post(`/api/shifts/${current.shift.id}/payout`, { amount: 50, method: 'mpesa', reason: 'Airtime receipt' });
   ck('M-Pesa expense is recorded', r.status === 200 && r.data.mpesa_expenses === 5000, JSON.stringify(r.data));
-  r = await seller.post(`/api/shifts/${current.shift.id}/close`, { counted_cash: 7900, counted_mpesa: 1050, notes: 'Retail test close' });
-  ck('seller closes till after stocktake with cash and M-Pesa reconciled', r.status === 200 && r.data.variance === 0 && r.data.mpesa_variance === 0, JSON.stringify(r.data));
+  r = await seller.post(`/api/shifts/${current.shift.id}/close`, { counted_cash: 8900, counted_mpesa: 1050,
+    counted_card: 741.67, reconciliation_note: 'Rush-hour sales were not entered' });
+  ck('cash overage offsets stock shortage and identifies possible unrecorded sales', r.status === 200 &&
+    r.data.reconciliation.cash_variance === 100000 && r.data.reconciliation.stock_retail_variance === -100000 &&
+    r.data.reconciliation.overall_variance === 0 && /POSSIBLE UNRECORDED SALES/.test(r.data.reconciliation.status), JSON.stringify(r.data));
   r = await seller.post('/api/orders', {});
   ck('seller sales blocked after till close', r.status === 400 && /open the till/i.test(r.data.error), JSON.stringify(r.data));
   r = await admin.post('/api/orders', {});

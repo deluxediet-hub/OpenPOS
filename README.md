@@ -55,7 +55,8 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 - Repeated taps, scans and + actions consolidate into one product line with a single quantity across the basket, sales view and receipt
 - Complimentary stock for owner consumption, staff, friends or promotions—including measured pours—with no cash impact and full retail-value/cost reporting; sellers simply confirm owner authorization and reports show both recorder and owner
 - Bottle balances retain six-decimal accuracy internally but display at two decimals with open-container ml (for example `0.96 bottle · 718.75ml open`); stocktake accepts sealed units plus open ml
-- Full stocktakes with expected, counted and audited quantity, inventory-cost and potential-retail variance; financial stock variance is shown separately and never used to hide a cash discrepancy
+- Full stocktakes retain quantity, inventory-cost and potential-retail variance separately from tender records
+- Final operational reconciliation combines Cash + M-Pesa + Card/EDC tender variance with stock variance at retail; matching cash overage and stock shortage is flagged as possible unrecorded sales instead of being silently hidden
 - Fast checkout with no buyer-age prompt; the configured 18+ notice remains on receipts
 - Duplicate M-Pesa confirmation-code rejection
 - Alcohol licence metadata and responsible-retail receipt warning

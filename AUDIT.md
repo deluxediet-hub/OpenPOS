@@ -66,7 +66,8 @@ A 2025 national policy proposed raising the threshold to 21, but reporting descr
 - Payment is recorded as Cash, M-Pesa, already paid/other, or pay later. Cash/M-Pesa stock payments reduce the corresponding expected till balance, and an unpaid delivery can be marked paid later.
 - Receiving updates quantity, stock movement history and audit history transactionally without allowing staff to alter cost.
 - Supplier directory stores contact/address/KRA details.
-- End-of-day stocktake freezes sales and presents one item at a time. The operator can jump through a product dropdown, move previous/next, and all entered values auto-save while the active quantity remains auto-selected. Completion stores signed quantity variance plus inventory-cost and potential-retail impact. These are deliberately shown beside—not folded into—expected cash, because changing expected cash would conceal whether a discrepancy is an unrecorded sale, theft, breakage or counting error.
+- End-of-day stocktake freezes sales and presents one item at a time. The operator can jump through a product dropdown, move previous/next, and all entered values auto-save while the active quantity remains auto-selected. Completion stores signed quantity variance plus inventory-cost and potential-retail impact.
+- Final reconciliation keeps each source visible, then calculates `total tender variance = Cash + M-Pesa + Card/EDC variance` and `overall operational variance = tender variance + stock variance at retail`. Thus KSh 1,500 extra tender plus KSh 1,500 missing stock produces overall zero but is labelled **RECONCILED — POSSIBLE UNRECORDED SALES**, not falsely “fully balanced.” A note is mandatory whenever any component exceeds the owner-set tolerance.
 - Full stocktakes calculate variance, post all corrections together and audit the operator. Direct quick corrections remain owner-only.
 - Low-stock and stock-value reporting remains available.
 

@@ -289,10 +289,12 @@ const Manager2 = (() => {
               <div class="stat"><div class="l">Opening float</div><div class="v">${fmt(cur.shift.opening_float)}</div></div>
               <div class="stat"><div class="l">Cash sales</div><div class="v" style="color:var(--green)">${fmt(d.cash_sales)}</div></div>
               <div class="stat"><div class="l">M-Pesa sales</div><div class="v" style="color:var(--green)">${fmt(d.mpesa_sales || 0)}</div></div>
+              <div class="stat"><div class="l">Card sales</div><div class="v" style="color:var(--green)">${fmt(d.card_sales || 0)}</div></div>
               <div class="stat"><div class="l">Cash expenses</div><div class="v" style="color:var(--red)">−${fmt(d.cash_expenses || 0)}</div></div>
               <div class="stat"><div class="l">M-Pesa expenses</div><div class="v" style="color:var(--red)">−${fmt(d.mpesa_expenses || 0)}</div></div>
               <div class="stat"><div class="l">Expected cash</div><div class="v">${fmt(d.expected)}</div></div>
               <div class="stat"><div class="l">Expected M-Pesa</div><div class="v">${fmt(d.expected_mpesa || 0)}</div></div>
+              <div class="stat"><div class="l">Expected Card/EDC</div><div class="v">${fmt(d.expected_card || 0)}</div></div>
             </div>
             ${cur.stocktake ? `<div class="card" style="margin-top:12px;background:#101820"><div class="card-b">
               <div class="row"><b>Stocktake financial variance</b><span class="grow"></span><span class="tag ${cur.stocktake.cost_variance < 0 ? 'bad' : cur.stocktake.cost_variance > 0 ? 'warn' : 'ok'}">${esc(cur.stocktake.reference)}</span></div>
@@ -306,9 +308,10 @@ const Manager2 = (() => {
               ${openCount ? `<button class="btn primary" id="continueStocktake">Continue stocktake</button>` : `<button class="btn primary" id="closeShift">Close till &amp; reconcile</button>`}
             </div>`;
           })() : `<p class="muted">Open the till each morning. Enter the physical cash float and current M-Pesa business balance before selling.</p>
-            <div class="grid3" style="max-width:700px">
+            <div class="grid" style="grid-template-columns:repeat(4,minmax(0,1fr));max-width:920px">
               <div><label class="fld">Opening cash (${sym()})</label><input class="inp" id="fl" type="number" step="0.01" value="5000"></div>
               <div><label class="fld">Opening M-Pesa balance (${sym()})</label><input class="inp" id="fmp" type="number" step="0.01" value="0"></div>
+              <div><label class="fld">Opening Card/EDC batch (${sym()})</label><input class="inp" id="fcard" type="number" step="0.01" value="0"></div>
               <div style="align-self:end"><button class="btn primary" id="openShift">Open till for sales</button></div>
             </div>`}
         </div>
@@ -317,7 +320,9 @@ const Manager2 = (() => {
         <div class="scroll-x"><table class="tbl">
           <thead><tr><th>Opened</th><th>Closed</th><th>By</th><th class="right">Cash float</th>
             <th class="right">Cash expected</th><th class="right">Cash counted</th><th class="right">Cash variance</th>
-            <th class="right">M-Pesa expected</th><th class="right">M-Pesa actual</th><th class="right">M-Pesa variance</th></tr></thead>
+            <th class="right">M-Pesa expected</th><th class="right">M-Pesa actual</th><th class="right">M-Pesa variance</th>
+            <th class="right">Card expected</th><th class="right">Card actual</th><th class="right">Card variance</th>
+            <th class="right">Stock retail variance</th><th class="right">Overall</th><th>Status</th></tr></thead>
           <tbody>${list.map((s) => `<tr>
             <td class="small mono">${s.opened_at}</td>
             <td class="small mono">${s.closed_at || '<i>open</i>'}</td>
@@ -330,7 +335,11 @@ const Manager2 = (() => {
             <td class="right mono">${s.expected_mpesa == null ? '—' : fmt(s.expected_mpesa)}</td>
             <td class="right mono">${s.counted_mpesa == null ? '—' : fmt(s.counted_mpesa)}</td>
             <td class="right">${s.mpesa_variance == null ? '—' : `<span class="tag ${s.mpesa_variance === 0 ? 'ok' : 'warn'}">${s.mpesa_variance > 0 ? '+' : ''}${fmt(s.mpesa_variance)}</span>`}</td>
-          </tr>`).join('') || '<tr><td colspan="10" class="empty">No shifts recorded.</td></tr>'}</tbody></table></div>
+            <td class="right mono">${s.expected_card == null ? '—' : fmt(s.expected_card)}</td><td class="right mono">${s.counted_card == null ? '—' : fmt(s.counted_card)}</td>
+            <td class="right mono">${s.card_variance == null ? '—' : fmt(s.card_variance)}</td><td class="right mono">${s.stock_retail_variance == null ? '—' : fmt(s.stock_retail_variance)}</td>
+            <td class="right mono"><b>${s.overall_variance == null ? '—' : fmt(s.overall_variance)}</b></td>
+            <td><span class="tag ${s.reconciliation_status === 'FULLY BALANCED' ? 'ok' : s.reconciliation_status && s.reconciliation_status.startsWith('RECONCILED') ? 'warn' : 'bad'}">${esc(s.reconciliation_status || (s.status === 'open' ? 'OPEN' : '—'))}</span></td>
+          </tr>`).join('') || '<tr><td colspan="16" class="empty">No shifts recorded.</td></tr>'}</tbody></table></div>
       </div>`;
 
     if (cur.shift) {
@@ -354,48 +363,83 @@ const Manager2 = (() => {
       if (continueStocktake) continueStocktake.onclick = () => Retail.stocktakes(body);
       const closeShift = body.querySelector('#closeShift');
       if (closeShift) closeShift.onclick = () => {
-        const d = cur.drawer;
+        const d = cur.drawer, stockRetail = (cur.stocktake || {}).retail_variance || 0;
+        const tolerance = Math.max(0, Number(State.settings.reconciliation_tolerance || 20) * 100);
+        const critical = Math.max(tolerance, Number(State.settings.reconciliation_critical_threshold || 500) * 100);
         modal({
-          title: 'Close till — end-of-day reconciliation',
-          body: `<div class="grid2">
-              <div><label class="fld">Expected cash</label><input class="inp mono" value="${(d.expected / 100).toFixed(2)}" disabled></div>
-              <div><label class="fld">Cash physically counted (${sym()})</label><input class="inp mono" id="cnt" type="number" step="0.01" value="${(d.expected / 100).toFixed(2)}"></div>
-              <div><label class="fld">Expected M-Pesa balance</label><input class="inp mono" value="${((d.expected_mpesa || 0) / 100).toFixed(2)}" disabled></div>
-              <div><label class="fld">Actual M-Pesa balance (${sym()})</label><input class="inp mono" id="cntMpesa" type="number" step="0.01" value="${((d.expected_mpesa || 0) / 100).toFixed(2)}"></div>
+          title: 'Close shift / till — reconcile operations', wide: true,
+          body: `<div class="grid3">
+              <div><label class="fld">Expected cash</label><input class="inp mono" value="${(d.expected / 100).toFixed(2)}" disabled>
+                <label class="fld" style="margin-top:8px">Cash physically counted</label><input class="inp mono" id="cnt" type="number" step="0.01" value="${(d.expected / 100).toFixed(2)}"></div>
+              <div><label class="fld">Expected M-Pesa balance</label><input class="inp mono" value="${((d.expected_mpesa || 0) / 100).toFixed(2)}" disabled>
+                <label class="fld" style="margin-top:8px">Actual M-Pesa balance</label><input class="inp mono" id="cntMpesa" type="number" step="0.01" value="${((d.expected_mpesa || 0) / 100).toFixed(2)}"></div>
+              <div><label class="fld">Expected Card/EDC batch</label><input class="inp mono" value="${((d.expected_card || 0) / 100).toFixed(2)}" disabled>
+                <label class="fld" style="margin-top:8px">Actual Card/EDC batch</label><input class="inp mono" id="cntCard" type="number" step="0.01" value="${((d.expected_card || 0) / 100).toFixed(2)}"></div>
             </div>
             <div class="card" style="background:#101820;margin-top:12px"><div class="card-b">
-              <div class="tline"><span>Cash variance</span><b id="vr">KSh 0.00</b></div>
-              <div class="tline"><span>M-Pesa variance</span><b id="vrMpesa">KSh 0.00</b></div></div></div>
-            <div style="margin-top:12px"><label class="fld">Note</label>
-              <input class="inp" id="sn" placeholder="e.g. explained by a missed payout"></div>`,
-          footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Close shift</button>`
+              <div class="grid3"><div class="tline"><span>Cash variance</span><b id="vr">—</b></div>
+                <div class="tline"><span>M-Pesa variance</span><b id="vrMpesa">—</b></div>
+                <div class="tline"><span>Card variance</span><b id="vrCard">—</b></div></div>
+              <div class="tline" style="margin-top:8px"><span>Total tender variance</span><b id="vrTender">—</b></div>
+              <div class="tline"><span>Stock variance at retail</span><b id="vrStock">${fmt(stockRetail)}</b></div>
+              <div class="tline total"><span>Overall operational variance</span><b id="vrOverall">—</b></div>
+              <div class="center" style="margin-top:10px"><span class="tag" id="vrStatus">—</span></div>
+              <p class="tiny muted" style="margin:9px 0 0">Overall = Cash + M-Pesa + Card variance + stock variance at retail. Offsetting differences can reveal sales that were made but not entered.</p>
+            </div></div>
+            <div style="margin-top:12px"><label class="fld">Reconciliation note <span id="noteRequired" style="color:var(--red)"></span></label>
+              <input class="inp" id="sn" placeholder="Required when anything differs — e.g. likely missed sales during rush"></div>`,
+          footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Close till</button>`
         });
         const ov = document.querySelector('#modalRoot .ov');
-        const cnt = ov.querySelector('#cnt'), cntMpesa = ov.querySelector('#cntMpesa');
+        const cnt = ov.querySelector('#cnt'), cntMpesa = ov.querySelector('#cntMpesa'), cntCard = ov.querySelector('#cntCard');
+        let current = null;
         const paintVariance = (el, value) => {
           el.textContent = (value > 0 ? '+' : value < 0 ? '−' : '') + fmt(Math.abs(value));
-          el.style.color = value === 0 ? 'var(--green)' : 'var(--red)';
+          el.style.color = Math.abs(value) <= tolerance ? 'var(--green)' : 'var(--red)';
+        };
+        const classify = (cash, mpesa, card) => {
+          const tender = cash + mpesa + card, overall = tender + stockRetail;
+          const components = [cash, mpesa, card, stockRetail];
+          let status;
+          if (components.every((v) => Math.abs(v) <= tolerance)) status = 'FULLY BALANCED';
+          else if (Math.abs(overall) <= tolerance && tender > tolerance && stockRetail < -tolerance) status = 'RECONCILED — POSSIBLE UNRECORDED SALES';
+          else if (Math.abs(overall) <= tolerance) status = 'RECONCILED — OFFSETTING VARIANCES';
+          else if (overall < -critical) status = 'CRITICAL SHORTAGE';
+          else if (overall > critical) status = 'CRITICAL OVERAGE';
+          else status = overall < 0 ? 'SHORTAGE — INVESTIGATE' : 'OVERAGE — INVESTIGATE';
+          return { cash, mpesa, card, tender, overall, status };
         };
         const upd = () => {
-          paintVariance(ov.querySelector('#vr'), Math.round((Number(cnt.value) || 0) * 100) - d.expected);
-          paintVariance(ov.querySelector('#vrMpesa'), Math.round((Number(cntMpesa.value) || 0) * 100) - (d.expected_mpesa || 0));
+          current = classify(Math.round((Number(cnt.value) || 0) * 100) - d.expected,
+            Math.round((Number(cntMpesa.value) || 0) * 100) - (d.expected_mpesa || 0),
+            Math.round((Number(cntCard.value) || 0) * 100) - (d.expected_card || 0));
+          paintVariance(ov.querySelector('#vr'), current.cash); paintVariance(ov.querySelector('#vrMpesa'), current.mpesa);
+          paintVariance(ov.querySelector('#vrCard'), current.card); paintVariance(ov.querySelector('#vrTender'), current.tender);
+          paintVariance(ov.querySelector('#vrStock'), stockRetail); paintVariance(ov.querySelector('#vrOverall'), current.overall);
+          const status = ov.querySelector('#vrStatus'); status.textContent = current.status;
+          status.className = 'tag ' + (current.status === 'FULLY BALANCED' ? 'ok' : current.status.startsWith('RECONCILED') ? 'warn' : 'bad');
+          ov.querySelector('#noteRequired').textContent = current.status === 'FULLY BALANCED' ? '(optional)' : '* required';
         };
-        cnt.oninput = upd; cntMpesa.oninput = upd; upd();
+        cnt.oninput = upd; cntMpesa.oninput = upd; cntCard.oninput = upd; upd();
         ov.querySelector('[data-no]').onclick = closeModal;
         ov.querySelector('[data-yes]').onclick = async () => {
+          const note = ov.querySelector('#sn').value.trim();
+          if (current.status !== 'FULLY BALANCED' && !note) return toast('Add a reconciliation note for the variance', 'err');
           try {
-            const res = await api(`/api/shifts/${cur.shift.id}/close`, {
-              body: { counted_cash: Number(cnt.value), counted_mpesa: Number(cntMpesa.value), notes: ov.querySelector('#sn').value } });
+            const res = await api(`/api/shifts/${cur.shift.id}/close`, { body: {
+              counted_cash: Number(cnt.value), counted_mpesa: Number(cntMpesa.value), counted_card: Number(cntCard.value),
+              reconciliation_note: note, notes: note } });
             closeModal(); await loadBootstrap(); drawer(body);
-            const exact = res.variance === 0 && res.mpesa_variance === 0;
-            toast(`Till closed · cash ${fmt(res.variance)} · M-Pesa ${fmt(res.mpesa_variance)}`, exact ? 'ok' : 'err');
+            toast(`Till closed · ${res.reconciliation.status} · overall ${fmt(res.reconciliation.overall_variance)}`,
+              res.reconciliation.status === 'FULLY BALANCED' ? 'ok' : 'err');
           } catch (e) { toast(e.message, 'err'); }
         };
       };
     } else {
       body.querySelector('#openShift').onclick = async () => {
         try {
-          await api('/api/shifts', { body: { opening_float: Number(body.querySelector('#fl').value), opening_mpesa: Number(body.querySelector('#fmp').value) } });
+          await api('/api/shifts', { body: { opening_float: Number(body.querySelector('#fl').value),
+            opening_mpesa: Number(body.querySelector('#fmp').value), opening_card: Number(body.querySelector('#fcard').value) } });
           await loadBootstrap(); toast('Till opened — ready for sales', 'ok');
           if (State.user.role === 'seller') navigate('tables'); else drawer(body);
         } catch (e) { toast(e.message, 'err'); }

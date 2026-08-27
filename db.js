@@ -223,12 +223,21 @@ CREATE TABLE IF NOT EXISTS shifts (
   closed_by      INTEGER REFERENCES users(id),
   opening_float  INTEGER NOT NULL DEFAULT 0,
   opening_mpesa  INTEGER NOT NULL DEFAULT 0,
+  opening_card   INTEGER NOT NULL DEFAULT 0,
   counted_cash   INTEGER,
   expected_cash  INTEGER,
   variance       INTEGER,
   counted_mpesa  INTEGER,
   expected_mpesa INTEGER,
   mpesa_variance INTEGER,
+  counted_card   INTEGER,
+  expected_card  INTEGER,
+  card_variance  INTEGER,
+  tender_variance INTEGER,
+  stock_retail_variance INTEGER,
+  overall_variance INTEGER,
+  reconciliation_status TEXT,
+  reconciliation_note TEXT,
   notes          TEXT,
   status         TEXT NOT NULL DEFAULT 'open'   -- open|reconciling|closed
 );
@@ -384,9 +393,18 @@ function migrate() {
   add('orders', 'age_verified', 'age_verified INTEGER NOT NULL DEFAULT 0');
   add('orders', 'age_check_note', 'age_check_note TEXT');
   add('shifts', 'opening_mpesa', 'opening_mpesa INTEGER NOT NULL DEFAULT 0');
+  add('shifts', 'opening_card', 'opening_card INTEGER NOT NULL DEFAULT 0');
   add('shifts', 'counted_mpesa', 'counted_mpesa INTEGER');
   add('shifts', 'expected_mpesa', 'expected_mpesa INTEGER');
   add('shifts', 'mpesa_variance', 'mpesa_variance INTEGER');
+  add('shifts', 'counted_card', 'counted_card INTEGER');
+  add('shifts', 'expected_card', 'expected_card INTEGER');
+  add('shifts', 'card_variance', 'card_variance INTEGER');
+  add('shifts', 'tender_variance', 'tender_variance INTEGER');
+  add('shifts', 'stock_retail_variance', 'stock_retail_variance INTEGER');
+  add('shifts', 'overall_variance', 'overall_variance INTEGER');
+  add('shifts', 'reconciliation_status', 'reconciliation_status TEXT');
+  add('shifts', 'reconciliation_note', 'reconciliation_note TEXT');
   add('cash_payouts', 'method', "method TEXT NOT NULL DEFAULT 'cash'");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS ux_menu_sku ON menu_items(sku) WHERE sku IS NOT NULL AND sku != '';
@@ -557,6 +575,8 @@ const DEFAULT_SETTINGS = {
   age_verification_required: '0',
   prevent_negative_stock: '1',
   barcode_scanner_enabled: '0',
+  reconciliation_tolerance: '20',
+  reconciliation_critical_threshold: '500',
   licence_number: '',
   licence_expiry: '',
   sales_hours_enforced: '0',

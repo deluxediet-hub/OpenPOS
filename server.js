@@ -1440,6 +1440,8 @@ function drawerFigures(s) {
     WHERE method='cash' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
   const mpesaSales = g(`SELECT COALESCE(SUM(amount),0) v FROM payments
     WHERE method='mpesa' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
+  const cardSales = g(`SELECT COALESCE(SUM(amount),0) v FROM payments
+    WHERE method='card' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
   const cashRefunds = -g(`SELECT COALESCE(SUM(amount),0) v FROM payments
     WHERE method='refund' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
   const cashExpenses = g(`SELECT COALESCE(SUM(amount),0) v FROM cash_payouts
@@ -1448,18 +1450,20 @@ function drawerFigures(s) {
     WHERE shift_id=? AND method='mpesa' AND created_at BETWEEN ? AND ?`, s.id, a, b);
   const expected = domain.expectedCash({ openingFloat: s.opening_float, cashSales, cashRefunds, payouts: cashExpenses });
   const expectedMpesa = (s.opening_mpesa || 0) + mpesaSales - mpesaExpenses;
-  return { cash_sales: cashSales, mpesa_sales: mpesaSales, cash_refunds: cashRefunds,
+  const expectedCard = (s.opening_card || 0) + cardSales;
+  return { cash_sales: cashSales, mpesa_sales: mpesaSales, card_sales: cardSales, cash_refunds: cashRefunds,
     payouts: cashExpenses + mpesaExpenses, cash_expenses: cashExpenses, mpesa_expenses: mpesaExpenses,
-    expected, expected_mpesa: expectedMpesa };
+    expected, expected_mpesa: expectedMpesa, expected_card: expectedCard };
 }
 app.post('/api/shifts', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const open = db.prepare("SELECT * FROM shifts WHERE status IN ('open','reconciling')").get();
   if (open) return bad(res, 'A till is already open or reconciling — close it first');
   const float = Math.round(Number(req.body.opening_float || 0) * 100);
   const openingMpesa = Math.round(Number(req.body.opening_mpesa || 0) * 100);
-  const r = db.prepare('INSERT INTO shifts(opened_by,opening_float,opening_mpesa,notes) VALUES(?,?,?,?)')
-    .run(req.user.id, float, openingMpesa, req.body.notes || null);
-  audit(req.user, 'shift.open', `cash KSh${(float / 100).toFixed(2)}, M-Pesa KSh${(openingMpesa / 100).toFixed(2)}`);
+  const openingCard = Math.round(Number(req.body.opening_card || 0) * 100);
+  const r = db.prepare('INSERT INTO shifts(opened_by,opening_float,opening_mpesa,opening_card,notes) VALUES(?,?,?,?,?)')
+    .run(req.user.id, float, openingMpesa, openingCard, req.body.notes || null);
+  audit(req.user, 'shift.open', `cash KSh${(float / 100).toFixed(2)}, M-Pesa KSh${(openingMpesa / 100).toFixed(2)}, Card batch KSh${(openingCard / 100).toFixed(2)}`);
   broadcast('sales');
   res.json(db.prepare('SELECT * FROM shifts WHERE id=?').get(r.lastInsertRowid));
 });
@@ -1468,8 +1472,10 @@ app.post('/api/shifts/:id/close', requireAuth, requireRole('seller', 'cashier', 
   if (!s) return bad(res, 'Shift not found', 404);
   if (s.status === 'closed') return bad(res, 'Shift already closed');
   if (req.body.counted_cash == null) return bad(res, 'Counted cash is required');
-  if (getSetting('business_type') === 'wines_spirits' && req.body.counted_mpesa == null) return bad(res, 'M-Pesa balance is required');
-  if (getSetting('business_type') === 'wines_spirits') {
+  const retailMode = getSetting('business_type') === 'wines_spirits';
+  if (retailMode && req.body.counted_mpesa == null) return bad(res, 'M-Pesa balance is required');
+  if (retailMode && req.body.counted_card == null) return bad(res, 'Card/EDC batch total is required');
+  if (retailMode) {
     const empty = db.prepare(`SELECT o.id,o.number FROM orders o WHERE o.status='open'
       AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id=o.id AND oi.status!='void')`).all();
     for (const order of empty) {
@@ -1479,22 +1485,51 @@ app.post('/api/shifts/:id/close', requireAuth, requireRole('seller', 'cashier', 
   }
   const openSales = db.prepare("SELECT COUNT(*) c FROM orders WHERE status IN ('open','billed')").get().c;
   if (openSales) return bad(res, `Close or void ${openSales} open sale(s) before closing the till`);
-  if (getSetting('business_type') === 'wines_spirits' && !db.prepare("SELECT id FROM stock_counts WHERE status='completed' AND completed_at>=? ORDER BY id DESC LIMIT 1").get(s.opened_at))
-    return bad(res, 'Complete the end-of-day stocktake before closing the till');
+  const stocktake = retailMode ? db.prepare("SELECT * FROM stock_counts WHERE status='completed' AND completed_at>=? ORDER BY id DESC LIMIT 1").get(s.opened_at) : null;
+  if (retailMode && !stocktake) return bad(res, 'Complete the end-of-day stocktake before closing the till');
+
   const counted = Math.round(Number(req.body.counted_cash) * 100);
   const countedMpesa = Math.round(Number(req.body.counted_mpesa || 0) * 100);
+  const countedCard = Math.round(Number(req.body.counted_card || 0) * 100);
   const fig = drawerFigures(s);
   const variance = domain.drawerVariance(counted, fig.expected);
   const mpesaVariance = countedMpesa - fig.expected_mpesa;
-  db.prepare(`UPDATE shifts SET closed_at=datetime('now','localtime'),closed_by=?,counted_cash=?,
-    expected_cash=?,variance=?,counted_mpesa=?,expected_mpesa=?,mpesa_variance=?,status='closed',notes=? WHERE id=?`)
+  const cardVariance = countedCard - fig.expected_card;
+  const tenderVariance = variance + mpesaVariance + cardVariance;
+  const stockRetailVariance = stocktake ? stocktake.retail_variance : 0;
+  const overallVariance = tenderVariance + stockRetailVariance;
+  const settings = getSettings();
+  const tolerance = Math.max(0, Math.round(Number(settings.reconciliation_tolerance || 20) * 100));
+  const critical = Math.max(tolerance, Math.round(Number(settings.reconciliation_critical_threshold || 500) * 100));
+  const components = [variance, mpesaVariance, cardVariance, stockRetailVariance];
+  let reconciliationStatus;
+  if (components.every((v) => Math.abs(v) <= tolerance)) reconciliationStatus = 'FULLY BALANCED';
+  else if (Math.abs(overallVariance) <= tolerance && tenderVariance > tolerance && stockRetailVariance < -tolerance)
+    reconciliationStatus = 'RECONCILED — POSSIBLE UNRECORDED SALES';
+  else if (Math.abs(overallVariance) <= tolerance) reconciliationStatus = 'RECONCILED — OFFSETTING VARIANCES';
+  else if (overallVariance < -critical) reconciliationStatus = 'CRITICAL SHORTAGE';
+  else if (overallVariance > critical) reconciliationStatus = 'CRITICAL OVERAGE';
+  else reconciliationStatus = overallVariance < 0 ? 'SHORTAGE — INVESTIGATE' : 'OVERAGE — INVESTIGATE';
+  const reconciliationNote = String(req.body.reconciliation_note || req.body.notes || '').trim();
+  if (reconciliationStatus !== 'FULLY BALANCED' && !reconciliationNote)
+    return bad(res, 'Add a reconciliation note explaining the variance or possible missed sales');
+
+  db.prepare(`UPDATE shifts SET closed_at=datetime('now','localtime'),closed_by=?,counted_cash=?,expected_cash=?,variance=?,
+    counted_mpesa=?,expected_mpesa=?,mpesa_variance=?,counted_card=?,expected_card=?,card_variance=?,tender_variance=?,
+    stock_retail_variance=?,overall_variance=?,reconciliation_status=?,reconciliation_note=?,status='closed',notes=? WHERE id=?`)
     .run(req.user.id, counted, fig.expected, variance, countedMpesa, fig.expected_mpesa, mpesaVariance,
-      req.body.notes || s.notes, s.id);
-  audit(req.user, 'shift.close', `cash expected KSh${(fig.expected / 100).toFixed(2)}, counted KSh${(counted / 100).toFixed(2)}, variance KSh${(variance / 100).toFixed(2)}; M-Pesa expected KSh${(fig.expected_mpesa / 100).toFixed(2)}, counted KSh${(countedMpesa / 100).toFixed(2)}, variance KSh${(mpesaVariance / 100).toFixed(2)}`);
+      countedCard, fig.expected_card, cardVariance, tenderVariance, stockRetailVariance, overallVariance,
+      reconciliationStatus, reconciliationNote || null, req.body.notes || s.notes, s.id);
+  audit(req.user, 'shift.close', `Cash ${variance / 100}, M-Pesa ${mpesaVariance / 100}, Card ${cardVariance / 100}, tender ${tenderVariance / 100}, stock retail ${stockRetailVariance / 100}, overall ${overallVariance / 100} — ${reconciliationStatus}${reconciliationNote ? ' — ' + reconciliationNote : ''}`);
   if (variance) audit(req.user, 'drawer.variance', `Cash KSh${(variance / 100).toFixed(2)} ${variance > 0 ? 'over' : 'short'}`);
   if (mpesaVariance) audit(req.user, 'mpesa.variance', `KSh${(mpesaVariance / 100).toFixed(2)} ${mpesaVariance > 0 ? 'over' : 'short'}`);
+  if (cardVariance) audit(req.user, 'card.variance', `KSh${(cardVariance / 100).toFixed(2)} ${cardVariance > 0 ? 'over' : 'short'}`);
+  if (stockRetailVariance) audit(req.user, 'stock.retail_variance', `KSh${(stockRetailVariance / 100).toFixed(2)}`);
   broadcast('sales');
-  res.json({ ...db.prepare('SELECT * FROM shifts WHERE id=?').get(s.id), drawer: fig });
+  res.json({ ...db.prepare('SELECT * FROM shifts WHERE id=?').get(s.id), drawer: fig, stocktake,
+    reconciliation: { cash_variance: variance, mpesa_variance: mpesaVariance, card_variance: cardVariance,
+      tender_variance: tenderVariance, stock_retail_variance: stockRetailVariance, overall_variance: overallVariance,
+      status: reconciliationStatus, tolerance } });
 });
 app.post('/api/shifts/:id/payout', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
   const s = db.prepare('SELECT * FROM shifts WHERE id=?').get(req.params.id);
@@ -1539,7 +1574,11 @@ app.get('/api/shift-clearing', requireAuth, requireRole('seller', 'cashier', 'ma
   let drawer = null;
   if (s) drawer = s.status !== 'closed' ? drawerFigures(s)
     : { expected: s.expected_cash, counted: s.counted_cash, variance: s.variance,
-      expected_mpesa: s.expected_mpesa, counted_mpesa: s.counted_mpesa, mpesa_variance: s.mpesa_variance, payouts };
+      expected_mpesa: s.expected_mpesa, counted_mpesa: s.counted_mpesa, mpesa_variance: s.mpesa_variance,
+      expected_card: s.expected_card, counted_card: s.counted_card, card_variance: s.card_variance,
+      tender_variance: s.tender_variance, stock_retail_variance: s.stock_retail_variance,
+      overall_variance: s.overall_variance, reconciliation_status: s.reconciliation_status,
+      reconciliation_note: s.reconciliation_note, payouts };
   res.json({ shift: s || null, by_method: byMethod, by_station: byStation, by_category: byCategory,
     tips, payouts, covers, units: byCategory.reduce((n, x) => n + Number(x.units || 0), 0), orders: ordersN,
     complimentary, complimentary_value: complimentary.reduce((n, x) => n + x.retail_value, 0),
