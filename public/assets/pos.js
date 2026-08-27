@@ -157,7 +157,7 @@ const Pos = (() => {
         <span class="grow"></span>
         ${retail ? '' : `<button class="btn sm" id="transfer">Move table</button>
         <button class="btn sm" id="peopleBtn">Guests: ${o.people}</button>`}
-        ${retail && ['manager', 'admin'].includes(State.user.role) ? '<button class="btn sm ghost" id="complimentaryBtn">🎁 Complimentary</button>' : ''}
+        ${retail ? '<button class="btn sm ghost" id="complimentaryBtn">🎁 Complimentary</button>' : ''}
         ${retail && !['manager', 'admin'].includes(State.user.role) ? '' : `<button class="btn sm" id="discBtn">Discount</button>
         <button class="btn sm red" id="voidBtn">Void order</button>`}
       </div>
@@ -334,6 +334,11 @@ const Pos = (() => {
       <div class="grid2" style="margin-top:12px"><div><label class="fld">Reason</label><select class="inp" id="compReason">
         <option>Owner consumption</option><option>Staff complimentary</option><option>Friends / guests</option><option>Promotion / tasting</option><option>Other</option></select></div>
         <div><label class="fld">Recipient / note</label><input class="inp" id="compRecipient" placeholder="Name or short explanation"></div></div>
+      ${State.user.role === 'seller' ? `<div class="card" style="margin-top:12px;border-color:var(--amber);background:#211b10"><div class="card-b">
+        <b>Remote owner authorization</b><div class="tiny muted" style="margin:4px 0 10px">Ask the owner for a one-time complimentary code. The owner login PIN is never shared. Reports record both people.</div>
+        <div class="grid2"><div><label class="fld">One-time owner code</label><input class="inp mono" id="compAuthCode" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></div>
+          <div><label class="fld">Authorization reference</label><input class="inp" id="compAuthRef" placeholder="e.g. Phone call 14:20 / WhatsApp"></div></div>
+      </div></div>` : `<div class="row" style="margin-top:12px"><span class="tiny muted">Need to authorize a seller remotely?</span><button class="btn xs ghost" id="generateCompCode">Generate one-time seller code</button><span class="tiny muted" id="compCodeOut"></span></div>`}
       <div class="card" style="margin-top:12px"><div class="card-b"><div class="tline"><span>Retail value given</span><b id="compValue">—</b></div>
         <div class="tiny muted" id="compEffect" style="margin-top:6px"></div></div></div>`,
       footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Record complimentary</button>' });
@@ -360,6 +365,13 @@ const Pos = (() => {
     productSelect.onchange = rebuildMeasures;
     measured.onchange = () => { ov.querySelector('#compMeasureFields').classList.toggle('hidden', !measured.checked); update(); };
     measureSelect.onchange = () => { custom.value = ''; update(); }; custom.oninput = update; ov.querySelector('#compQty').oninput = update;
+    const generateCode = ov.querySelector('#generateCompCode');
+    if (generateCode) generateCode.onclick = async () => {
+      try {
+        const result = await api('/api/complimentary-codes', { body: { minutes: 30, note: 'Remote complimentary approval' } });
+        ov.querySelector('#compCodeOut').innerHTML = `<b class="mono" style="font-size:16px;color:var(--amber)">${result.code}</b> · valid 30 min, one use`;
+      } catch (e) { toast(e.message, 'err'); }
+    };
     ov.querySelector('[data-no]').onclick = closeModal;
     ov.querySelector('[data-yes]').onclick = async () => {
       const product = selectedProduct(), ml = chosenMl();
@@ -367,7 +379,9 @@ const Pos = (() => {
       try {
         const result = await api('/api/complimentaries', { body: { menu_item_id: product.id,
           qty: Number(ov.querySelector('#compQty').value), measure_ml: ml || null,
-          reason: ov.querySelector('#compReason').value, recipient: ov.querySelector('#compRecipient').value.trim() } });
+          reason: ov.querySelector('#compReason').value, recipient: ov.querySelector('#compRecipient').value.trim(),
+          authorization_code: ov.querySelector('#compAuthCode')?.value || null,
+          authorization_reference: ov.querySelector('#compAuthRef')?.value.trim() || null } });
         closeModal(); await loadBootstrap(); State.openOrderId = activeOrder() ? activeOrder().id : State.openOrderId;
         renderEditor(host); toast(`Complimentary recorded · ${fmt(result.retail_value)} retail value · no cash due`, 'ok');
       } catch (e) { toast(e.message, 'err'); }

@@ -201,9 +201,10 @@ const Manager = (() => {
             rows: expenses.map((x) => [(x.created_at || '').slice(0, 16), String(x.method || 'cash').toUpperCase(),
               (x.amount / 100).toFixed(2), x.reason || '', x.user_name || '—']) });
           if (selected.has('complimentary')) tables.push({ title: 'Complimentary issues',
-            head: ['Date', 'Product', 'Qty', 'Recipient', 'Reason', 'Retail value', 'Cost'], right: [2, 5, 6],
+            head: ['Date', 'Product', 'Qty', 'Recipient', 'Reason', 'Recorded / Authorized', 'Reference', 'Retail / Cost'], right: [2, 7],
             rows: comps.map((x) => [(x.created_at || '').slice(0, 16), x.item_name, String(x.qty), x.recipient || '—', x.reason,
-              (x.retail_value / 100).toFixed(2), (x.cost_value / 100).toFixed(2)]) });
+              `${x.created_by_name || '—'} / ${x.authorized_by_name || '—'}`, x.authorization_reference || '—',
+              `${(x.retail_value / 100).toFixed(2)} / ${(x.cost_value / 100).toFixed(2)}`]) });
           if (selected.has('stock')) tables.push({ title: 'Stock position', head: ['Product', 'On hand', 'Unit cost', 'Value'], right: [1, 2, 3],
             rows: stock.map((x) => [x.name, `${x.qty} ${x.unit}`, (x.cost / 100).toFixed(2), (x.qty * x.cost / 100).toFixed(2)]) });
           closeModal();
@@ -262,9 +263,10 @@ const Manager = (() => {
             }).join('') || `<tr><td colspan="${retail ? 6 : 7}" class="empty">No sales in this range.</td></tr>`}</tbody></table></div>
         </div>
         ${retail ? `<div class="card" style="margin-top:14px"><div class="card-h"><h3>Complimentary issues</h3><span class="grow"></span><span class="muted tiny">No cash is expected; inventory cost is tracked separately</span></div>
-          <div class="scroll-x"><table class="tbl"><thead><tr><th>When</th><th>Product</th><th>Qty</th><th>Recipient</th><th>Reason</th><th class="right">Retail value</th><th class="right">Cost</th></tr></thead>
+          <div class="scroll-x"><table class="tbl"><thead><tr><th>When</th><th>Product</th><th>Qty</th><th>Recipient</th><th>Reason</th><th>Recorded by</th><th>Authorized by</th><th>Reference</th><th class="right">Retail value</th><th class="right">Cost</th></tr></thead>
           <tbody>${comps.map((x) => `<tr><td class="nowrap muted">${(x.created_at || '').slice(0,16)}</td><td><b>${esc(x.item_name)}</b></td><td>${x.qty}</td>
-            <td>${esc(x.recipient || '—')}</td><td>${esc(x.reason)}</td><td class="right">${fmt(x.retail_value)}</td><td class="right">${fmt(x.cost_value)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">No complimentary stock issued in this period.</td></tr>'}</tbody></table></div></div>` : ''}`;
+            <td>${esc(x.recipient || '—')}</td><td>${esc(x.reason)}</td><td>${esc(x.created_by_name || '—')}</td><td><b>${esc(x.authorized_by_name || '—')}</b></td>
+            <td>${esc(x.authorization_reference || '—')}</td><td class="right">${fmt(x.retail_value)}</td><td class="right">${fmt(x.cost_value)}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">No complimentary stock issued in this period.</td></tr>'}</tbody></table></div></div>` : ''}`;
       window.__rptCsv = { s, items, waiters, cats, q, t };
     };
 

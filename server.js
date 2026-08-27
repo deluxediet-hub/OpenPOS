@@ -21,6 +21,7 @@ app.use(express.json({ limit: '3mb' })); // supports owner CSV onboarding/import
 /* --------------------------- session cookies --------------------------- */
 const SESSIONS = new Map(); // token -> {user_id}
 const LOGIN_ATTEMPTS = new Map(); // IP -> { failures, blockedUntil }; local brute-force protection
+const APPROVAL_ATTEMPTS = new Map(); // seller id -> failed remote owner approvals
 const COOKIE = 'pos_session';
 const genToken = () => require('crypto').randomBytes(24).toString('hex');
 
@@ -849,15 +850,47 @@ app.post('/api/stock/:id/adjust', requireAuth, requireRole('manager', 'admin'), 
 });
 
 /* ---------------- complimentary stock issues (no cash transaction) -------- */
+app.post('/api/complimentary-codes', requireAuth, requireRole('admin'), (req, res) => {
+  db.prepare("DELETE FROM complimentary_codes WHERE expires_at<datetime('now','localtime','-30 days')").run();
+  const code = String(require('crypto').randomInt(100000, 1000000));
+  const minutes = Math.max(5, Math.min(120, Number(req.body.minutes) || 30));
+  const expires = new Date(Date.now() + minutes * 60000);
+  const local = nowLocal(expires);
+  const id = db.prepare('INSERT INTO complimentary_codes(code_hash,owner_id,note,expires_at) VALUES(?,?,?,?)')
+    .run(hashPin(code), req.user.id, String(req.body.note || '').slice(0, 120) || null, local).lastInsertRowid;
+  audit(req.user, 'complimentary.code_create', `code #${id} expires ${local}`);
+  res.json({ id, code, expires_at: local, minutes });
+});
+
 app.get('/api/complimentaries', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const from = req.query.from || todayLocal(), to = req.query.to || from;
-  res.json(db.prepare(`SELECT ci.*,u.name created_by_name,si.unit stock_unit FROM complimentary_issues ci
-    LEFT JOIN users u ON u.id=ci.created_by LEFT JOIN stock_items si ON si.id=ci.stock_item_id
+  res.json(db.prepare(`SELECT ci.*,u.name created_by_name,a.name authorized_by_name,si.unit stock_unit FROM complimentary_issues ci
+    LEFT JOIN users u ON u.id=ci.created_by LEFT JOIN users a ON a.id=ci.authorized_by
+    LEFT JOIN stock_items si ON si.id=ci.stock_item_id
     WHERE ci.created_at BETWEEN ? AND ? ORDER BY ci.id DESC`).all(dayBounds(from), dayEnd(to)));
 });
 
-app.post('/api/complimentaries', requireAuth, requireRole('manager', 'admin'), (req, res) => {
+app.post('/api/complimentaries', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
   if (getSetting('business_type') !== 'wines_spirits') return bad(res, 'Complimentary issues are available in retail mode only');
+  let authorizer = req.user, approvalCode = null;
+  const authorizationReference = String(req.body.authorization_reference || '').trim();
+  if (req.user.role === 'seller') {
+    const state = APPROVAL_ATTEMPTS.get(req.user.id) || { failures: 0, blockedUntil: 0 };
+    if (state.blockedUntil > Date.now()) return bad(res, 'Too many failed owner approvals. Try again in one minute.', 429);
+    const supplied = String(req.body.authorization_code || '').trim();
+    approvalCode = db.prepare("SELECT * FROM complimentary_codes WHERE used_at IS NULL AND expires_at>=datetime('now','localtime') ORDER BY id DESC LIMIT 100").all()
+      .find((x) => verifyPin(supplied, x.code_hash));
+    authorizer = approvalCode ? db.prepare("SELECT id,name,role FROM users WHERE id=? AND role='admin' AND active=1").get(approvalCode.owner_id) : null;
+    if (!authorizer) {
+      state.failures += 1;
+      if (state.failures >= 5) { state.failures = 0; state.blockedUntil = Date.now() + 60000; }
+      APPROVAL_ATTEMPTS.set(req.user.id, state);
+      audit(req.user, 'complimentary.approval_failed', authorizationReference || 'No reference');
+      return bad(res, 'Valid one-time owner authorization code required', 403);
+    }
+    if (!authorizationReference) return bad(res, 'Enter how the owner authorized this issue (for example, phone call)', 400);
+    APPROVAL_ATTEMPTS.delete(req.user.id);
+  }
   const shift = ensureRetailTill(req.user);
   if (!shift) return bad(res, 'Finish till reconciliation before recording a complimentary issue');
   const m = db.prepare('SELECT * FROM menu_items WHERE id=?').get(Number(req.body.menu_item_id));
@@ -881,6 +914,11 @@ app.post('/api/complimentaries', requireAuth, requireRole('manager', 'admin'), (
   const retailValue = Math.round(m.price * priceFactor * qty), costValue = Math.round(m.cost * stockFactor * qty);
   let id;
   const tx = db.transaction(() => {
+    if (approvalCode) {
+      const used = db.prepare("UPDATE complimentary_codes SET used_at=datetime('now','localtime'),used_by=? WHERE id=? AND used_at IS NULL")
+        .run(req.user.id, approvalCode.id);
+      if (used.changes !== 1) throw new Error('Owner authorization code was already used');
+    }
     const deducted = recipe.deduction_mode === 'count' ? 0 : 1;
     if (deducted) {
       db.prepare('UPDATE stock_items SET qty=qty-? WHERE id=?').run(stockQty, recipe.id);
@@ -888,11 +926,12 @@ app.post('/api/complimentaries', requireAuth, requireRole('manager', 'admin'), (
         .run(recipe.id, -stockQty, `Complimentary: ${reason}${recipient ? ' · ' + recipient : ''}`, req.user.id);
     }
     id = db.prepare(`INSERT INTO complimentary_issues(menu_item_id,item_name,qty,measure_ml,stock_factor,
-      retail_value,cost_value,stock_item_id,stock_qty,deducted,reason,recipient,shift_id,created_by)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(m.id, itemName, qty, measureMl || null, stockFactor,
-      retailValue, costValue, recipe.id, stockQty, deducted, reason, recipient || null, shift.id, req.user.id).lastInsertRowid;
+      retail_value,cost_value,stock_item_id,stock_qty,deducted,reason,recipient,shift_id,created_by,authorized_by,authorization_reference)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(m.id, itemName, qty, measureMl || null, stockFactor,
+      retailValue, costValue, recipe.id, stockQty, deducted, reason, recipient || null, shift.id, req.user.id,
+      authorizer.id, authorizationReference || (req.user.id === authorizer.id ? 'Owner self-authorized' : null)).lastInsertRowid;
   }); tx();
-  audit(req.user, 'complimentary.issue', `${itemName} x${qty} · retail KSh${(retailValue / 100).toFixed(2)} · cost KSh${(costValue / 100).toFixed(2)} · ${reason}${recipient ? ' · ' + recipient : ''}`);
+  audit(req.user, 'complimentary.issue', `${itemName} x${qty} · retail KSh${(retailValue / 100).toFixed(2)} · cost KSh${(costValue / 100).toFixed(2)} · ${reason}${recipient ? ' · ' + recipient : ''} · recorded by ${req.user.name} · authorized by ${authorizer.name} (${authorizationReference || 'self'})`);
   broadcast('stock'); broadcast('sales');
   res.json(db.prepare('SELECT * FROM complimentary_issues WHERE id=?').get(id));
 });
@@ -1500,8 +1539,9 @@ app.get('/api/shift-clearing', requireAuth, requireRole('seller', 'cashier', 'ma
   const payouts = one(`SELECT COALESCE(SUM(amount),0) v FROM cash_payouts WHERE shift_id=?`);
   const covers = one(`SELECT COALESCE(SUM(people),0) v FROM orders WHERE shift_id=? AND status='closed'`);
   const ordersN = one(`SELECT COUNT(*) v FROM orders WHERE shift_id=? AND status='closed'`);
-  const complimentary = s ? db.prepare(`SELECT ci.*,u.name created_by_name FROM complimentary_issues ci
-    LEFT JOIN users u ON u.id=ci.created_by WHERE ci.shift_id=? ORDER BY ci.id`).all(s.id) : [];
+  const complimentary = s ? db.prepare(`SELECT ci.*,u.name created_by_name,a.name authorized_by_name FROM complimentary_issues ci
+    LEFT JOIN users u ON u.id=ci.created_by LEFT JOIN users a ON a.id=ci.authorized_by
+    WHERE ci.shift_id=? ORDER BY ci.id`).all(s.id) : [];
   let drawer = null;
   if (s) drawer = s.status !== 'closed' ? drawerFigures(s)
     : { expected: s.expected_cash, counted: s.counted_cash, variance: s.variance,

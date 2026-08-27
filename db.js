@@ -423,13 +423,24 @@ function migrate() {
       stock_item_id INTEGER REFERENCES stock_items(id), stock_qty REAL NOT NULL DEFAULT 0,
       deducted INTEGER NOT NULL DEFAULT 1, reason TEXT NOT NULL, recipient TEXT,
       shift_id INTEGER REFERENCES shifts(id), created_by INTEGER REFERENCES users(id),
+      authorized_by INTEGER REFERENCES users(id), authorization_reference TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
     );
     CREATE INDEX IF NOT EXISTS ix_complimentary_created ON complimentary_issues(created_at);
+    CREATE TABLE IF NOT EXISTS complimentary_codes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, code_hash TEXT NOT NULL,
+      owner_id INTEGER NOT NULL REFERENCES users(id), note TEXT,
+      expires_at TEXT NOT NULL, used_at TEXT, used_by INTEGER REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
   `);
   add('stock_count_items', 'added_qty', 'added_qty REAL NOT NULL DEFAULT 0');
   add('goods_receipts', 'payment_method', "payment_method TEXT NOT NULL DEFAULT 'pay_later'");
   add('goods_receipts', 'payment_status', "payment_status TEXT NOT NULL DEFAULT 'unpaid'");
+  add('complimentary_issues', 'authorized_by', 'authorized_by INTEGER REFERENCES users(id)');
+  add('complimentary_issues', 'authorization_reference', 'authorization_reference TEXT');
+  /* Existing owner-entered complementaries were self-authorized. */
+  db.prepare('UPDATE complimentary_issues SET authorized_by=created_by WHERE authorized_by IS NULL').run();
   const isRetailDatabase = (db.prepare("SELECT value FROM settings WHERE key='business_type'").get() || {}).value === 'wines_spirits';
   /* Retail policy: buyers are handled as adults at entry; checkout must stay fast. */
   if (isRetailDatabase) {

@@ -105,9 +105,10 @@ const Cashier = (() => {
               : { title: 'Sales by station', head: ['Station', 'Lines', 'Sales'], right: [1, 2],
                   rows: c.by_station.map((s2) => [s2.station.toUpperCase(), String(s2.lines), (s2.v / 100).toFixed(2)]) },
             ...((c.complimentary || []).length ? [{ title: 'Complimentary stock',
-              head: ['Product', 'Qty', 'Recipient', 'Reason', 'Retail value', 'Cost'], right: [1, 4, 5],
+              head: ['Product', 'Qty', 'Recipient', 'Reason', 'Recorded / Authorized', 'Reference', 'Retail / Cost'], right: [1, 6],
               rows: c.complimentary.map((x) => [x.item_name, String(x.qty), x.recipient || '—', x.reason,
-                (x.retail_value / 100).toFixed(2), (x.cost_value / 100).toFixed(2)]) }] : [])
+                `${x.created_by_name || '—'} / ${x.authorized_by_name || '—'}`, x.authorization_reference || '—',
+                `${(x.retail_value / 100).toFixed(2)} / ${(x.cost_value / 100).toFixed(2)}`]) }] : [])
           ],
           summary: State.settings.business_type === 'wines_spirits' ? [
             ['Business expenses', money2(c.payouts)],

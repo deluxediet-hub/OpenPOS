@@ -115,8 +115,21 @@ const mk = () => {
   ck('complimentary does not change expected cash', cashAfterComp === cashBeforeComp);
   r = await admin.get('/api/complimentaries?from=2000-01-01&to=2099-12-31');
   ck('complimentary appears in owner reports', r.status === 200 && r.data.some((x) => x.reason === 'Owner consumption'));
-  r = await seller.post('/api/complimentaries', { menu_item_id: product.id, qty: 1, reason: 'Not allowed' });
-  ck('seller cannot issue complimentary stock', r.status === 403);
+  r = await seller.post('/api/complimentaries', { menu_item_id: product.id, qty: 1, reason: 'Staff complimentary', recipient: 'Seller 1' });
+  ck('seller complimentary requires owner authorization', r.status === 403 && /owner authorization/i.test(r.data.error));
+  r = await seller.post('/api/complimentaries', { menu_item_id: product.id, qty: 1, reason: 'Staff complimentary', recipient: 'Seller 1',
+    authorization_code: '999999', authorization_reference: 'Phone call test' });
+  ck('wrong one-time owner code is rejected', r.status === 403);
+  const approval = await admin.post('/api/complimentary-codes', { minutes: 30, note: 'Test approval' });
+  ck('owner generates a one-time complimentary code', approval.status === 200 && /^\d{6}$/.test(approval.data.code));
+  r = await seller.post('/api/complimentaries', { menu_item_id: product.id, qty: 1, reason: 'Staff complimentary', recipient: 'Seller 1',
+    authorization_code: approval.data.code, authorization_reference: 'Phone call test' });
+  ck('seller records remotely authorized complimentary with both identities', r.status === 200 && r.data.created_by !== r.data.authorized_by,
+    JSON.stringify(r.data));
+  r = await seller.post('/api/complimentaries', { menu_item_id: product.id, qty: 1, reason: 'Staff complimentary', recipient: 'Seller 1',
+    authorization_code: approval.data.code, authorization_reference: 'Re-use attempt' });
+  ck('owner complimentary code cannot be reused', r.status === 403);
+  ck('seller-authorized complimentary still leaves expected cash unchanged', (await admin.get('/api/shifts/current')).data.drawer.expected === cashBeforeComp);
   r = await seller.post('/api/goods-receipts', { payment_method: 'pay_later',
     items: [{ stock_item_id: boot.menu[0].stock_item_id, qty: 1 }] });
   ck('pay-later delivery is recorded unpaid with an automatic reference', r.status === 200 && r.data.payment_status === 'unpaid' && /^DEL-/.test(r.data.invoice_no));
@@ -128,7 +141,7 @@ const mk = () => {
 
   const sale2 = (await seller.post('/api/orders', {})).data;
   r = await seller.post(`/api/orders/${sale2.id}/items`, { items: [{ menu_item_id: product.id, qty: 8 }] });
-  ck('negative stock is blocked', r.status === 400 && /only 7 measured sale unit/i.test(r.data.error), JSON.stringify(r.data));
+  ck('negative stock is blocked', r.status === 400 && /only 6 measured sale unit/i.test(r.data.error), JSON.stringify(r.data));
 
   const sale3 = (await seller.post('/api/orders', {})).data;
   r = await seller.post(`/api/orders/${sale3.id}/items`, { items: [{ menu_item_id: product.id, qty: 1 }] });
@@ -149,11 +162,11 @@ const mk = () => {
   ck('seller starts end-of-day stocktake', r.status === 200, JSON.stringify(r.data));
   const count = (await seller.get('/api/stock-counts/' + r.data.id)).data;
   const counted = count.items.map((x) => ({ stock_item_id: x.stock_item_id,
-    counted: x.stock_item_id === product.stock_item_id ? 16/3 : x.expected, added_qty: 0 }));
+    counted: x.stock_item_id === product.stock_item_id ? 13/3 : x.expected, added_qty: 0 }));
   r = await seller.post(`/api/stock-counts/${count.id}/complete`, { items: counted });
   ck('stocktake posts one variance', r.status === 200 && r.data.variances === 1, JSON.stringify(r.data));
   stock = await seller.get('/api/stock');
-  ck('stocktake sets physical quantity', Math.abs(stock.data.find((x) => x.id === product.stock_item_id).qty - 16/3) < 0.000001);
+  ck('stocktake sets physical quantity', Math.abs(stock.data.find((x) => x.id === product.stock_item_id).qty - 13/3) < 0.000001);
 
   const current = (await seller.get('/api/shifts/current')).data;
   r = await seller.post(`/api/shifts/${current.shift.id}/payout`, { amount: 100, method: 'cash', reason: 'Transport receipt' });

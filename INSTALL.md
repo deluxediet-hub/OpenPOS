@@ -150,7 +150,8 @@ Database migrations run automatically, but a backup is still mandatory.
 - [ ] A Pay later delivery can subsequently be marked paid exactly once.
 - [ ] Cash and M-Pesa expenses reduce the correct expected balance.
 - [ ] Owner can issue a full or measured complimentary item; stock and complimentary cost/value reports change while expected Cash/M-Pesa does not.
-- [ ] Seller cannot access complimentary issue controls or endpoints.
+- [ ] Owner can generate a one-use complimentary code and a seller can use it once with an authorization reference.
+- [ ] Complimentary reports show who recorded and who authorized each issue; the owner login PIN is never shared.
 - [ ] End-of-day stocktake blocks further sales and presents products one at a time.
 - [ ] Added stock, physical stock at hand and No change / Skip all behave correctly.
 - [ ] Receipt and drawer hardware work.
