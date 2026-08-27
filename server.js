@@ -1048,7 +1048,8 @@ app.post('/api/stock-counts/:id/save', requireAuth, requireRole('seller', 'manag
     for (const line of (Array.isArray(req.body.items) ? req.body.items : [])) {
       if (line.counted === '' || line.counted == null || !Number.isFinite(Number(line.counted))) continue;
       const row = db.prepare('SELECT expected FROM stock_count_items WHERE stock_count_id=? AND stock_item_id=?').get(count.id, Number(line.stock_item_id));
-      if (row) upd.run(Number(line.counted), Number(line.counted) - row.expected, Number(line.added_qty) || 0,
+      const added = Number(line.added_qty) || 0;
+      if (row) upd.run(Number(line.counted), Number(line.counted) - row.expected - added, added,
         count.id, Number(line.stock_item_id));
     }
   }); tx();
@@ -1064,22 +1065,35 @@ app.post('/api/stock-counts/:id/complete', requireAuth, requireRole('seller', 'm
   const valueOf = (row) => submitted.has(row.stock_item_id) ? Number(submitted.get(row.stock_item_id).counted) : row.counted;
   if (rows.some((r) => valueOf(r) == null || !Number.isFinite(Number(valueOf(r)))))
     return bad(res, 'Enter or skip every product before completing the stocktake');
+  let totalCostVariance = 0, totalRetailVariance = 0;
   const tx = db.transaction(() => {
     for (const row of rows) {
-      const counted = Number(valueOf(row)), variance = counted - row.expected;
+      const counted = Number(valueOf(row));
       const added = submitted.has(row.stock_item_id) ? Number(submitted.get(row.stock_item_id).added_qty) || 0 : row.added_qty || 0;
-      db.prepare('UPDATE stock_count_items SET counted=?,variance=?,added_qty=? WHERE id=?').run(counted, variance, added, row.id);
+      const variance = counted - row.expected - added;
+      const actualStockMove = counted - row.expected;
+      const stock = db.prepare('SELECT cost FROM stock_items WHERE id=?').get(row.stock_item_id) || { cost: 0 };
+      const retail = db.prepare(`SELECT COALESCE(
+          MAX(CASE WHEN m.stock_mode='unit' AND r.qty=1 THEN m.price END),
+          MAX(CASE WHEN r.qty>0 AND m.available=1 THEN m.price/r.qty END),0) value
+        FROM recipes r JOIN menu_items m ON m.id=r.menu_item_id WHERE r.stock_item_id=?`).get(row.stock_item_id);
+      const costVariance = Math.round(variance * stock.cost);
+      const retailVariance = Math.round(variance * (retail.value || 0));
+      totalCostVariance += costVariance; totalRetailVariance += retailVariance;
+      db.prepare('UPDATE stock_count_items SET counted=?,variance=?,added_qty=?,cost_variance=?,retail_variance=? WHERE id=?')
+        .run(counted, variance, added, costVariance, retailVariance, row.id);
       db.prepare('UPDATE stock_items SET qty=? WHERE id=?').run(counted, row.stock_item_id);
-      if (variance) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
-        .run(row.stock_item_id, variance, `Stocktake ${count.reference}`, req.user.id);
+      if (actualStockMove) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
+        .run(row.stock_item_id, actualStockMove, `Stocktake ${count.reference}${added ? ` · unrecorded added ${added}` : ''}`, req.user.id);
     }
-    db.prepare("UPDATE stock_counts SET status='completed',completed_by=?,completed_at=datetime('now','localtime') WHERE id=?")
-      .run(req.user.id, count.id);
+    db.prepare(`UPDATE stock_counts SET status='completed',completed_by=?,completed_at=datetime('now','localtime'),
+      cost_variance=?,retail_variance=? WHERE id=?`).run(req.user.id, totalCostVariance, totalRetailVariance, count.id);
   }); tx();
-  const variances = rows.filter((r) => entered.get(r.stock_item_id) !== r.expected).length;
-  audit(req.user, 'stocktake.complete', `${count.reference} · ${variances} variances`);
+  const completedRows = db.prepare('SELECT * FROM stock_count_items WHERE stock_count_id=?').all(count.id);
+  const variances = completedRows.filter((r) => Math.abs(Number(r.variance) || 0) > 0.000001).length;
+  audit(req.user, 'stocktake.complete', `${count.reference} · ${variances} variances · cost KSh${(totalCostVariance / 100).toFixed(2)} · retail KSh${(totalRetailVariance / 100).toFixed(2)}`);
   broadcast('stock');
-  res.json({ ok: true, variances });
+  res.json({ ok: true, variances, cost_variance: totalCostVariance, retail_variance: totalRetailVariance });
 });
 
 /* --------------------------------- staff -------------------------------- */
@@ -1408,8 +1422,9 @@ app.get('/api/shifts', requireAuth, requireRole('seller', 'cashier', 'manager', 
 });
 app.get('/api/shifts/current', requireAuth, (req, res) => {
   const s = db.prepare("SELECT * FROM shifts WHERE status IN ('open','reconciling') ORDER BY id DESC LIMIT 1").get();
-  if (!s) return res.json({ shift: null, drawer: null });
-  res.json({ shift: s, drawer: drawerFigures(s) });
+  if (!s) return res.json({ shift: null, drawer: null, stocktake: null });
+  const stocktake = db.prepare("SELECT * FROM stock_counts WHERE status='completed' AND completed_at>=? ORDER BY id DESC LIMIT 1").get(s.opened_at) || null;
+  res.json({ shift: s, drawer: drawerFigures(s), stocktake });
 });
 function drawerFigures(s) {
   const a = s.opened_at, b = s.closed_at || nowLocal();
@@ -1513,6 +1528,7 @@ app.get('/api/shift-clearing', requireAuth, requireRole('seller', 'cashier', 'ma
   const complimentary = s ? db.prepare(`SELECT ci.*,u.name created_by_name,a.name authorized_by_name FROM complimentary_issues ci
     LEFT JOIN users u ON u.id=ci.created_by LEFT JOIN users a ON a.id=ci.authorized_by
     WHERE ci.shift_id=? ORDER BY ci.id`).all(s.id) : [];
+  const stocktake = s ? db.prepare("SELECT * FROM stock_counts WHERE status='completed' AND completed_at>=? ORDER BY id DESC LIMIT 1").get(s.opened_at) || null : null;
   let drawer = null;
   if (s) drawer = s.status !== 'closed' ? drawerFigures(s)
     : { expected: s.expected_cash, counted: s.counted_cash, variance: s.variance,
@@ -1520,7 +1536,7 @@ app.get('/api/shift-clearing', requireAuth, requireRole('seller', 'cashier', 'ma
   res.json({ shift: s || null, by_method: byMethod, by_station: byStation, by_category: byCategory,
     tips, payouts, covers, units: byCategory.reduce((n, x) => n + Number(x.units || 0), 0), orders: ordersN,
     complimentary, complimentary_value: complimentary.reduce((n, x) => n + x.retail_value, 0),
-    complimentary_cost: complimentary.reduce((n, x) => n + x.cost_value, 0), drawer });
+    complimentary_cost: complimentary.reduce((n, x) => n + x.cost_value, 0), stocktake, drawer });
 });
 
 /* ==================== OPEN BAR TABS / PRE-AUTH (3.8) ==================== */

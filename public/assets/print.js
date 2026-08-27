@@ -123,8 +123,14 @@ function doPrint(html) {
   const root = document.getElementById('printRoot');
   if (!root) return;
   root.innerHTML = html;
-  root.classList.toggle('print-report', html.includes('class="sheet"'));
-  root.classList.toggle('print-receipt', html.includes('class="receipt'));
+  const isReport = html.includes('class="sheet"');
+  root.classList.toggle('print-report', isReport);
+  root.classList.toggle('print-receipt', !isReport);
+  /* A single unnamed @page profile avoids Chromium/Brave creating a blank transition page
+     when switching from the app document to a named report page. */
+  let pageStyle = document.getElementById('dynamicPrintPage');
+  if (!pageStyle) { pageStyle = document.createElement('style'); pageStyle.id = 'dynamicPrintPage'; document.head.appendChild(pageStyle); }
+  pageStyle.textContent = isReport ? '@page { size: A4 portrait; margin: 14mm 13mm; }' : '@page { margin: 0; }';
   // hide the running app so only the receipt goes to the printer, then restore
   const app = document.getElementById('app');
   const login = document.getElementById('login');

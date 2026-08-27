@@ -294,6 +294,12 @@ const Manager2 = (() => {
               <div class="stat"><div class="l">Expected cash</div><div class="v">${fmt(d.expected)}</div></div>
               <div class="stat"><div class="l">Expected M-Pesa</div><div class="v">${fmt(d.expected_mpesa || 0)}</div></div>
             </div>
+            ${cur.stocktake ? `<div class="card" style="margin-top:12px;background:#101820"><div class="card-b">
+              <div class="row"><b>Stocktake financial variance</b><span class="grow"></span><span class="tag ${cur.stocktake.cost_variance < 0 ? 'bad' : cur.stocktake.cost_variance > 0 ? 'warn' : 'ok'}">${esc(cur.stocktake.reference)}</span></div>
+              <div class="grid2" style="margin-top:9px"><div class="tline"><span>At inventory cost</span><b>${fmt(cur.stocktake.cost_variance)}</b></div>
+                <div class="tline"><span>At potential retail</span><b>${fmt(cur.stocktake.retail_variance)}</b></div></div>
+              <div class="tiny muted" style="margin-top:7px">Recorded separately from expected cash. Changing expected cash would hide whether the difference came from an unrecorded sale, breakage, theft or a counting error.</div>
+            </div></div>` : ''}
             <div class="row" style="margin-top:14px">
               <button class="btn ghost" id="payout">+ Record expense</button>
               <span class="grow"></span>

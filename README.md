@@ -45,7 +45,7 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 
 - Owner-controlled USB/Bluetooth barcode scanner mode; when enabled, scanning from any normal page opens the current sale and adds the matching barcode/SKU
 - Guided product setup with size, category and selling-unit dropdowns, plus owner-only CSV import during onboarding or later for up to 2,000 products ([template](docs/product-import-template.csv) · [format guide](docs/PRODUCT_IMPORT.md))
-- One-tap **Sell measured amount** mode: Full, Half, Quarter, ⅛ shot or custom ml, with proportional price and stock deduction
+- Compact **Sell amount** dropdown directly on the sales tab: Whole, Half, Quarter, ⅛ shot or an inline custom-ml field; each product tile previews the selected ml and equivalent price before proportional stock deduction
 - Weighed-keg stock mode records theoretical pour usage but adjusts actual kg only during end-of-shift stocktake
 - Stocktake product jumper with automatic save, previous/next navigation and input auto-selection
 - Live stock shown at the till with optional negative-stock prevention
@@ -54,7 +54,7 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 - Focused Top 5 dashboard plus a custom PDF builder where the owner selects summary, payments, Top 5 products, sellers, categories, low stock, expenses or full stock; A4 margins and pagination are print-safe
 - Repeated taps, scans and + actions consolidate into one product line with a single quantity across the basket, sales view and receipt
 - Complimentary stock for owner consumption, staff, friends or promotions—including measured pours—with no cash impact and full retail-value/cost reporting; sellers simply confirm owner authorization and reports show both recorder and owner
-- Full stocktakes with expected, counted and audited variance
+- Full stocktakes with expected, counted and audited quantity, inventory-cost and potential-retail variance; financial stock variance is shown separately and never used to hide a cash discrepancy
 - Fast checkout with no buyer-age prompt; the configured 18+ notice remains on receipts
 - Duplicate M-Pesa confirmation-code rejection
 - Alcohol licence metadata and responsible-retail receipt warning

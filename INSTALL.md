@@ -154,6 +154,9 @@ Database migrations run automatically, but a backup is still mandatory.
 - [ ] Complimentary reports show the seller who recorded it and the owner account under whose authority it was issued.
 - [ ] End-of-day stocktake blocks further sales and presents products one at a time.
 - [ ] Added stock, physical stock at hand and No change / Skip all behave correctly.
+- [ ] Completing stocktake returns HTTP 200 and records quantity, cost and potential-retail variance separately from cash.
+- [ ] Owner can include Latest stocktake in the custom PDF builder.
+- [ ] Whole/Half/Quarter/Shot/Custom ml from the sales tab produces the proportional line price and bottle deduction.
 - [ ] Receipt and drawer hardware work.
 - [ ] Till cannot close before stocktake or with open sales.
 - [ ] Closing Cash and M-Pesa variances are correct and stored.

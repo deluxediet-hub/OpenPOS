@@ -162,6 +162,7 @@ const Manager = (() => {
         ['low', 'Low stock only', 'Products at or below their reorder level'],
         ['expenses', 'Expenses only', 'Cash and M-Pesa expenses for the period'],
         ['complimentary', 'Complimentary issues', 'Owner, staff, friends, tasting and promotion stock'],
+        ['stocktake', 'Latest stocktake', 'Expected, counted, quantity variance and financial impact'],
         ['stock', 'Full stock position', 'On-hand quantity and inventory value']
       ];
       modal({ title: 'Build PDF report', wide: true,
@@ -176,10 +177,13 @@ const Manager = (() => {
         if (!selected.size) return toast('Select at least one report section', 'err');
         const { q, t, s: sm, items, waiters, cats, comps } = last;
         try {
-          const [stock, expenses] = await Promise.all([
+          const [stock, expenses, stocktakes] = await Promise.all([
             selected.has('low') || selected.has('stock') ? api('/api/stock') : Promise.resolve([]),
-            selected.has('expenses') ? api(`/api/reports/expenses?from=${q}&to=${t}`) : Promise.resolve([])
+            selected.has('expenses') ? api(`/api/reports/expenses?from=${q}&to=${t}`) : Promise.resolve([]),
+            selected.has('stocktake') ? api('/api/stock-counts') : Promise.resolve([])
           ]);
+          const latestCount = stocktakes.find((x) => x.status === 'completed' && (x.completed_at || '').slice(0, 10) >= q && (x.completed_at || '').slice(0, 10) <= t);
+          const stocktake = latestCount ? await api('/api/stock-counts/' + latestCount.id) : null;
           const tables = [];
           if (selected.has('summary')) tables.push({ title: 'Sales summary', head: ['Metric', 'Value'], right: [1], rows: [
             ['Net sales', fmt(sm.gross)], ['Gross takings', fmt(sm.paid)], ['Refunds', '-' + fmt(sm.refunded)],
@@ -205,6 +209,14 @@ const Manager = (() => {
             rows: comps.map((x) => [(x.created_at || '').slice(0, 16), x.item_name, String(x.qty), x.recipient || '—', x.reason,
               `${x.created_by_name || '—'} / ${x.authorized_by_name || '—'}`, x.authorization_reference || '—',
               `${(x.retail_value / 100).toFixed(2)} / ${(x.cost_value / 100).toFixed(2)}`]) });
+          if (selected.has('stocktake')) {
+            tables.push({ title: stocktake ? `Stocktake — ${stocktake.reference}` : 'Stocktake',
+              head: ['Product', 'Expected (system + added)', 'Counted', 'Variance', 'Cost impact', 'Retail impact'], right: [1, 2, 3, 4, 5],
+              rows: stocktake ? stocktake.items.map((x) => [x.name,
+                  `${x.expected} + ${x.added_qty || 0} = ${x.expected + (x.added_qty || 0)} ${x.unit}`, `${x.counted} ${x.unit}`,
+                  `${x.variance > 0 ? '+' : ''}${x.variance} ${x.unit}`, (x.cost_variance / 100).toFixed(2), (x.retail_variance / 100).toFixed(2)])
+                : [['No completed stocktake in this period', '', '', '', '', '']] });
+          }
           if (selected.has('stock')) tables.push({ title: 'Stock position', head: ['Product', 'On hand', 'Unit cost', 'Value'], right: [1, 2, 3],
             rows: stock.map((x) => [x.name, `${x.qty} ${x.unit}`, (x.cost / 100).toFixed(2), (x.qty * x.cost / 100).toFixed(2)]) });
           closeModal();

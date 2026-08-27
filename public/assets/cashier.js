@@ -120,7 +120,9 @@ const Cashier = (() => {
             ['M-Pesa variance', c.drawer && c.drawer.mpesa_variance != null ? money2(c.drawer.mpesa_variance) : '—'],
             ['Receipts closed', String(c.orders)], ['Units sold', String(c.units || 0)],
             ['Complimentary retail value', money2(c.complimentary_value || 0)],
-            ['Complimentary inventory cost', money2(c.complimentary_cost || 0)]
+            ['Complimentary inventory cost', money2(c.complimentary_cost || 0)],
+            ['Stocktake variance at cost', c.stocktake ? money2(c.stocktake.cost_variance) : '—'],
+            ['Stocktake variance at retail', c.stocktake ? money2(c.stocktake.retail_variance) : '—']
           ] : [
             ['Tips', money2(c.tips)], ['Cash payouts', money2(c.payouts)],
             ['Expected in drawer', c.drawer && c.drawer.expected != null ? money2(c.drawer.expected) : '—'],

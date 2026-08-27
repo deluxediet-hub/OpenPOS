@@ -41,7 +41,7 @@ The workspace now has a focused bottle-shop workflow: barcode/SKU products, live
 - VAT-inclusive KES defaults and no restaurant service charge: an entered KSh 200 price remains KSh 200 while VAT is extracted for reporting.
 - Product selling price, unit cost and gross-margin visibility for management.
 - Guided product creation puts standard shot/bottle/keg size, retail category and selling unit directly after the product name. Owner-only transactional CSV import supports onboarding or later imports of up to 2,000 products, including quoted values, categories, opening stock, weighed kegs and source-linked pours.
-- Whole units deduct one stock unit. A sales-screen measure toggle supports Full, Half, Quarter, ⅛ shot and custom ml; price, VAT, cost, availability checks, reporting and stock all use the same stored fraction.
+- Whole units deduct one stock unit. A compact sales-screen amount dropdown supports Whole, Half, Quarter, ⅛ shot and a visible custom-ml input. Product tiles preview ml and proportional price before selection; price, VAT, cost, availability checks, reporting and stock all use the same stored fraction. Existing products have size backfilled from names such as `250ml` or `750ml` so measured sales do not silently fall back to a whole bottle.
 - Named pour/shot products link to a tracked bottle or keg. Weighed-keg sources retain theoretical kg usage while actual stock is posted only from the end-of-shift physical weight, avoiding false precision during service.
 - Retail categories and products use a neutral internal `retail` route; kitchen/bar preparation fields, docket actions and station columns are suppressed throughout retail screens and reports.
 
@@ -66,7 +66,7 @@ A 2025 national policy proposed raising the threshold to 21, but reporting descr
 - Payment is recorded as Cash, M-Pesa, already paid/other, or pay later. Cash/M-Pesa stock payments reduce the corresponding expected till balance, and an unpaid delivery can be marked paid later.
 - Receiving updates quantity, stock movement history and audit history transactionally without allowing staff to alter cost.
 - Supplier directory stores contact/address/KRA details.
-- End-of-day stocktake freezes sales and presents one item at a time. The operator can jump through a product dropdown, move previous/next, and all entered values auto-save while the active quantity remains auto-selected.
+- End-of-day stocktake freezes sales and presents one item at a time. The operator can jump through a product dropdown, move previous/next, and all entered values auto-save while the active quantity remains auto-selected. Completion stores signed quantity variance plus inventory-cost and potential-retail impact. These are deliberately shown beside—not folded into—expected cash, because changing expected cash would conceal whether a discrepancy is an unrecorded sale, theft, breakage or counting error.
 - Full stocktakes calculate variance, post all corrections together and audit the operator. Direct quick corrections remain owner-only.
 - Low-stock and stock-value reporting remains available.
 
@@ -85,7 +85,8 @@ A 2025 national policy proposed raising the threshold to 21, but reporting descr
 - Sellers must open the retail till before sales. Owners may use that shared till with attribution to their own account; if none is open, an owner sale automatically opens a zero-balance owner till. Starting end-of-day stocktake moves it into reconciliation, blocks further sales, and closing requires both Cash and M-Pesa actual balances.
 - Cash and M-Pesa expenses—including paid stock deliveries—reduce their respective expected balances; both variances are stored and audited at close.
 - Empty automatically prepared sale tabs are discarded at stocktake and again immediately before the close validation, so they cannot block reconciliation.
-- Management PDFs use a dedicated A4 page profile with side margins, row-aware pagination and no forced signature footer for custom reports, preventing a blank trailing page.
+- Management PDFs inject one unnamed A4 page profile at print time, reset document/root height to auto, retain side margins, and avoid named-page transitions that caused Chromium/Brave to add a blank second sheet. Custom PDF options include the latest full stocktake with signed quantity, cost and potential-retail variances.
+- The stocktake completion path no longer references an undefined variable after committing. It now returns HTTP 200 with persisted variance totals; startup migration repairs financial values for stocktakes that were saved by the affected build before it returned HTTP 500.
 - Runtime database files are no longer committed to Git.
 - Phone layouts use compact whole-shilling product prices, fixed two-column cards, ellipsized codes/stock labels, non-overlapping basket amounts, touch-sized controls, full-screen forms, horizontally scrollable action chips and bottom navigation. Inline desktop grids are force-collapsed on narrow screens.
 

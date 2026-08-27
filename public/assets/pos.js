@@ -114,7 +114,7 @@ const Pos = (() => {
   }
 
   /* -------------------------- ORDER EDITOR --------------------------- */
-  let search = '', searchTimer = null, measureMode = false;
+  let search = '', searchTimer = null, measureChoice = 'whole', customMeasureMl = '';
   async function openEditor(host, orderId) {
     State.openOrderId = orderId;
     /* A freshly created order is not in State.orders yet — pull it before rendering,
@@ -157,15 +157,22 @@ const Pos = (() => {
         <span class="grow"></span>
         <div class="sale-actions">
           ${retail ? '' : `<button class="btn sm" id="transfer">Move table</button><button class="btn sm" id="peopleBtn">Guests: ${o.people}</button>`}
-          ${retail ? '<button class="btn sm ghost" id="complimentaryBtn">🎁 Complimentary</button>' : ''}
+          ${retail ? '<button class="btn sm ghost" id="complimentaryBtn">🎁 <span class="comp-long">Complimentary</span><span class="comp-short">Comp</span></button>' : ''}
           ${retail && !['manager', 'admin'].includes(State.user.role) ? '' : `<button class="btn sm" id="discBtn">Discount</button><button class="btn sm red" id="voidBtn">Void order</button>`}
         </div>
       </div>
       <div class="pos">
         <div class="menu-panel">
-          <div class="search"><div class="row"><input class="inp" id="search" placeholder="Search products…  ( / )" value="${esc(search)}">
-            ${retail ? `<label class="btn ${measureMode ? 'primary' : 'ghost'}" style="cursor:pointer"><input type="checkbox" id="measureMode" ${measureMode ? 'checked' : ''}> Sell measured amount</label>` : ''}
-          </div>${retail && measureMode ? '<div class="tiny" style="color:var(--amber);margin-top:6px">Tap a bottle to choose Full, Half, Quarter, Shot or custom ml.</div>' : ''}</div>
+          <div class="search"><div class="row sale-search-row"><input class="inp" id="search" placeholder="Search products or scan barcode" value="${esc(search)}">
+            ${retail ? `<div class="measure-control"><label class="fld">Sell amount</label><select class="inp" id="measureChoice">
+              <option value="whole" ${measureChoice === 'whole' ? 'selected' : ''}>Whole product</option>
+              <option value="half" ${measureChoice === 'half' ? 'selected' : ''}>Half (½)</option>
+              <option value="quarter" ${measureChoice === 'quarter' ? 'selected' : ''}>Quarter (¼)</option>
+              <option value="eighth" ${measureChoice === 'eighth' ? 'selected' : ''}>Shot (⅛)</option>
+              <option value="custom" ${measureChoice === 'custom' ? 'selected' : ''}>Custom ml</option>
+            </select></div><div class="measure-custom ${measureChoice === 'custom' ? '' : 'hidden'}"><label class="fld">Millilitres</label>
+              <input class="inp mono" id="customMeasureMl" type="number" min="0.01" step="0.01" inputmode="decimal" value="${esc(customMeasureMl)}" placeholder="e.g. 30"></div>` : ''}
+          </div>${retail && measureChoice !== 'whole' ? '<div class="tiny measure-hint">Selected amount applies to the next bottle you tap or scan. Price and stock are calculated proportionally.</div>' : ''}</div>
           <div class="cats">
             ${State.categories.map((c) => `
               <button class="cat${c.id === State.category && !search ? ' active' : ''}" data-cat="${c.id}">
@@ -174,10 +181,13 @@ const Pos = (() => {
           <div class="items">
             ${filtered.length ? filtered.map((m) => {
               const live = priceOf(m), rule = ruleFor(m), off = live !== m.price;
+              const selectedMl = measureChoice === 'custom' ? Number(customMeasureMl)
+                : Number(m.volume_ml) * ({ half: 0.5, quarter: 0.25, eighth: 0.125 }[measureChoice] || 0);
               return `<button class="item${m.available ? '' : ' out'}" data-mid="${m.id}" ${m.available ? '' : `title="${retail ? 'Out of stock / unavailable' : '86 — unavailable'}"`}>
                 <span class="n">${esc(m.name)}${groupsFor(m.id).length ? ' <span class="tiny" style="color:var(--teal)">▸</span>' : ''}</span>
                 ${retail && (m.sku || m.barcode) ? `<span class="tiny muted mono item-code">${esc(m.sku || m.barcode)}</span>` : ''}
                 ${retail && m.stock_qty != null ? `<span class="tiny item-stock" style="color:${m.stock_qty <= 0 ? 'var(--red)' : m.stock_qty <= m.stock_min_qty ? 'var(--amber)' : 'var(--dim)'}">${m.stock_mode === 'pour' && m.stock_deduction ? `Available ${Math.floor(m.stock_qty / m.stock_deduction)} serving(s)` : `Stock ${m.stock_qty}`}</span>` : ''}
+                ${retail && measureChoice !== 'whole' && m.stock_mode !== 'pour' ? `<span class="tiny item-measure">${selectedMl > 0 && Number(m.volume_ml) > 0 ? `${Number(selectedMl.toFixed(2))}ml · ${fmtPrice(Math.round(live * selectedMl / m.volume_ml))}` : (measureChoice === 'custom' ? 'Enter ml above' : 'Size not set')}</span>` : ''}
                 ${off ? `<span class="tiny item-old-price">${fmtPrice(m.price)}</span>` : ''}
                 <span class="p item-price" style="${off ? 'color:var(--green)' : ''}">${m.available ? fmtPrice(live) : (retail ? 'Unavailable' : '86')}</span>
                 ${rule ? `<span class="tiny" style="color:var(--green)">${esc(rule)}</span>` : ''}
@@ -232,8 +242,10 @@ const Pos = (() => {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(() => renderEditor(host), 100);
     };
-    const measureToggle = host.querySelector('#measureMode');
-    if (measureToggle) measureToggle.onchange = (e) => { measureMode = e.target.checked; renderEditor(host); };
+    const measureSelect = host.querySelector('#measureChoice');
+    if (measureSelect) measureSelect.onchange = (e) => { measureChoice = e.target.value; if (measureChoice !== 'custom') customMeasureMl = ''; renderEditor(host); };
+    const customMeasure = host.querySelector('#customMeasureMl');
+    if (customMeasure) customMeasure.oninput = (e) => { customMeasureMl = e.target.value; };
     searchInput.onkeydown = (e) => {
       if (e.key !== 'Enter') return;
       clearTimeout(searchTimer);
@@ -309,9 +321,15 @@ const Pos = (() => {
     const m = State.menu.find((x) => x.id === mid);
     if (!m) return;
     if (!m.available) return toast(m.name + (State.settings.business_type === 'wines_spirits' ? ' is unavailable' : ' is marked 86 (unavailable)'), 'err');
-    if (measureMode && State.settings.business_type === 'wines_spirits' && m.stock_mode !== 'pour') {
-      if (!(Number(m.volume_ml) > 0)) return toast('Set this product’s size before selling a measured amount', 'err');
-      return measurePicker(host, m);
+    if (measureChoice !== 'whole' && State.settings.business_type === 'wines_spirits' && m.stock_mode !== 'pour') {
+      const full = Number(m.volume_ml);
+      if (!(full > 0)) return toast('Set this product’s size before selling a measured amount', 'err');
+      const measureMl = measureChoice === 'custom' ? Number(customMeasureMl)
+        : full * ({ half: 0.5, quarter: 0.25, eighth: 0.125 }[measureChoice] || 1);
+      if (!(measureMl > 0) || measureMl > full) return toast(`Enter millilitres between 0.01 and ${full}`, 'err');
+      const added = await pushLines(host, activeOrder().id, [{ menu_item_id: mid, qty: 1, measure_ml: measureMl }]);
+      if (added) { measureChoice = 'whole'; customMeasureMl = ''; renderEditor(host); }
+      return;
     }
     const groups = groupsFor(mid);
     if (groups.length) return modifierPicker(host, m, groups);
@@ -382,48 +400,14 @@ const Pos = (() => {
     rebuildMeasures();
   }
 
-  function measurePicker(host, product) {
-    const full = Number(product.volume_ml), presets = [
-      ['Full', full], ['Half', full / 2], ['Quarter', full / 4], ['Shot (⅛)', full / 8]
-    ];
-    let selected = full;
-    modal({ title: 'Measured sale — ' + product.name, body: `
-      <div class="grid2" id="measureChoices">${presets.map(([label, ml]) => `<button class="btn ${ml === full ? 'primary' : 'ghost'}" data-ml="${ml}">
-        <span>${label}</span><b class="grow right">${Number(ml.toFixed(2))} ml</b></button>`).join('')}</div>
-      <div style="margin-top:14px"><label class="fld">Or custom amount (ml)</label><input class="inp mono" id="customMl" type="number" min="0.01" max="${full}" step="0.01" placeholder="e.g. 30 or 125"></div>
-      <div class="card" style="background:#101820;margin-top:14px"><div class="card-b">
-        <div class="tline"><span>Amount</span><b id="measureAmount">${full} ml</b></div>
-        <div class="tline total"><span>Price</span><b id="measurePrice">${fmt(priceOf(product))}</b></div>
-        <div class="tiny muted" id="measureStock" style="margin-top:6px">Uses one full product from stock</div>
-      </div></div>`,
-      footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Add measured sale</button>' });
-    const ov = document.querySelector('#modalRoot .ov'), custom = ov.querySelector('#customMl');
-    const draw = () => {
-      ov.querySelector('#measureAmount').textContent = Number(selected.toFixed(2)) + ' ml';
-      ov.querySelector('#measurePrice').textContent = fmt(Math.round(priceOf(product) * selected / full));
-      ov.querySelector('#measureStock').textContent = product.stock_mode === 'weighed'
-        ? `Records ${Number((selected / 1000).toFixed(4))} kg theoretical use; actual keg weight is entered at stocktake`
-        : `Deducts ${Number((selected / full).toFixed(4))} of ${product.name}`;
-      ov.querySelectorAll('[data-ml]').forEach((b) => b.classList.toggle('primary', Number(b.dataset.ml) === selected));
-    };
-    ov.querySelectorAll('[data-ml]').forEach((b) => b.onclick = () => { selected = Number(b.dataset.ml); custom.value = ''; draw(); });
-    custom.oninput = () => { const value = Number(custom.value); if (value > 0 && value <= full) { selected = value; draw(); } };
-    ov.querySelector('[data-no]').onclick = closeModal;
-    ov.querySelector('[data-yes]').onclick = async () => {
-      if (!(selected > 0) || selected > full) return toast(`Enter an amount from 0.01 to ${full} ml`, 'err');
-      closeModal();
-      await pushLines(host, activeOrder().id, [{ menu_item_id: product.id, qty: 1,
-        ...(selected === full ? {} : { measure_ml: selected }) }]);
-    };
-    draw();
-  }
 
   async function pushLines(host, orderId, lines) {
     try {
       await api(`/api/orders/${orderId}/items`, { body: { items: lines } });
       await refresh();
       renderEditor(host);
-    } catch (e) { toast(e.message, 'err'); }
+      return true;
+    } catch (e) { toast(e.message, 'err'); return false; }
   }
 
   /** Modal for choosing variants/options. Required groups must be satisfied

@@ -408,12 +408,15 @@ function migrate() {
     CREATE TABLE IF NOT EXISTS stock_counts (
       id INTEGER PRIMARY KEY AUTOINCREMENT, reference TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
       notes TEXT, started_by INTEGER REFERENCES users(id), completed_by INTEGER REFERENCES users(id),
-      started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), completed_at TEXT
+      started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), completed_at TEXT,
+      cost_variance INTEGER NOT NULL DEFAULT 0, retail_variance INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS stock_count_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT, stock_count_id INTEGER NOT NULL REFERENCES stock_counts(id) ON DELETE CASCADE,
       stock_item_id INTEGER NOT NULL REFERENCES stock_items(id), expected REAL NOT NULL,
-      counted REAL, variance REAL, added_qty REAL NOT NULL DEFAULT 0, UNIQUE(stock_count_id,stock_item_id)
+      counted REAL, variance REAL, added_qty REAL NOT NULL DEFAULT 0,
+      cost_variance INTEGER NOT NULL DEFAULT 0, retail_variance INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(stock_count_id,stock_item_id)
     );
     CREATE TABLE IF NOT EXISTS complimentary_issues (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -429,6 +432,10 @@ function migrate() {
     CREATE INDEX IF NOT EXISTS ix_complimentary_created ON complimentary_issues(created_at);
   `);
   add('stock_count_items', 'added_qty', 'added_qty REAL NOT NULL DEFAULT 0');
+  add('stock_count_items', 'cost_variance', 'cost_variance INTEGER NOT NULL DEFAULT 0');
+  add('stock_count_items', 'retail_variance', 'retail_variance INTEGER NOT NULL DEFAULT 0');
+  add('stock_counts', 'cost_variance', 'cost_variance INTEGER NOT NULL DEFAULT 0');
+  add('stock_counts', 'retail_variance', 'retail_variance INTEGER NOT NULL DEFAULT 0');
   add('goods_receipts', 'payment_method', "payment_method TEXT NOT NULL DEFAULT 'pay_later'");
   add('goods_receipts', 'payment_status', "payment_status TEXT NOT NULL DEFAULT 'unpaid'");
   add('complimentary_issues', 'authorized_by', 'authorized_by INTEGER REFERENCES users(id)');
@@ -460,6 +467,33 @@ function migrate() {
     }
   });
   mergeLines();
+
+  /* Older retail catalogues encoded size only in the product name. Backfill it so measured sales work immediately. */
+  for (const item of db.prepare('SELECT id,name FROM menu_items WHERE volume_ml IS NULL OR volume_ml<=0').all()) {
+    const matches = [...String(item.name).matchAll(/(\d+(?:\.\d+)?)\s*(ml|l)\b/ig)];
+    const match = matches[matches.length - 1];
+    if (match) {
+      const volume = Math.round(Number(match[1]) * (match[2].toLowerCase() === 'l' ? 1000 : 1));
+      if (volume > 0) db.prepare('UPDATE menu_items SET volume_ml=? WHERE id=?').run(volume, item.id);
+    }
+  }
+
+  /* Repair financial values for stocktakes completed by the build that saved data then returned HTTP 500. */
+  const completedCounts = db.prepare(`SELECT id FROM stock_counts c WHERE status='completed' AND cost_variance=0 AND retail_variance=0
+    AND EXISTS (SELECT 1 FROM stock_count_items i WHERE i.stock_count_id=c.id AND ABS(COALESCE(i.variance,0))>0.000001)`).all();
+  for (const count of completedCounts) {
+    let costTotal = 0, retailTotal = 0;
+    for (const row of db.prepare('SELECT * FROM stock_count_items WHERE stock_count_id=?').all(count.id)) {
+      const stock = db.prepare('SELECT cost FROM stock_items WHERE id=?').get(row.stock_item_id) || { cost: 0 };
+      const retail = db.prepare(`SELECT COALESCE(MAX(CASE WHEN m.stock_mode='unit' AND r.qty=1 THEN m.price END),
+        MAX(CASE WHEN r.qty>0 AND m.available=1 THEN m.price/r.qty END),0) value
+        FROM recipes r JOIN menu_items m ON m.id=r.menu_item_id WHERE r.stock_item_id=?`).get(row.stock_item_id);
+      const costValue = Math.round((row.variance || 0) * stock.cost), retailValue = Math.round((row.variance || 0) * (retail.value || 0));
+      costTotal += costValue; retailTotal += retailValue;
+      db.prepare('UPDATE stock_count_items SET cost_variance=?,retail_variance=? WHERE id=?').run(costValue, retailValue, row.id);
+    }
+    db.prepare('UPDATE stock_counts SET cost_variance=?,retail_variance=? WHERE id=?').run(costTotal, retailTotal, count.id);
+  }
 
   /* Upgrade any credentials left in plaintext by an older release.
      A stored value not starting with the hash marker is plaintext. */
@@ -976,12 +1010,14 @@ function loadSampleData() {
     'Mixers & Soft Drinks': [['Coca-Cola 500ml', 100, 65], ['Tonic Water 300ml', 120, 80],
       ['Soda Water 300ml', 100, 65], ['Minute Maid 1L', 250, 190], ['Bottled Water 500ml', 60, 35]]
   };
-  const insItem = db.prepare('INSERT INTO menu_items(category_id,name,price,cost,station,sort_order) VALUES(?,?,?,?,?,?)');
+  const insItem = db.prepare('INSERT INTO menu_items(category_id,name,price,cost,station,sort_order,volume_ml,sale_unit) VALUES(?,?,?,?,?,?,?,?)');
   const insStock = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost) VALUES(?,?,?,?,?)');
   const insRecipe = db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,1)');
   for (const [category, items] of Object.entries(products)) {
     items.forEach(([name, price, cost], i) => {
-      const menuId = insItem.run(cats[category], name, price * 100, cost * 100, 'retail', i + 1).lastInsertRowid;
+      const match = name.match(/(\d+(?:\.\d+)?)\s*(ml|l)\b/i);
+      const volume = match ? Math.round(Number(match[1]) * (match[2].toLowerCase() === 'l' ? 1000 : 1)) : null;
+      const menuId = insItem.run(cats[category], name, price * 100, cost * 100, 'retail', i + 1, volume, 'bottle').lastInsertRowid;
       const stockId = insStock.run(name, 'bottle', 12, 4, cost * 100).lastInsertRowid;
       insRecipe.run(menuId, stockId); // one retail unit sold = one unit removed
     });

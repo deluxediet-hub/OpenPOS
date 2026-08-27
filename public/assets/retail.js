@@ -115,11 +115,12 @@ const Retail = (() => {
     body.innerHTML = `<div class="row" style="margin-bottom:14px"><div><h3 style="margin:0">Full stocktakes</h3>
       <div class="tiny muted">Freeze an expected snapshot, count every product, then post all variances together</div></div><span class="grow"></span>
       ${open ? `<button class="btn primary" id="continueCount">Continue ${esc(open.reference)}</button>` : '<button class="btn primary" id="startCount">+ Start stocktake</button>'}</div>
-      <div class="card"><div class="scroll-x"><table class="tbl"><thead><tr><th>Reference</th><th>Status</th><th>Started</th><th>Completed</th><th class="right">Products</th><th class="right">Variances</th><th>By</th></tr></thead>
+      <div class="card"><div class="scroll-x"><table class="tbl"><thead><tr><th>Reference</th><th>Status</th><th>Started</th><th>Completed</th><th class="right">Products</th><th class="right">Variances</th><th class="right">Cost impact</th><th class="right">Retail impact</th><th>By</th></tr></thead>
       <tbody>${rows.map((r) => `<tr><td><b>${esc(r.reference)}</b></td><td><span class="tag ${r.status === 'open' ? 'warn' : 'ok'}">${r.status}</span></td>
         <td class="muted nowrap">${esc(r.started_at)}</td><td class="muted nowrap">${esc(r.completed_at || '—')}</td><td class="right">${r.lines}</td>
-        <td class="right">${r.variances || 0}</td><td>${esc(r.completed_by_name || r.started_by_name || '—')}</td></tr>`).join('') ||
-        '<tr><td colspan="7" class="empty">No stocktakes yet.</td></tr>'}</tbody></table></div></div>`;
+        <td class="right">${r.variances || 0}</td><td class="right mono">${fmt(r.cost_variance || 0)}</td><td class="right mono">${fmt(r.retail_variance || 0)}</td>
+        <td>${esc(r.completed_by_name || r.started_by_name || '—')}</td></tr>`).join('') ||
+        '<tr><td colspan="9" class="empty">No stocktakes yet.</td></tr>'}</tbody></table></div></div>`;
     body.querySelector('#continueCount')?.addEventListener('click', () => countForm(open.id, body));
     body.querySelector('#startCount')?.addEventListener('click', () => startCount(body));
   }
@@ -146,7 +147,7 @@ const Retail = (() => {
 
     const saveItem = async (item, counted, added) => {
       await api(`/api/stock-counts/${id}/save`, { body: { items: [{ stock_item_id: item.stock_item_id, counted, added_qty: added }] } });
-      item.counted = counted; item.added_qty = added; item.variance = counted - item.expected;
+      item.counted = counted; item.added_qty = added; item.variance = counted - item.expected - added;
     };
     const draw = () => {
       const item = count.items[index], done = count.items.filter((x) => x.counted != null).length;
@@ -165,7 +166,10 @@ const Retail = (() => {
             <div><label class="fld">Physical stock at hand</label>
               <input class="inp mono" id="countAtHand" type="number" min="0" step="0.01" value="${item.counted ?? ''}" placeholder="Enter actual count" style="font-size:21px;padding:12px"></div>
           </div>
-          <div class="card" style="margin-top:16px"><div class="card-b"><div class="tline"><span>Difference from system</span><b id="countDifference">—</b></div></div></div>
+          <div class="card" style="margin-top:16px"><div class="card-b">
+            <div class="tline"><span>Expected after added stock</span><b id="countAdjustedExpected">${item.expected + (item.added_qty || 0)} ${esc(item.unit)}</b></div>
+            <div class="tline"><span>Unexplained variance</span><b id="countDifference">—</b></div>
+          </div></div>
         </div></div>
         <div class="row" style="margin-top:16px">
           <button class="btn" id="countPrev" ${index === 0 ? 'disabled' : ''}>← Previous</button>
@@ -174,12 +178,14 @@ const Retail = (() => {
         </div>`;
       const hand = wizard.querySelector('#countAtHand'), added = wizard.querySelector('#countAdded'), diff = wizard.querySelector('#countDifference');
       const update = () => {
+        const adjusted = item.expected + (Number(added.value) || 0);
+        wizard.querySelector('#countAdjustedExpected').textContent = adjusted + ' ' + item.unit;
         if (hand.value === '') { diff.textContent = '—'; return; }
-        const v = Number(hand.value) - item.expected;
-        diff.textContent = (v > 0 ? '+' : '') + v + ' ' + item.unit;
+        const v = Number(hand.value) - adjusted;
+        diff.textContent = (v > 0 ? '+' : '') + Number(v.toFixed(4)) + ' ' + item.unit;
         diff.style.color = v === 0 ? 'var(--green)' : 'var(--amber)';
       };
-      hand.oninput = update; update(); setTimeout(() => hand.select(), 20);
+      hand.oninput = update; added.oninput = update; update(); setTimeout(() => hand.select(), 20);
       wizard.querySelector('#countJump').onchange = async (e) => {
         const target = Number(e.target.value);
         try {
@@ -220,7 +226,8 @@ const Retail = (() => {
           stock_item_id: x.stock_item_id, counted: x.counted, added_qty: x.added_qty || 0 })) } });
         closeModal(); await loadBootstrap();
         Manager.tab = 'money'; Manager.render(document.getElementById('view'));
-        toast(`Stocktake posted · ${r.variances} variance(s). Now reconcile Cash and M-Pesa.`, r.variances ? 'err' : 'ok');
+        const financial = r.variances ? ` · cost ${fmt(r.cost_variance)} · retail ${fmt(r.retail_variance)}` : '';
+        toast(`Stocktake posted · ${r.variances} variance(s)${financial}. Now reconcile Cash and M-Pesa.`, r.variances ? 'err' : 'ok');
       } catch (e) { toast(e.message, 'err'); }
     };
     draw();

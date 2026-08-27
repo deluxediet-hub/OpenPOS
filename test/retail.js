@@ -153,14 +153,20 @@ const mk = () => {
   r = await seller.post('/api/stock-counts', { reference: 'AUDIT-COUNT-1' });
   ck('seller starts end-of-day stocktake', r.status === 200, JSON.stringify(r.data));
   const count = (await seller.get('/api/stock-counts/' + r.data.id)).data;
+  const addedStockItem = count.items.find((x) => x.stock_item_id !== product.stock_item_id && x.unit === 'bottle');
   const counted = count.items.map((x) => ({ stock_item_id: x.stock_item_id,
-    counted: x.stock_item_id === product.stock_item_id ? 13/3 : x.expected, added_qty: 0 }));
+    counted: x.stock_item_id === product.stock_item_id ? 13/3 : x.stock_item_id === addedStockItem.stock_item_id ? x.expected + 1 : x.expected,
+    added_qty: x.stock_item_id === addedStockItem.stock_item_id ? 1 : 0 }));
   r = await seller.post(`/api/stock-counts/${count.id}/complete`, { items: counted });
-  ck('stocktake posts one variance', r.status === 200 && r.data.variances === 1, JSON.stringify(r.data));
+  ck('stocktake completes without a 500 and records financial variance separately from cash',
+    r.status === 200 && r.data.variances === 1 && r.data.cost_variance === -70000 && r.data.retail_variance === -100000,
+    JSON.stringify(r.data));
   stock = await seller.get('/api/stock');
   ck('stocktake sets physical quantity', Math.abs(stock.data.find((x) => x.id === product.stock_item_id).qty - 13/3) < 0.000001);
 
   const current = (await seller.get('/api/shifts/current')).data;
+  ck('till reconciliation exposes stock variance without changing expected cash',
+    current.stocktake && current.stocktake.cost_variance === -70000 && current.stocktake.retail_variance === -100000);
   r = await seller.post(`/api/shifts/${current.shift.id}/payout`, { amount: 100, method: 'cash', reason: 'Transport receipt' });
   ck('cash expense is recorded', r.status === 200 && r.data.cash_expenses === 10000, JSON.stringify(r.data));
   r = await seller.post(`/api/shifts/${current.shift.id}/payout`, { amount: 50, method: 'mpesa', reason: 'Airtime receipt' });
