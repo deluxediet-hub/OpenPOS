@@ -51,10 +51,11 @@ This release implements the eight priorities from the non-integration audit. Sel
    - Cash drawer kick happens on original Cash checkout only, not reprints.
 
 8. **CI and Windows packaging**
-   - Windows + Linux Node 20 test matrix.
-   - Packaging invariants run in CI.
-   - Windows job installs Inno Setup and compiles `OpenPOS-Setup.exe`.
+   - `ci/openpos-ci.yml` defines a Windows + Linux Node 20 test matrix.
+   - Packaging invariants run in the workflow.
+   - Its Windows job installs Inno Setup and compiles `OpenPOS-Setup.exe`.
    - Installer artifact size is checked and uploaded.
+   - Arena's GitHub App lacks Workflow permission, so activation requires copying this file to `.github/workflows/ci.yml` with a suitably authorized GitHub account.
 
 ## Remaining limitations
 

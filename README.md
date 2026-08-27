@@ -127,7 +127,7 @@ test/                     Domain, API and UI tests
 - Gift cards activate only after an owner/manager records Cash, Card or M-Pesa funding against an open till.
 - Configured network thermal printing is used directly after checkout, with browser fallback; drawer kick occurs only for the original Cash checkout, never a reprint.
 - Installed backups now write to `%ProgramData%\\OpenPOS\\backups`, run `integrity_check`, and can be tested with `npm run backup:verify`.
-- GitHub CI runs the complete suite on Node 20 for Windows and Linux and compiles the actual Inno Setup installer on Windows.
+- `ci/openpos-ci.yml` is a ready-to-activate Windows/Linux Node 20 workflow that runs the complete suite and compiles the actual Inno Setup installer. Copy it to `.github/workflows/ci.yml` using a GitHub credential with Workflow permission.
 
 ## Security basics
 
