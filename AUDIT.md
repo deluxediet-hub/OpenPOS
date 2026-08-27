@@ -34,6 +34,7 @@ The workspace now has a focused bottle-shop workflow: barcode/SKU products, live
 - Barcode, SKU or product-name search; owner-controlled global scanner mode can pull a matching product into the current sale from any normal page.
 - Scanner capture pauses in forms and modals so owner-entered data is not corrupted.
 - Repeated taps, barcode scans and quantity increases consolidate identical products into one line. Quantity changes preserve notes/modifiers, totals use the consolidated quantity, reports sum it, and browser/ESC-POS receipts defensively group older duplicate records.
+- Owner-only complimentary issues support full units or measured ml for owner consumption, staff, friends/guests, promotion/tasting or another recorded reason. They reduce stock (or remain theoretical for weighed kegs), create no payment, leave expected Cash/M-Pesa unchanged, and report both lost retail value and inventory cost. Their VAT/eTIMS treatment can differ by purpose, so the future live eTIMS adapter must apply the shop accountant's approved classification rather than silently treating every issue as an ordinary zero-price sale.
 - Parked/open sales, part-payments and receipt reprints.
 - Server-side change calculation and overpayment guards.
 - Duplicate M-Pesa confirmation references are rejected.

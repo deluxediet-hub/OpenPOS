@@ -103,7 +103,11 @@ const Cashier = (() => {
               ? { title: 'Sales by category', head: ['Category', 'Units', 'Sales'], right: [1, 2],
                   rows: (c.by_category || []).map((x) => [x.category, String(x.units), (x.v / 100).toFixed(2)]) }
               : { title: 'Sales by station', head: ['Station', 'Lines', 'Sales'], right: [1, 2],
-                  rows: c.by_station.map((s2) => [s2.station.toUpperCase(), String(s2.lines), (s2.v / 100).toFixed(2)]) }
+                  rows: c.by_station.map((s2) => [s2.station.toUpperCase(), String(s2.lines), (s2.v / 100).toFixed(2)]) },
+            ...((c.complimentary || []).length ? [{ title: 'Complimentary stock',
+              head: ['Product', 'Qty', 'Recipient', 'Reason', 'Retail value', 'Cost'], right: [1, 4, 5],
+              rows: c.complimentary.map((x) => [x.item_name, String(x.qty), x.recipient || '—', x.reason,
+                (x.retail_value / 100).toFixed(2), (x.cost_value / 100).toFixed(2)]) }] : [])
           ],
           summary: State.settings.business_type === 'wines_spirits' ? [
             ['Business expenses', money2(c.payouts)],
@@ -113,7 +117,9 @@ const Cashier = (() => {
             ['Expected M-Pesa', c.drawer && c.drawer.expected_mpesa != null ? money2(c.drawer.expected_mpesa) : '—'],
             ['Actual M-Pesa', c.drawer && c.drawer.counted_mpesa != null ? money2(c.drawer.counted_mpesa) : '—'],
             ['M-Pesa variance', c.drawer && c.drawer.mpesa_variance != null ? money2(c.drawer.mpesa_variance) : '—'],
-            ['Receipts closed', String(c.orders)], ['Units sold', String(c.units || 0)]
+            ['Receipts closed', String(c.orders)], ['Units sold', String(c.units || 0)],
+            ['Complimentary retail value', money2(c.complimentary_value || 0)],
+            ['Complimentary inventory cost', money2(c.complimentary_cost || 0)]
           ] : [
             ['Tips', money2(c.tips)], ['Cash payouts', money2(c.payouts)],
             ['Expected in drawer', c.drawer && c.drawer.expected != null ? money2(c.drawer.expected) : '—'],

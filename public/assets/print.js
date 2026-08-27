@@ -151,5 +151,7 @@ function printZReport(z) {
     summary: [
       ['Net sales', (z.net / 100).toFixed(2)], ['Receipts closed', String(z.orders)],
       ...(s.business_type === 'wines_spirits' ? [] : [['Covers', String(z.covers)]]),
-      ['Voids', String(z.voids)], ['Discounts', (z.discounts / 100).toFixed(2)], ['Tips', (z.tips / 100).toFixed(2)] ] });
+      ['Voids', String(z.voids)], ['Discounts', (z.discounts / 100).toFixed(2)], ['Tips', (z.tips / 100).toFixed(2)],
+      ...(s.business_type === 'wines_spirits' ? [['Complimentary retail value', (z.complimentary_value / 100).toFixed(2)],
+        ['Complimentary inventory cost', (z.complimentary_cost / 100).toFixed(2)]] : []) ] });
 }

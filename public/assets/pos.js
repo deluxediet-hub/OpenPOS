@@ -157,6 +157,7 @@ const Pos = (() => {
         <span class="grow"></span>
         ${retail ? '' : `<button class="btn sm" id="transfer">Move table</button>
         <button class="btn sm" id="peopleBtn">Guests: ${o.people}</button>`}
+        ${retail && ['manager', 'admin'].includes(State.user.role) ? '<button class="btn sm ghost" id="complimentaryBtn">🎁 Complimentary</button>' : ''}
         ${retail && !['manager', 'admin'].includes(State.user.role) ? '' : `<button class="btn sm" id="discBtn">Discount</button>
         <button class="btn sm red" id="voidBtn">Void order</button>`}
       </div>
@@ -265,6 +266,8 @@ const Pos = (() => {
       if (retail && State.user.role === 'seller') navigate('tables');
       else closeEditor(host);
     });
+    const complimentaryBtn = host.querySelector('#complimentaryBtn');
+    if (complimentaryBtn) complimentaryBtn.onclick = () => complimentaryModal(host);
     const transferBtn = host.querySelector('#transfer');
     if (transferBtn) transferBtn.onclick = () => transferModal(o, host);
     const voidBtn = host.querySelector('#voidBtn');
@@ -313,6 +316,63 @@ const Pos = (() => {
     const groups = groupsFor(mid);
     if (groups.length) return modifierPicker(host, m, groups);
     await pushLines(host, o.id, [{ menu_item_id: mid, qty: 1 }]);
+  }
+
+  function complimentaryModal(host) {
+    const products = State.menu.filter((m) => m.stock_item_id);
+    if (!products.length) return toast('No stock-linked products are available', 'err');
+    modal({ title: 'Record complimentary stock', wide: true, body: `
+      <p class="muted" style="margin-top:0">For owner consumption, staff, friends, tasting or promotion. No Cash/M-Pesa is expected; stock and inventory cost are still recorded.</p>
+      <div class="grid2"><div><label class="fld">Product</label><select class="inp" id="compProduct">${products.map((m) =>
+        `<option value="${m.id}">${esc(m.name)} · stock ${m.stock_qty ?? '—'}</option>`).join('')}</select></div>
+        <div><label class="fld">Quantity</label><input class="inp" id="compQty" type="number" min="1" step="1" value="1"></div></div>
+      <div class="card" style="margin-top:12px;background:#101820"><div class="card-b">
+        <label class="row" style="gap:8px;cursor:pointer"><input type="checkbox" id="compMeasured"> Give a measured amount instead of a full unit</label>
+        <div class="grid2 hidden" id="compMeasureFields" style="margin-top:10px"><div><label class="fld">Amount</label><select class="inp" id="compMeasure"></select></div>
+          <div><label class="fld">Custom ml</label><input class="inp" id="compCustomMl" type="number" min="0.01" step="0.01" placeholder="Optional"></div></div>
+      </div></div>
+      <div class="grid2" style="margin-top:12px"><div><label class="fld">Reason</label><select class="inp" id="compReason">
+        <option>Owner consumption</option><option>Staff complimentary</option><option>Friends / guests</option><option>Promotion / tasting</option><option>Other</option></select></div>
+        <div><label class="fld">Recipient / note</label><input class="inp" id="compRecipient" placeholder="Name or short explanation"></div></div>
+      <div class="card" style="margin-top:12px"><div class="card-b"><div class="tline"><span>Retail value given</span><b id="compValue">—</b></div>
+        <div class="tiny muted" id="compEffect" style="margin-top:6px"></div></div></div>`,
+      footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Record complimentary</button>' });
+    const ov = document.querySelector('#modalRoot .ov'), productSelect = ov.querySelector('#compProduct'),
+      measured = ov.querySelector('#compMeasured'), measureSelect = ov.querySelector('#compMeasure'), custom = ov.querySelector('#compCustomMl');
+    const selectedProduct = () => State.menu.find((m) => m.id === Number(productSelect.value));
+    const rebuildMeasures = () => {
+      const m = selectedProduct(), full = Number(m.volume_ml) || 0;
+      measureSelect.innerHTML = full ? [['Full',full],['Half',full/2],['Quarter',full/4],['Shot (⅛)',full/8]].map(([l,v]) =>
+        `<option value="${v}">${l} · ${Number(v.toFixed(2))} ml</option>`).join('') : '<option value="">Size not configured</option>';
+      update();
+    };
+    const chosenMl = () => measured.checked ? (Number(custom.value) || Number(measureSelect.value)) : 0;
+    const update = () => {
+      const m = selectedProduct(), qty = Math.max(1, Number(ov.querySelector('#compQty').value) || 1), ml = chosenMl();
+      const factor = ml && m.volume_ml ? ml / m.volume_ml : 1;
+      const stockFactor = ml && m.stock_mode === 'weighed' ? ml / 1000 : factor;
+      const deduction = (m.stock_deduction || 1) * stockFactor * qty;
+      ov.querySelector('#compValue').textContent = fmt(Math.round(m.price * factor * qty));
+      ov.querySelector('#compEffect').textContent = m.stock_mode === 'weighed' || m.stock_deduction_mode === 'count'
+        ? `Theoretical usage ${Number(deduction.toFixed(4))} kg; actual keg reduction is captured at end-shift stocktake.`
+        : `Stock deduction: ${Number(deduction.toFixed(4))} ${m.stock_unit || 'unit'}`;
+    };
+    productSelect.onchange = rebuildMeasures;
+    measured.onchange = () => { ov.querySelector('#compMeasureFields').classList.toggle('hidden', !measured.checked); update(); };
+    measureSelect.onchange = () => { custom.value = ''; update(); }; custom.oninput = update; ov.querySelector('#compQty').oninput = update;
+    ov.querySelector('[data-no]').onclick = closeModal;
+    ov.querySelector('[data-yes]').onclick = async () => {
+      const product = selectedProduct(), ml = chosenMl();
+      if (measured.checked && (!(ml > 0) || ml > product.volume_ml)) return toast('Enter a valid measured amount', 'err');
+      try {
+        const result = await api('/api/complimentaries', { body: { menu_item_id: product.id,
+          qty: Number(ov.querySelector('#compQty').value), measure_ml: ml || null,
+          reason: ov.querySelector('#compReason').value, recipient: ov.querySelector('#compRecipient').value.trim() } });
+        closeModal(); await loadBootstrap(); State.openOrderId = activeOrder() ? activeOrder().id : State.openOrderId;
+        renderEditor(host); toast(`Complimentary recorded · ${fmt(result.retail_value)} retail value · no cash due`, 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    rebuildMeasures();
   }
 
   function measurePicker(host, product) {

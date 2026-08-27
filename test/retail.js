@@ -104,6 +104,19 @@ const mk = () => {
     r.status === 200 && /^DEL-/.test(r.data.invoice_no) && r.data.total_cost === 420000 && r.data.payment_status === 'paid', JSON.stringify(r.data));
   stock = await seller.get('/api/stock');
   ck('delivery increases stock to 7.5 bottle equivalents', stock.data.find((x) => x.id === product.stock_item_id).qty === 7.5);
+  const cashBeforeComp = (await admin.get('/api/shifts/current')).data.drawer.expected;
+  r = await admin.post('/api/complimentaries', { menu_item_id: product.id, qty: 1, measure_ml: 125,
+    reason: 'Owner consumption', recipient: 'Owner' });
+  ck('owner records measured complimentary with retail and cost values', r.status === 200 && r.data.retail_value === 16667 && r.data.cost_value === 11667,
+    JSON.stringify(r.data));
+  stock = await seller.get('/api/stock');
+  ck('complimentary deducts only its bottle fraction', Math.abs(stock.data.find((x) => x.id === product.stock_item_id).qty - (7.5 - 125/750)) < 0.000001);
+  const cashAfterComp = (await admin.get('/api/shifts/current')).data.drawer.expected;
+  ck('complimentary does not change expected cash', cashAfterComp === cashBeforeComp);
+  r = await admin.get('/api/complimentaries?from=2000-01-01&to=2099-12-31');
+  ck('complimentary appears in owner reports', r.status === 200 && r.data.some((x) => x.reason === 'Owner consumption'));
+  r = await seller.post('/api/complimentaries', { menu_item_id: product.id, qty: 1, reason: 'Not allowed' });
+  ck('seller cannot issue complimentary stock', r.status === 403);
   r = await seller.post('/api/goods-receipts', { payment_method: 'pay_later',
     items: [{ stock_item_id: boot.menu[0].stock_item_id, qty: 1 }] });
   ck('pay-later delivery is recorded unpaid with an automatic reference', r.status === 200 && r.data.payment_status === 'unpaid' && /^DEL-/.test(r.data.invoice_no));
@@ -136,11 +149,11 @@ const mk = () => {
   ck('seller starts end-of-day stocktake', r.status === 200, JSON.stringify(r.data));
   const count = (await seller.get('/api/stock-counts/' + r.data.id)).data;
   const counted = count.items.map((x) => ({ stock_item_id: x.stock_item_id,
-    counted: x.stock_item_id === product.stock_item_id ? 5.5 : x.expected, added_qty: 0 }));
+    counted: x.stock_item_id === product.stock_item_id ? 16/3 : x.expected, added_qty: 0 }));
   r = await seller.post(`/api/stock-counts/${count.id}/complete`, { items: counted });
   ck('stocktake posts one variance', r.status === 200 && r.data.variances === 1, JSON.stringify(r.data));
   stock = await seller.get('/api/stock');
-  ck('stocktake sets physical quantity', stock.data.find((x) => x.id === product.stock_item_id).qty === 5.5);
+  ck('stocktake sets physical quantity', Math.abs(stock.data.find((x) => x.id === product.stock_item_id).qty - 16/3) < 0.000001);
 
   const current = (await seller.get('/api/shifts/current')).data;
   r = await seller.post(`/api/shifts/${current.shift.id}/payout`, { amount: 100, method: 'cash', reason: 'Transport receipt' });

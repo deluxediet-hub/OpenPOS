@@ -142,7 +142,9 @@ const listMenu = () => db.prepare(`
       WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_unit,
     (SELECT r.qty FROM recipes r WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_deduction,
     (SELECT si.name FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
-      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_source_name
+      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_source_name,
+    (SELECT si.deduction_mode FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
+      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_deduction_mode
   FROM menu_items m JOIN categories c ON c.id = m.category_id
   ORDER BY c.sort_order, m.sort_order, m.name`).all();
 
@@ -846,6 +848,55 @@ app.post('/api/stock/:id/adjust', requireAuth, requireRole('manager', 'admin'), 
   res.json(db.prepare('SELECT * FROM stock_items WHERE id=?').get(s.id));
 });
 
+/* ---------------- complimentary stock issues (no cash transaction) -------- */
+app.get('/api/complimentaries', requireAuth, requireRole('manager', 'admin'), (req, res) => {
+  const from = req.query.from || todayLocal(), to = req.query.to || from;
+  res.json(db.prepare(`SELECT ci.*,u.name created_by_name,si.unit stock_unit FROM complimentary_issues ci
+    LEFT JOIN users u ON u.id=ci.created_by LEFT JOIN stock_items si ON si.id=ci.stock_item_id
+    WHERE ci.created_at BETWEEN ? AND ? ORDER BY ci.id DESC`).all(dayBounds(from), dayEnd(to)));
+});
+
+app.post('/api/complimentaries', requireAuth, requireRole('manager', 'admin'), (req, res) => {
+  if (getSetting('business_type') !== 'wines_spirits') return bad(res, 'Complimentary issues are available in retail mode only');
+  const shift = ensureRetailTill(req.user);
+  if (!shift) return bad(res, 'Finish till reconciliation before recording a complimentary issue');
+  const m = db.prepare('SELECT * FROM menu_items WHERE id=?').get(Number(req.body.menu_item_id));
+  if (!m) return bad(res, 'Product not found', 404);
+  const qty = Number(req.body.qty || 1), fullMl = Number(m.volume_ml) || 0, measureMl = Number(req.body.measure_ml) || 0;
+  if (!Number.isInteger(qty) || qty <= 0) return bad(res, 'Quantity must be a positive whole number');
+  if (measureMl && (!(fullMl > 0) || measureMl <= 0 || measureMl > fullMl)) return bad(res, 'Measured amount is invalid');
+  const reason = String(req.body.reason || '').trim(), recipient = String(req.body.recipient || '').trim();
+  if (!reason) return bad(res, 'Complimentary reason is required');
+  if (['Staff complimentary', 'Friends / guests', 'Other'].includes(reason) && !recipient)
+    return bad(res, 'Recipient or explanation is required for this complimentary reason');
+  const priceFactor = measureMl ? measureMl / fullMl : 1;
+  const stockFactor = measureMl ? (m.stock_mode === 'weighed' ? measureMl / 1000 : priceFactor) : 1;
+  const recipe = db.prepare(`SELECT r.qty deduction,si.* FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
+    WHERE r.menu_item_id=? ORDER BY r.id LIMIT 1`).get(m.id);
+  if (!recipe) return bad(res, 'Product has no stock mapping');
+  const stockQty = recipe.deduction * stockFactor * qty;
+  if (getSetting('prevent_negative_stock') === '1' && recipe.qty < stockQty)
+    return bad(res, `${m.name}: insufficient stock for this complimentary issue`);
+  const itemName = measureMl ? `${m.name} — ${Number(measureMl.toFixed(2))}ml` : m.name;
+  const retailValue = Math.round(m.price * priceFactor * qty), costValue = Math.round(m.cost * stockFactor * qty);
+  let id;
+  const tx = db.transaction(() => {
+    const deducted = recipe.deduction_mode === 'count' ? 0 : 1;
+    if (deducted) {
+      db.prepare('UPDATE stock_items SET qty=qty-? WHERE id=?').run(stockQty, recipe.id);
+      db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
+        .run(recipe.id, -stockQty, `Complimentary: ${reason}${recipient ? ' · ' + recipient : ''}`, req.user.id);
+    }
+    id = db.prepare(`INSERT INTO complimentary_issues(menu_item_id,item_name,qty,measure_ml,stock_factor,
+      retail_value,cost_value,stock_item_id,stock_qty,deducted,reason,recipient,shift_id,created_by)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(m.id, itemName, qty, measureMl || null, stockFactor,
+      retailValue, costValue, recipe.id, stockQty, deducted, reason, recipient || null, shift.id, req.user.id).lastInsertRowid;
+  }); tx();
+  audit(req.user, 'complimentary.issue', `${itemName} x${qty} · retail KSh${(retailValue / 100).toFixed(2)} · cost KSh${(costValue / 100).toFixed(2)} · ${reason}${recipient ? ' · ' + recipient : ''}`);
+  broadcast('stock'); broadcast('sales');
+  res.json(db.prepare('SELECT * FROM complimentary_issues WHERE id=?').get(id));
+});
+
 /* ---------------------- retail receiving & stocktakes --------------------- */
 app.get('/api/suppliers', requireAuth, (req, res) =>
   res.json(db.prepare('SELECT * FROM suppliers WHERE active=1 ORDER BY name').all()));
@@ -1098,6 +1149,8 @@ app.get('/api/reports/summary', requireAuth, requireRole('manager', 'admin', 'ca
   const covers = g(`SELECT COALESCE(SUM(people),0) c FROM orders WHERE closed_at BETWEEN ? AND ? AND status='closed'`, [a, b]).c;
   const discounts = g(`SELECT COALESCE(SUM(discount),0) c FROM orders WHERE closed_at BETWEEN ? AND ?`, [a, b]).c;
   const tips = g(`SELECT COALESCE(SUM(tip),0) c FROM orders WHERE closed_at BETWEEN ? AND ? AND status='closed'`, [a, b]).c;
+  const comps = g(`SELECT COUNT(*) n,COALESCE(SUM(retail_value),0) retail,COALESCE(SUM(cost_value),0) cost
+    FROM complimentary_issues WHERE created_at BETWEEN ? AND ?`, [a, b]);
   const cost = g(`SELECT COALESCE(SUM(oi.price*oi.qty - m.cost*oi.qty*oi.stock_factor),0) gp,
       COALESCE(SUM(m.cost*oi.qty*oi.stock_factor),0) c
     FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN menu_items m ON m.id=oi.menu_item_id
@@ -1115,7 +1168,8 @@ app.get('/api/reports/summary', requireAuth, requireRole('manager', 'admin', 'ca
     orders_closed: closed, orders_void: voids, covers,
     avg_ticket: closed ? Math.round(gross / closed) : 0,
     avg_per_cover: covers ? Math.round(gross / covers) : 0,
-    discounts, tips, cogs: cost.c || 0, gross_profit: cost.gp || 0,
+    discounts, tips, complimentary_count: comps.n || 0, complimentary_value: comps.retail || 0,
+    complimentary_cost: comps.cost || 0, cogs: cost.c || 0, gross_profit: cost.gp || 0,
     margin: cost.c ? Math.round(((cost.gp) / (cost.gp + cost.c)) * 1000) / 10 : 0,
     by_method: byMethod
   });
@@ -1180,8 +1234,11 @@ app.get('/api/zreport', requireAuth, requireRole('seller', 'manager', 'admin', '
   const tips = db.prepare("SELECT COALESCE(SUM(tip),0) c FROM orders WHERE closed_at BETWEEN ? AND ?").get(a, b).c;
   const discounts = db.prepare("SELECT COALESCE(SUM(discount),0) c FROM orders WHERE closed_at BETWEEN ? AND ?").get(a, b).c;
   const covers = db.prepare("SELECT COALESCE(SUM(people),0) c FROM orders WHERE closed_at BETWEEN ? AND ? AND status='closed'").get(a, b).c;
+  const comps = db.prepare(`SELECT COUNT(*) n,COALESCE(SUM(retail_value),0) retail,COALESCE(SUM(cost_value),0) cost
+    FROM complimentary_issues WHERE created_at BETWEEN ? AND ?`).get(a, b);
   res.json({
     date: day, settings: getSettings(), by_method: sales, orders, voids, tips, discounts, covers,
+    complimentary_count: comps.n, complimentary_value: comps.retail, complimentary_cost: comps.cost,
     net: sales.filter((s) => s.method !== 'refund').reduce((x, s) => x + s.total, 0)
       + sales.filter((s) => s.method === 'refund').reduce((x, s) => x + s.total, 0)
   });
@@ -1443,12 +1500,16 @@ app.get('/api/shift-clearing', requireAuth, requireRole('seller', 'cashier', 'ma
   const payouts = one(`SELECT COALESCE(SUM(amount),0) v FROM cash_payouts WHERE shift_id=?`);
   const covers = one(`SELECT COALESCE(SUM(people),0) v FROM orders WHERE shift_id=? AND status='closed'`);
   const ordersN = one(`SELECT COUNT(*) v FROM orders WHERE shift_id=? AND status='closed'`);
+  const complimentary = s ? db.prepare(`SELECT ci.*,u.name created_by_name FROM complimentary_issues ci
+    LEFT JOIN users u ON u.id=ci.created_by WHERE ci.shift_id=? ORDER BY ci.id`).all(s.id) : [];
   let drawer = null;
   if (s) drawer = s.status !== 'closed' ? drawerFigures(s)
     : { expected: s.expected_cash, counted: s.counted_cash, variance: s.variance,
       expected_mpesa: s.expected_mpesa, counted_mpesa: s.counted_mpesa, mpesa_variance: s.mpesa_variance, payouts };
   res.json({ shift: s || null, by_method: byMethod, by_station: byStation, by_category: byCategory,
-    tips, payouts, covers, units: byCategory.reduce((n, x) => n + Number(x.units || 0), 0), orders: ordersN, drawer });
+    tips, payouts, covers, units: byCategory.reduce((n, x) => n + Number(x.units || 0), 0), orders: ordersN,
+    complimentary, complimentary_value: complimentary.reduce((n, x) => n + x.retail_value, 0),
+    complimentary_cost: complimentary.reduce((n, x) => n + x.cost_value, 0), drawer });
 });
 
 /* ==================== OPEN BAR TABS / PRE-AUTH (3.8) ==================== */

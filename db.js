@@ -415,6 +415,17 @@ function migrate() {
       stock_item_id INTEGER NOT NULL REFERENCES stock_items(id), expected REAL NOT NULL,
       counted REAL, variance REAL, added_qty REAL NOT NULL DEFAULT 0, UNIQUE(stock_count_id,stock_item_id)
     );
+    CREATE TABLE IF NOT EXISTS complimentary_issues (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      menu_item_id INTEGER REFERENCES menu_items(id), item_name TEXT NOT NULL,
+      qty REAL NOT NULL, measure_ml REAL, stock_factor REAL NOT NULL DEFAULT 1,
+      retail_value INTEGER NOT NULL DEFAULT 0, cost_value INTEGER NOT NULL DEFAULT 0,
+      stock_item_id INTEGER REFERENCES stock_items(id), stock_qty REAL NOT NULL DEFAULT 0,
+      deducted INTEGER NOT NULL DEFAULT 1, reason TEXT NOT NULL, recipient TEXT,
+      shift_id INTEGER REFERENCES shifts(id), created_by INTEGER REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS ix_complimentary_created ON complimentary_issues(created_at);
   `);
   add('stock_count_items', 'added_qty', 'added_qty REAL NOT NULL DEFAULT 0');
   add('goods_receipts', 'payment_method', "payment_method TEXT NOT NULL DEFAULT 'pay_later'");

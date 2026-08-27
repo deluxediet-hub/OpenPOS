@@ -81,6 +81,7 @@ const Manager = (() => {
         ${stat('Gross profit', fmt(s.gross_profit), s.margin + '% margin · COGS ' + fmt(s.cogs))}
         ${stat('VAT collected', fmt(s.vat_collected), `${State.settings.vat_rate}% (${State.settings.tax_mode})`)}
         ${stat('Discounts & voids', fmt(s.discounts), s.orders_void + (retail ? ' voided sales' : ' voided checks'), 'warn')}
+        ${retail ? stat('Complimentary', fmt(s.complimentary_value), `${s.complimentary_count} issue(s) · cost ${fmt(s.complimentary_cost)}`, s.complimentary_cost ? 'warn' : '') : ''}
       </div>
       <div class="grid" style="grid-template-columns:1.25fr 1fr">
         <div class="card"><div class="card-h"><h3>Sales by hour — ${range.from}</h3></div>
@@ -160,6 +161,7 @@ const Manager = (() => {
         ['categories', 'Sales by category', 'Units and revenue by category'],
         ['low', 'Low stock only', 'Products at or below their reorder level'],
         ['expenses', 'Expenses only', 'Cash and M-Pesa expenses for the period'],
+        ['complimentary', 'Complimentary issues', 'Owner, staff, friends, tasting and promotion stock'],
         ['stock', 'Full stock position', 'On-hand quantity and inventory value']
       ];
       modal({ title: 'Build PDF report', wide: true,
@@ -172,7 +174,7 @@ const Manager = (() => {
       ov.querySelector('[data-yes]').onclick = async () => {
         const selected = new Set([...ov.querySelectorAll('[data-pdf]:checked')].map((x) => x.dataset.pdf));
         if (!selected.size) return toast('Select at least one report section', 'err');
-        const { q, t, s: sm, items, waiters, cats } = last;
+        const { q, t, s: sm, items, waiters, cats, comps } = last;
         try {
           const [stock, expenses] = await Promise.all([
             selected.has('low') || selected.has('stock') ? api('/api/stock') : Promise.resolve([]),
@@ -183,7 +185,8 @@ const Manager = (() => {
             ['Net sales', fmt(sm.gross)], ['Gross takings', fmt(sm.paid)], ['Refunds', '-' + fmt(sm.refunded)],
             ['VAT included', fmt(sm.vat_collected)], ['Discounts', fmt(sm.discounts)], ['Receipts closed', String(sm.orders_closed)],
             [retail ? 'Units sold' : 'Covers', String(retail ? items.reduce((n, i) => n + Number(i.qty || 0), 0) : sm.covers)],
-            ['Average ticket', fmt(sm.avg_ticket)] ] });
+            ['Average ticket', fmt(sm.avg_ticket)],
+            ...(retail ? [['Complimentary retail value', fmt(sm.complimentary_value)], ['Complimentary inventory cost', fmt(sm.complimentary_cost)]] : []) ] });
           if (selected.has('payments')) tables.push({ title: 'Payment methods', head: ['Method', 'Transactions', 'Total'], right: [1, 2],
             rows: sm.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]) });
           if (selected.has('top')) tables.push({ title: 'Top 5 products', head: ['Product', 'Qty', 'Revenue'], right: [1, 2],
@@ -197,6 +200,10 @@ const Manager = (() => {
           if (selected.has('expenses')) tables.push({ title: 'Expenses', head: ['Date', 'Paid via', 'Amount', 'Reason', 'Recorded by'], right: [2],
             rows: expenses.map((x) => [(x.created_at || '').slice(0, 16), String(x.method || 'cash').toUpperCase(),
               (x.amount / 100).toFixed(2), x.reason || '', x.user_name || '—']) });
+          if (selected.has('complimentary')) tables.push({ title: 'Complimentary issues',
+            head: ['Date', 'Product', 'Qty', 'Recipient', 'Reason', 'Retail value', 'Cost'], right: [2, 5, 6],
+            rows: comps.map((x) => [(x.created_at || '').slice(0, 16), x.item_name, String(x.qty), x.recipient || '—', x.reason,
+              (x.retail_value / 100).toFixed(2), (x.cost_value / 100).toFixed(2)]) });
           if (selected.has('stock')) tables.push({ title: 'Stock position', head: ['Product', 'On hand', 'Unit cost', 'Value'], right: [1, 2, 3],
             rows: stock.map((x) => [x.name, `${x.qty} ${x.unit}`, (x.cost / 100).toFixed(2), (x.qty * x.cost / 100).toFixed(2)]) });
           closeModal();
@@ -207,13 +214,14 @@ const Manager = (() => {
 
     const go = async () => {
       const q = body.querySelector('#rf').value, t = body.querySelector('#rt').value;
-      const [s, items, waiters, cats] = await Promise.all([
+      const [s, items, waiters, cats, comps] = await Promise.all([
         api(`/api/reports/summary?from=${q}&to=${t}`),
         api(`/api/reports/items?from=${q}&to=${t}`),
         api(`/api/reports/waiters?from=${q}&to=${t}`),
-        api(`/api/reports/categories?from=${q}&to=${t}`)
+        api(`/api/reports/categories?from=${q}&to=${t}`),
+        retail ? api(`/api/complimentaries?from=${q}&to=${t}`) : Promise.resolve([])
       ]);
-      last = { q, t, s, items, waiters, cats };
+      last = { q, t, s, items, waiters, cats, comps };
       body.querySelector('#rpt').innerHTML = `
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:14px">
           ${stat('Net sales', fmt(s.gross), s.orders_closed + ' receipts')}
@@ -222,6 +230,7 @@ const Manager = (() => {
           ${stat('VAT', fmt(s.vat_collected), State.settings.vat_rate + '%')}
           ${stat('Tips', fmt(s.tips), 'staff gratuities')}
           ${stat('Discounts', fmt(s.discounts), s.orders_void + ' voids')}
+          ${retail ? stat('Complimentary', fmt(s.complimentary_value), `${s.complimentary_count} issue(s) · cost ${fmt(s.complimentary_cost)}`, s.complimentary_cost ? 'warn' : '') : ''}
         </div>
         <div class="grid" style="grid-template-columns:1fr 1fr">
           <div class="card"><div class="card-h"><h3>Sales by ${retail ? 'seller' : 'waiter'}</h3></div>
@@ -251,7 +260,11 @@ const Manager = (() => {
                 <td class="right mono"><b>${fmt(i.revenue)}</b></td>
                 <td class="right"><span class="tag ${marg >= 60 ? 'ok' : marg >= 40 ? 'warn' : 'bad'}">${marg}%</span></td></tr>`;
             }).join('') || `<tr><td colspan="${retail ? 6 : 7}" class="empty">No sales in this range.</td></tr>`}</tbody></table></div>
-        </div>`;
+        </div>
+        ${retail ? `<div class="card" style="margin-top:14px"><div class="card-h"><h3>Complimentary issues</h3><span class="grow"></span><span class="muted tiny">No cash is expected; inventory cost is tracked separately</span></div>
+          <div class="scroll-x"><table class="tbl"><thead><tr><th>When</th><th>Product</th><th>Qty</th><th>Recipient</th><th>Reason</th><th class="right">Retail value</th><th class="right">Cost</th></tr></thead>
+          <tbody>${comps.map((x) => `<tr><td class="nowrap muted">${(x.created_at || '').slice(0,16)}</td><td><b>${esc(x.item_name)}</b></td><td>${x.qty}</td>
+            <td>${esc(x.recipient || '—')}</td><td>${esc(x.reason)}</td><td class="right">${fmt(x.retail_value)}</td><td class="right">${fmt(x.cost_value)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">No complimentary stock issued in this period.</td></tr>'}</tbody></table></div></div>` : ''}`;
       window.__rptCsv = { s, items, waiters, cats, q, t };
     };
 

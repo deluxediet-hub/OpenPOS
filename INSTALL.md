@@ -149,6 +149,8 @@ Database migrations run automatically, but a backup is still mandatory.
 - [ ] Cash/M-Pesa paid deliveries reduce the correct expected balance; Other and Pay later do not.
 - [ ] A Pay later delivery can subsequently be marked paid exactly once.
 - [ ] Cash and M-Pesa expenses reduce the correct expected balance.
+- [ ] Owner can issue a full or measured complimentary item; stock and complimentary cost/value reports change while expected Cash/M-Pesa does not.
+- [ ] Seller cannot access complimentary issue controls or endpoints.
 - [ ] End-of-day stocktake blocks further sales and presents products one at a time.
 - [ ] Added stock, physical stock at hand and No change / Skip all behave correctly.
 - [ ] Receipt and drawer hardware work.
