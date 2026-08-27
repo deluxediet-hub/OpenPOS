@@ -46,20 +46,43 @@ const Retail = (() => {
     body.innerHTML = `<div class="row" style="margin-bottom:14px"><div><h3 style="margin:0">Stock deliveries</h3>
       <div class="tiny muted">Select delivered products and quantities. Costs come from owner-controlled Product Settings.</div></div>
       <span class="grow"></span><button class="btn primary" id="receiveDelivery">+ Receive delivery</button></div>
-      <div class="card"><div class="scroll-x"><table class="tbl"><thead><tr><th>Received</th><th>Invoice / note</th><th>Supplier</th><th class="right">Lines</th><th class="right">Cost</th><th>Received by</th></tr></thead>
+      <div class="card"><div class="scroll-x"><table class="tbl"><thead><tr><th>Received</th><th>Invoice / reference</th><th>Supplier</th><th>Payment</th><th class="right">Lines</th><th class="right">Cost</th><th>Received by</th><th></th></tr></thead>
       <tbody>${rows.map((r) => `<tr><td class="nowrap muted">${esc(r.received_at)}</td><td class="mono"><b>${esc(r.invoice_no)}</b></td>
-        <td>${esc(r.supplier_name || 'Cash supplier')}</td><td class="right">${r.lines}</td><td class="right mono">${fmt(r.total_cost)}</td><td>${esc(r.received_by_name || '—')}</td></tr>`).join('') ||
-        '<tr><td colspan="6" class="empty">No deliveries received yet.</td></tr>'}</tbody></table></div></div>`;
+        <td>${esc(r.supplier_name || 'Cash supplier')}</td><td><span class="tag ${r.payment_status === 'paid' ? 'ok' : 'warn'}">${r.payment_method === 'pay_later' ? 'PAY LATER' : String(r.payment_method).toUpperCase()}</span></td>
+        <td class="right">${r.lines}</td><td class="right mono">${fmt(r.total_cost)}</td><td>${esc(r.received_by_name || '—')}</td>
+        <td>${r.payment_status !== 'paid' ? `<button class="btn xs" data-pay-delivery="${r.id}" data-ref="${esc(r.invoice_no)}">Mark paid</button>` : ''}</td></tr>`).join('') ||
+        '<tr><td colspan="8" class="empty">No deliveries received yet.</td></tr>'}</tbody></table></div></div>`;
     body.querySelector('#receiveDelivery').onclick = () => deliveryForm(body);
+    body.querySelectorAll('[data-pay-delivery]').forEach((b) => b.onclick = () => payDelivery(Number(b.dataset.payDelivery), b.dataset.ref, body));
+  }
+
+  function payDelivery(id, reference, body) {
+    modal({ title: 'Mark delivery paid — ' + reference, body: `<label class="fld">Payment method</label>
+      <select class="inp" id="deliveryPayMethod"><option value="cash">Cash from till</option><option value="mpesa">M-Pesa from till</option><option value="other">Already paid / other method</option></select>
+      <p class="tiny muted" style="margin-top:10px">Cash or M-Pesa reduces that expected till balance immediately.</p>`,
+      footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Confirm paid</button>' });
+    const ov = document.querySelector('#modalRoot .ov');
+    ov.querySelector('[data-no]').onclick = closeModal;
+    ov.querySelector('[data-yes]').onclick = async () => {
+      try {
+        await api(`/api/goods-receipts/${id}/pay`, { body: { method: ov.querySelector('#deliveryPayMethod').value } });
+        closeModal(); await loadBootstrap(); deliveries(body); toast('Delivery payment recorded', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    };
   }
 
   async function deliveryForm(body) {
     const [suppliers, stock] = await Promise.all([api('/api/suppliers'), api('/api/stock')]);
     const optionHtml = stock.map((x) => `<option value="${x.id}">${esc(x.name)} · ${x.qty} ${esc(x.unit)}</option>`).join('');
     modal({ title: 'Receive supplier delivery', wide: true, body: `
-      <div class="grid2"><div><label class="fld">Supplier</label><select class="inp" id="grSupplier"><option value="">Cash / not listed</option>
+      <div class="grid3"><div><label class="fld">Supplier</label><select class="inp" id="grSupplier"><option value="">Not listed / walk-in supplier</option>
         ${suppliers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>
-        <div><label class="fld">Invoice / delivery note no.</label><input class="inp mono" id="grInvoice" placeholder="Required"></div></div>
+        <div><label class="fld">Invoice / delivery note no. <span class="muted">(optional)</span></label><input class="inp mono" id="grInvoice" placeholder="Auto-generated if blank"></div>
+        <div><label class="fld">Payment</label><select class="inp" id="grPayment">
+          <option value="pay_later">Pay later / supplier credit</option><option value="cash">Paid from till cash</option>
+          <option value="mpesa">Paid from till M-Pesa</option><option value="other">Already paid / other method</option>
+        </select></div></div>
+      <p class="tiny muted" id="grPaymentHelp" style="margin:9px 0 0">Pay later records stock without reducing Cash or M-Pesa. Cash/M-Pesa payments reduce the matching expected till balance.</p>
       <div class="row" style="margin:16px 0 8px"><b>Delivered products</b><span class="grow"></span><button class="btn sm" id="addDeliveryLine">+ Line</button></div>
       <div id="deliveryLines"></div>
       <div style="margin-top:12px"><label class="fld">Notes</label><input class="inp" id="grNotes" placeholder="Driver, payment terms, damaged cartons…"></div>`,
@@ -78,9 +101,11 @@ const Retail = (() => {
         stock_item_id: Number(r.querySelector('[data-stock]').value), qty: Number(r.querySelector('[data-qty]').value)
       }));
       try {
-        await api('/api/goods-receipts', { body: { supplier_id: Number(ov.querySelector('#grSupplier').value) || null,
-          invoice_no: ov.querySelector('#grInvoice').value.trim(), notes: ov.querySelector('#grNotes').value.trim(), items } });
-        closeModal(); await loadBootstrap(); deliveries(body); toast('Delivery received and stock updated', 'ok');
+        const result = await api('/api/goods-receipts', { body: { supplier_id: Number(ov.querySelector('#grSupplier').value) || null,
+          invoice_no: ov.querySelector('#grInvoice').value.trim(), payment_method: ov.querySelector('#grPayment').value,
+          notes: ov.querySelector('#grNotes').value.trim(), items } });
+        closeModal(); await loadBootstrap(); deliveries(body);
+        toast(`Delivery ${result.invoice_no} received · ${result.payment_method === 'pay_later' ? 'payment pending' : 'payment recorded'}`, 'ok');
       } catch (e) { toast(e.message, 'err'); }
     };
   }

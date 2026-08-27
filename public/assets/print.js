@@ -84,7 +84,7 @@ function signatureHtml() {
       `<div class="rpt-sign-col"><div class="rpt-line"></div><div class="rpt-sign-l">${r}<br>Name / Signature / Date</div></div>`).join('')}
   </div>`;
 }
-function reportHtml({ settings, title, subtitle, tables = [], summary = [] }) {
+function reportHtml({ settings, title, subtitle, tables = [], summary = [], signature = true }) {
   const s = settings || State.settings;
   return `<div class="sheet">
     ${letterheadHtml(s)}
@@ -96,7 +96,7 @@ function reportHtml({ settings, title, subtitle, tables = [], summary = [] }) {
         <tbody>${t.rows.map((r) => `<tr>${r.map((c, i) => `<td class="${(t.right || []).includes(i) ? 'right' : ''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>
       </div>`).join('')}
     ${summary.length ? `<div class="rpt-sum">${summary.map(([l, v]) => `<div class="r"><span>${esc(l)}</span><b>${esc(v)}</b></div>`).join('')}</div>` : ''}
-    ${signatureHtml()}
+    ${signature ? signatureHtml() : ''}
   </div>`;
 }
 function printReport(opts) { doPrint(reportHtml(opts)); }

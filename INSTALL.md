@@ -142,14 +142,17 @@ Database migrations run automatically, but a backup is still mandatory.
 - [ ] Card and M-Pesa references print correctly.
 - [ ] Duplicate M-Pesa reference is rejected.
 - [ ] Paid sale reduces product stock.
-- [ ] Supplier delivery asks only for product and quantity, increases stock, preserves configured cost, and seller cannot directly edit/adjust stock.
+- [ ] Supplier delivery asks only for product and quantity, permits a blank invoice reference, preserves configured cost, and seller cannot directly edit/adjust stock.
+- [ ] Cash/M-Pesa paid deliveries reduce the correct expected balance; Other and Pay later do not.
+- [ ] A Pay later delivery can subsequently be marked paid exactly once.
 - [ ] Cash and M-Pesa expenses reduce the correct expected balance.
 - [ ] End-of-day stocktake blocks further sales and presents products one at a time.
 - [ ] Added stock, physical stock at hand and No change / Skip all behave correctly.
 - [ ] Receipt and drawer hardware work.
 - [ ] Till cannot close before stocktake or with open sales.
 - [ ] Closing Cash and M-Pesa variances are correct and stored.
-- [ ] Owner can review audit log and reports.
+- [ ] Owner can review audit log and build a PDF containing only selected sections such as Top 5 products, low stock or expenses.
+- [ ] PDF reports have visible A4 side margins and do not add a blank trailing page.
 - [ ] KRA-approved eTIMS process is operational separately or through a completed integration.
 - [ ] Backup exists off-device and has been restored successfully.
 

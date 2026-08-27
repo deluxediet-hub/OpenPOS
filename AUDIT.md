@@ -59,7 +59,8 @@ A 2025 national policy proposed raising the threshold to 21, but reporting descr
 - Current stock and low/out indicators appear in product management and the till.
 - Negative stock can be blocked server-side.
 - Sellers can receive deliveries against a mandatory supplier invoice/delivery-note number, but cannot directly edit or quick-adjust stock.
-- Delivery entry asks staff only for product and quantity; valuation always uses the owner-controlled cost already stored in Product Settings.
+- Delivery entry asks staff only for product and quantity; invoice/delivery reference is optional and valuation always uses the owner-controlled cost in Product Settings.
+- Payment is recorded as Cash, M-Pesa, already paid/other, or pay later. Cash/M-Pesa stock payments reduce the corresponding expected till balance, and an unpaid delivery can be marked paid later.
 - Receiving updates quantity, stock movement history and audit history transactionally without allowing staff to alter cost.
 - Supplier directory stores contact/address/KRA details.
 - End-of-day stocktake freezes sales and presents one item at a time. The operator can jump through a product dropdown, move previous/next, and all entered values auto-save while the active quantity remains auto-selected.
@@ -79,7 +80,8 @@ A 2025 national policy proposed raising the threshold to 21, but reporting descr
 - Staff cannot assign themselves administrator rights.
 - Price changes, discounts, voids, refunds, payments, expenses, deliveries and stock corrections are audited.
 - Sellers must open the retail till before sales. Owners may use that shared till with attribution to their own account; if none is open, an owner sale automatically opens a zero-balance owner till. Starting end-of-day stocktake moves it into reconciliation, blocks further sales, and closing requires both Cash and M-Pesa actual balances.
-- Cash and M-Pesa expenses reduce their respective expected balances; both variances are stored and audited at close.
+- Cash and M-Pesa expenses—including paid stock deliveries—reduce their respective expected balances; both variances are stored and audited at close.
+- Empty automatically prepared sale tabs are discarded at stocktake and again at till close, so they cannot block reconciliation.
 - Runtime database files are no longer committed to Git.
 
 ## 3. Compliance assessment

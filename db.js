@@ -393,6 +393,7 @@ function migrate() {
     CREATE TABLE IF NOT EXISTS goods_receipts (
       id INTEGER PRIMARY KEY AUTOINCREMENT, supplier_id INTEGER REFERENCES suppliers(id),
       invoice_no TEXT NOT NULL, notes TEXT, total_cost INTEGER NOT NULL DEFAULT 0,
+      payment_method TEXT NOT NULL DEFAULT 'pay_later', payment_status TEXT NOT NULL DEFAULT 'unpaid',
       received_by INTEGER REFERENCES users(id), received_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
     );
     CREATE TABLE IF NOT EXISTS goods_receipt_items (
@@ -412,6 +413,8 @@ function migrate() {
     );
   `);
   add('stock_count_items', 'added_qty', 'added_qty REAL NOT NULL DEFAULT 0');
+  add('goods_receipts', 'payment_method', "payment_method TEXT NOT NULL DEFAULT 'pay_later'");
+  add('goods_receipts', 'payment_status', "payment_status TEXT NOT NULL DEFAULT 'unpaid'");
   /* Retail policy: buyers are handled as adults at entry; checkout must stay fast. */
   if ((db.prepare("SELECT value FROM settings WHERE key='business_type'").get() || {}).value === 'wines_spirits') {
     db.prepare("INSERT INTO settings(key,value) VALUES('age_verification_required','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();

@@ -63,13 +63,20 @@ const mk = () => {
   ck('sale deducts two bottles', stock.data.find((x) => x.id === product.stock_item_id).qty === 1);
 
   const supplier = (await admin.post('/api/suppliers', { name: 'Audit Distributor', kra_pin: 'P000000000A', phone: '0700000000' })).data;
-  r = await seller.post('/api/goods-receipts', { supplier_id: supplier.id, invoice_no: 'INV-AUDIT-1',
+  r = await seller.post('/api/goods-receipts', { supplier_id: supplier.id, payment_method: 'other',
     items: [{ stock_item_id: product.stock_item_id, qty: 6 }] });
-  ck('seller receives delivery using only product and quantity; configured cost is preserved',
-    r.status === 200 && r.data.total_cost === 420000, JSON.stringify(r.data));
+  ck('delivery reference is optional and configured product cost is preserved',
+    r.status === 200 && /^DEL-/.test(r.data.invoice_no) && r.data.total_cost === 420000 && r.data.payment_status === 'paid', JSON.stringify(r.data));
   stock = await seller.get('/api/stock');
   ck('delivery increases stock to seven', stock.data.find((x) => x.id === product.stock_item_id).qty === 7);
-
+  r = await seller.post('/api/goods-receipts', { payment_method: 'pay_later',
+    items: [{ stock_item_id: boot.menu[0].stock_item_id, qty: 1 }] });
+  ck('pay-later delivery is recorded unpaid with an automatic reference', r.status === 200 && r.data.payment_status === 'unpaid' && /^DEL-/.test(r.data.invoice_no));
+  const unpaidDeliveryId = r.data.id;
+  r = await seller.post(`/api/goods-receipts/${unpaidDeliveryId}/pay`, { method: 'other' });
+  ck('pay-later delivery can be marked paid later', r.status === 200 && r.data.payment_status === 'paid');
+  r = await seller.post(`/api/goods-receipts/${unpaidDeliveryId}/pay`, { method: 'other' });
+  ck('delivery cannot be paid twice', r.status === 400 && /already marked paid/i.test(r.data.error));
 
   const sale2 = (await seller.post('/api/orders', {})).data;
   r = await seller.post(`/api/orders/${sale2.id}/items`, { items: [{ menu_item_id: product.id, qty: 8 }] });
@@ -85,7 +92,7 @@ const mk = () => {
   const due4 = r.data.totals.grand_total / 100;
   r = await seller.post(`/api/orders/${sale4.id}/pay`, { method: 'mpesa', amount: due4, reference: 'TESTMPESA1' });
   ck('duplicate M-Pesa reference rejected', r.status === 400 && /already been used/i.test(r.data.error), JSON.stringify(r.data));
-  await admin.post(`/api/orders/${sale2.id}/void`, { reason: 'Test cleanup' });
+  /* sale2 is empty after its rejected line and must be discarded automatically at reconciliation. */
   await admin.post(`/api/orders/${sale4.id}/void`, { reason: 'Duplicate payment test cleanup' });
 
   r = await seller.post(`/api/stock/${product.stock_item_id}/adjust`, { delta: 1, reason: 'Not allowed' });

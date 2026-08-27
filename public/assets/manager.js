@@ -146,34 +146,63 @@ const Manager = (() => {
           `<button class="btn sm ghost" data-q="${q}">${q === '7d' ? 'Last 7 days' : q === '30d' ? 'Last 30 days' : q === 'this-month' ? 'This month' : q[0].toUpperCase() + q.slice(1)}</button>`).join('')}
         <span class="grow"></span>
         <button class="btn ghost" id="exp">⬇ Export CSV</button>
-        <button class="btn" id="spdf">🖨 PDF</button>
+        <button class="btn" id="spdf">🖨 Build PDF</button>
       </div>
       <div id="rpt"><div class="empty">Loading…</div></div>`;
     let last = null;
     body.querySelector('#spdf').onclick = () => {
       if (!last) return toast('Run the report first', 'err');
-      const { q, t, s: sm, items, waiters, cats } = last;
-      printReport({
-        title: 'Sales Report', subtitle: `Period ${q} to ${t}`,
-        tables: [
-          { title: 'Summary', head: ['Metric', 'Value'], right: [1], rows: [
+      const options = [
+        ['summary', 'Sales summary', 'Sales, refunds, VAT, receipts and average ticket'],
+        ['payments', 'Payment methods', 'Cash, Card and M-Pesa totals'],
+        ['top', 'Top 5 products', 'Five highest-revenue products'],
+        ['sellers', 'Sales by seller', 'Sales and revenue attributed to each person'],
+        ['categories', 'Sales by category', 'Units and revenue by category'],
+        ['low', 'Low stock only', 'Products at or below their reorder level'],
+        ['expenses', 'Expenses only', 'Cash and M-Pesa expenses for the period'],
+        ['stock', 'Full stock position', 'On-hand quantity and inventory value']
+      ];
+      modal({ title: 'Build PDF report', wide: true,
+        body: `<p class="muted" style="margin-top:0">Choose exactly what the PDF should contain. You can generate a single-section PDF such as Low stock or Expenses only.</p>
+          <div class="grid2">${options.map(([id, title, help], n) => `<label class="card" style="cursor:pointer"><div class="card-b row" style="align-items:flex-start">
+            <input type="checkbox" data-pdf="${id}" ${n < 3 ? 'checked' : ''}><span><b>${title}</b><br><span class="tiny muted">${help}</span></span></div></label>`).join('')}</div>`,
+        footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Generate selected PDF</button>' });
+      const ov = document.querySelector('#modalRoot .ov');
+      ov.querySelector('[data-no]').onclick = closeModal;
+      ov.querySelector('[data-yes]').onclick = async () => {
+        const selected = new Set([...ov.querySelectorAll('[data-pdf]:checked')].map((x) => x.dataset.pdf));
+        if (!selected.size) return toast('Select at least one report section', 'err');
+        const { q, t, s: sm, items, waiters, cats } = last;
+        try {
+          const [stock, expenses] = await Promise.all([
+            selected.has('low') || selected.has('stock') ? api('/api/stock') : Promise.resolve([]),
+            selected.has('expenses') ? api(`/api/reports/expenses?from=${q}&to=${t}`) : Promise.resolve([])
+          ]);
+          const tables = [];
+          if (selected.has('summary')) tables.push({ title: 'Sales summary', head: ['Metric', 'Value'], right: [1], rows: [
             ['Net sales', fmt(sm.gross)], ['Gross takings', fmt(sm.paid)], ['Refunds', '-' + fmt(sm.refunded)],
-            ['VAT collected', fmt(sm.vat_collected)], ['Tips', fmt(sm.tips)], ['Discounts', fmt(sm.discounts)],
-            ['Receipts closed', String(sm.orders_closed)], [retail ? 'Units sold' : 'Covers', String(retail ? items.reduce((n, i) => n + Number(i.qty || 0), 0) : sm.covers)],
-            ['Average ticket', fmt(sm.avg_ticket)] ] },
-          { title: 'By payment method', head: ['Method', 'Txns', 'Total'], right: [1, 2],
-            rows: sm.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]) },
-          { title: retail ? 'Top 5 products' : 'Top items', head: [retail ? 'Product' : 'Item', 'Qty', 'Revenue'], right: [1, 2],
-            rows: items.slice(0, retail ? 5 : 25).map((i) => [i.name, String(i.qty), (i.revenue / 100).toFixed(2)]) },
-          retail
-            ? { title: 'By seller', head: ['Seller', 'Sales', 'Revenue'], right: [1, 2],
-                rows: waiters.map((w) => [w.waiter || 'Unassigned', String(w.orders), (w.revenue / 100).toFixed(2)]) }
-            : { title: 'By waiter', head: ['Waiter', 'Checks', 'Covers', 'Revenue'], right: [1, 2, 3],
-                rows: waiters.map((w) => [w.waiter || 'Unassigned', String(w.orders), String(w.covers), (w.revenue / 100).toFixed(2)]) },
-          { title: 'By category', head: ['Category', 'Qty', 'Revenue'], right: [1, 2],
-            rows: cats.map((c) => [c.category, String(c.qty), (c.revenue / 100).toFixed(2)]) }
-        ]
-      });
+            ['VAT included', fmt(sm.vat_collected)], ['Discounts', fmt(sm.discounts)], ['Receipts closed', String(sm.orders_closed)],
+            [retail ? 'Units sold' : 'Covers', String(retail ? items.reduce((n, i) => n + Number(i.qty || 0), 0) : sm.covers)],
+            ['Average ticket', fmt(sm.avg_ticket)] ] });
+          if (selected.has('payments')) tables.push({ title: 'Payment methods', head: ['Method', 'Transactions', 'Total'], right: [1, 2],
+            rows: sm.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]) });
+          if (selected.has('top')) tables.push({ title: 'Top 5 products', head: ['Product', 'Qty', 'Revenue'], right: [1, 2],
+            rows: items.slice(0, 5).map((i) => [i.name, String(i.qty), (i.revenue / 100).toFixed(2)]) });
+          if (selected.has('sellers')) tables.push({ title: 'Sales by seller', head: ['Seller', 'Sales', 'Revenue'], right: [1, 2],
+            rows: waiters.map((w) => [w.waiter || 'Unassigned', String(w.orders), (w.revenue / 100).toFixed(2)]) });
+          if (selected.has('categories')) tables.push({ title: 'Sales by category', head: ['Category', 'Qty', 'Revenue'], right: [1, 2],
+            rows: cats.map((c) => [c.category, String(c.qty), (c.revenue / 100).toFixed(2)]) });
+          if (selected.has('low')) tables.push({ title: 'Low stock', head: ['Product', 'On hand', 'Reorder at', 'Unit'], right: [1, 2],
+            rows: stock.filter((x) => x.qty <= x.min_qty).map((x) => [x.name, String(x.qty), String(x.min_qty), x.unit]) });
+          if (selected.has('expenses')) tables.push({ title: 'Expenses', head: ['Date', 'Paid via', 'Amount', 'Reason', 'Recorded by'], right: [2],
+            rows: expenses.map((x) => [(x.created_at || '').slice(0, 16), String(x.method || 'cash').toUpperCase(),
+              (x.amount / 100).toFixed(2), x.reason || '', x.user_name || '—']) });
+          if (selected.has('stock')) tables.push({ title: 'Stock position', head: ['Product', 'On hand', 'Unit cost', 'Value'], right: [1, 2, 3],
+            rows: stock.map((x) => [x.name, `${x.qty} ${x.unit}`, (x.cost / 100).toFixed(2), (x.qty * x.cost / 100).toFixed(2)]) });
+          closeModal();
+          printReport({ title: 'Custom Management Report', subtitle: `Period ${q} to ${t}`, tables, signature: false });
+        } catch (e) { toast(e.message, 'err'); }
+      };
     };
 
     const go = async () => {

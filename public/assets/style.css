@@ -245,7 +245,7 @@ table.tbl tr:last-child td{border-bottom:0}
 .delivery-line-simple{grid-template-columns:minmax(220px,2fr) minmax(130px,1fr) auto}
 
 /* ---------- thermal receipt: tuned for 80mm (42 chars) and 58mm (32 chars) ---------- */
-.receipt{box-sizing:border-box;background:#fff;color:#000;width:302px;margin:0 auto;padding:12px 10px 16px;
+.receipt{page:receipt;box-sizing:border-box;background:#fff;color:#000;width:302px;margin:0 auto;padding:12px 10px 16px;
   font-family:"Courier New",ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;line-height:1.35}
 .receipt.receipt-58{width:218px;padding-left:7px;padding-right:7px;font-size:10px}
 .receipt .c{text-align:center;overflow-wrap:anywhere}
@@ -305,7 +305,7 @@ table.tbl tr:last-child td{border-bottom:0}
 .subtabs .tab.active{color:var(--teal);border-bottom-color:var(--teal)}
 
 /* ---------- printable A4 report sheet ---------- */
-.sheet{background:#fff;color:#000;max-width:760px;margin:0 auto;padding:28px 30px;
+.sheet{page:report;box-sizing:border-box;background:#fff;color:#000;max-width:760px;margin:0 auto;padding:28px 30px;
   font-family:Georgia,'Times New Roman',serif;font-size:13px}
 .rpt-head{text-align:center;border-bottom:3px double #000;padding-bottom:10px;margin-bottom:12px}
 .rpt-biz{font-size:22px;font-weight:700;letter-spacing:.5px;text-transform:uppercase}
@@ -325,7 +325,9 @@ table.tbl tr:last-child td{border-bottom:0}
 .rpt-sign-col{flex:1;text-align:center}
 .rpt-line{border-top:1px solid #000;height:34px}
 .rpt-sign-l{font-size:10.5px;margin-top:4px;color:#222}
-@media print{ .sheet{padding:0;max-width:none} }
+.rpt-tt,.rpt-table thead{break-after:avoid;page-break-after:avoid}
+.rpt-table tr,.rpt-sum .r,.rpt-sign{break-inside:avoid;page-break-inside:avoid}
+@media print{ .sheet{padding:0;max-width:none;margin:0} }
 /* ---------- first-run onboarding ---------- */
 .setup-card{width:min(560px,94vw);max-height:94vh;overflow:auto}
 .setup-card .fld{margin-top:4px}
@@ -522,8 +524,9 @@ table.tbl tr:last-child td{border-bottom:0}
   .receipt{max-width:100%}
 }
 
+@page receipt{margin:0}
+@page report{size:A4 portrait;margin:14mm 13mm 14mm 13mm}
 @media print{
-  @page{margin:0}
   html,body{margin:0!important;padding:0!important;background:#fff!important}
   body>*{display:none!important}
   #printRoot{display:block!important;position:static;margin:0;padding:0}

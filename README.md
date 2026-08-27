@@ -35,7 +35,7 @@ A blank setup is also supported. Creating a retail product automatically creates
 4. Receive supplier deliveries using an invoice/delivery-note number. Sellers cannot directly edit or quick-adjust stock.
 5. Record business expenses against Cash or M-Pesa so they reduce the correct expected balance.
 6. At day end, close every sale and start stocktake. Count one product at a time, entering unrecorded added stock and physical stock at hand, or choose **No change / Skip**.
-7. After stocktake, enter actual Cash and M-Pesa balances, review both variances and close the till.
+7. After stocktake, enter actual Cash and M-Pesa balances, review both variances and close the till. Any automatically prepared sale with no products is discarded rather than blocking reconciliation.
 
 ### Owner
 
@@ -47,9 +47,9 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 - Guided product setup with size, category and selling-unit dropdowns; restaurant preparation fields never appear in retail mode
 - Stocktake product jumper with automatic save, previous/next navigation and input auto-selection
 - Live stock shown at the till with optional negative-stock prevention
-- Supplier directory and fast receiving: staff select only product and quantity while configured costs remain owner-controlled
+- Supplier directory and fast receiving: staff select product and quantity, invoice/reference is optional, configured costs remain owner-controlled, and Cash/M-Pesa/other/pay-later status is tracked
 - Whole-keg sales plus shot/glass products that show available servings and deduct the correct fraction from a tracked bottle or keg
-- Focused dashboards/PDF summaries with Top 5 products instead of long ranking lists
+- Focused Top 5 dashboard plus a custom PDF builder where the owner selects summary, payments, Top 5 products, sellers, categories, low stock, expenses or full stock
 - Full stocktakes with expected, counted and audited variance
 - Fast checkout with no buyer-age prompt; the configured 18+ notice remains on receipts
 - Duplicate M-Pesa confirmation-code rejection

@@ -823,30 +823,61 @@ app.get('/api/goods-receipts', requireAuth, (req, res) => res.json(db.prepare(`
 
 app.post('/api/goods-receipts', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
   const b = req.body || {}, lines = Array.isArray(b.items) ? b.items : [];
-  if (!String(b.invoice_no || '').trim()) return bad(res, 'Supplier invoice or delivery note number required');
   if (!lines.length) return bad(res, 'Add at least one delivered product');
+  if (db.prepare("SELECT id FROM stock_counts WHERE status='open'").get())
+    return bad(res, 'Finish the active stocktake before receiving a delivery');
+  const paymentMethod = ['cash', 'mpesa', 'other', 'pay_later'].includes(b.payment_method) ? b.payment_method : 'pay_later';
+  const paymentStatus = paymentMethod === 'pay_later' ? 'unpaid' : 'paid';
+  const reference = String(b.invoice_no || '').trim() || `DEL-${todayLocal().replace(/-/g, '')}-${String(Date.now()).slice(-6)}`;
+  if (['cash', 'mpesa'].includes(paymentMethod) && !db.prepare("SELECT id FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get())
+    return bad(res, `Open the till before recording a ${paymentMethod === 'cash' ? 'cash' : 'M-Pesa'} stock payment`);
   let receiptId, total = 0;
   const tx = db.transaction(() => {
-    receiptId = db.prepare('INSERT INTO goods_receipts(supplier_id,invoice_no,notes,received_by) VALUES(?,?,?,?)')
-      .run(Number(b.supplier_id) || null, String(b.invoice_no).trim(), b.notes || null, req.user.id).lastInsertRowid;
+    receiptId = db.prepare(`INSERT INTO goods_receipts(supplier_id,invoice_no,notes,payment_method,payment_status,received_by)
+      VALUES(?,?,?,?,?,?)`).run(Number(b.supplier_id) || null, reference, b.notes || null,
+      paymentMethod, paymentStatus, req.user.id).lastInsertRowid;
     const ins = db.prepare('INSERT INTO goods_receipt_items(receipt_id,stock_item_id,qty,unit_cost,batch_no,expiry_date) VALUES(?,?,?,?,?,?)');
     for (const line of lines) {
       const stock = db.prepare('SELECT * FROM stock_items WHERE id=?').get(Number(line.stock_item_id));
       const qty = Number(line.qty);
       if (!stock || !(qty > 0)) throw new Error('Every delivery line needs a valid product and positive quantity');
-      /* Product cost is owner-controlled in Product Settings. Receiving staff only enter quantity. */
       ins.run(receiptId, stock.id, qty, stock.cost, null, null);
       db.prepare('UPDATE stock_items SET qty=qty+? WHERE id=?').run(qty, stock.id);
       db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
-        .run(stock.id, qty, `Delivery ${String(b.invoice_no).trim()}`, req.user.id);
+        .run(stock.id, qty, `Delivery ${reference}`, req.user.id);
       total += qty * stock.cost;
     }
-    db.prepare('UPDATE goods_receipts SET total_cost=? WHERE id=?').run(Math.round(total), receiptId);
+    total = Math.round(total);
+    db.prepare('UPDATE goods_receipts SET total_cost=? WHERE id=?').run(total, receiptId);
+    if (['cash', 'mpesa'].includes(paymentMethod)) {
+      const shift = db.prepare("SELECT id FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get();
+      db.prepare('INSERT INTO cash_payouts(shift_id,amount,reason,user_id,method) VALUES(?,?,?,?,?)')
+        .run(shift.id, total, `Stock delivery ${reference}`, req.user.id, paymentMethod);
+    }
   });
   try { tx(); } catch (e) { return bad(res, e.message); }
-  audit(req.user, 'delivery.receive', `${b.invoice_no} · ${lines.length} lines · KSh${(total / 100).toFixed(2)}`);
-  broadcast('stock');
-  res.json({ id: receiptId, total_cost: Math.round(total), ok: true });
+  audit(req.user, 'delivery.receive', `${reference} · ${lines.length} lines · KSh${(total / 100).toFixed(2)} · ${paymentMethod}`);
+  broadcast('stock'); broadcast('sales');
+  res.json({ id: receiptId, invoice_no: reference, total_cost: total, payment_method: paymentMethod, payment_status: paymentStatus, ok: true });
+});
+
+app.post('/api/goods-receipts/:id/pay', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
+  const receipt = db.prepare('SELECT * FROM goods_receipts WHERE id=?').get(req.params.id);
+  if (!receipt) return bad(res, 'Delivery not found', 404);
+  if (receipt.payment_status === 'paid') return bad(res, 'This delivery is already marked paid');
+  const method = ['cash', 'mpesa', 'other'].includes(req.body.method) ? req.body.method : null;
+  if (!method) return bad(res, 'Choose Cash, M-Pesa or Other');
+  const shift = ['cash', 'mpesa'].includes(method)
+    ? db.prepare("SELECT id FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get() : null;
+  if (['cash', 'mpesa'].includes(method) && !shift) return bad(res, 'Open the till before paying from Cash or M-Pesa');
+  const tx = db.transaction(() => {
+    db.prepare("UPDATE goods_receipts SET payment_method=?,payment_status='paid' WHERE id=?").run(method, receipt.id);
+    if (shift) db.prepare('INSERT INTO cash_payouts(shift_id,amount,reason,user_id,method) VALUES(?,?,?,?,?)')
+      .run(shift.id, receipt.total_cost, `Stock delivery ${receipt.invoice_no}`, req.user.id, method);
+  }); tx();
+  audit(req.user, 'delivery.pay', `${receipt.invoice_no} · ${method} · KSh${(receipt.total_cost / 100).toFixed(2)}`);
+  broadcast('sales');
+  res.json({ ok: true, payment_method: method, payment_status: 'paid' });
 });
 
 app.get('/api/stock-counts', requireAuth, (req, res) => res.json(db.prepare(`
@@ -1068,6 +1099,13 @@ app.get('/api/reports/categories', requireAuth, requireRole('manager', 'admin', 
     GROUP BY c.id ORDER BY revenue DESC`).all(dayBounds(from), dayEnd(to)));
 });
 
+app.get('/api/reports/expenses', requireAuth, requireRole('manager', 'admin'), (req, res) => {
+  const from = req.query.from || todayLocal(), to = req.query.to || from;
+  res.json(db.prepare(`SELECT cp.*,u.name user_name FROM cash_payouts cp
+    LEFT JOIN users u ON u.id=cp.user_id WHERE cp.created_at BETWEEN ? AND ?
+    ORDER BY cp.created_at DESC`).all(dayBounds(from), dayEnd(to)));
+});
+
 app.get('/api/reports/hourly', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
   const from = req.query.from || todayLocal();
   res.json(db.prepare(`
@@ -1286,6 +1324,14 @@ app.post('/api/shifts/:id/close', requireAuth, requireRole('seller', 'cashier', 
   if (s.status === 'closed') return bad(res, 'Shift already closed');
   if (req.body.counted_cash == null) return bad(res, 'Counted cash is required');
   if (getSetting('business_type') === 'wines_spirits' && req.body.counted_mpesa == null) return bad(res, 'M-Pesa balance is required');
+  if (getSetting('business_type') === 'wines_spirits') {
+    const empty = db.prepare(`SELECT o.id,o.number FROM orders o WHERE o.status='open'
+      AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id=o.id AND oi.status!='void')`).all();
+    for (const order of empty) {
+      db.prepare("UPDATE orders SET status='void',closed_at=datetime('now','localtime'),closed_by=? WHERE id=?").run(req.user.id, order.id);
+      audit(req.user, 'order.auto_void_empty', `#${order.number} at till close`);
+    }
+  }
   const openSales = db.prepare("SELECT COUNT(*) c FROM orders WHERE status IN ('open','billed')").get().c;
   if (openSales) return bad(res, `Close or void ${openSales} open sale(s) before closing the till`);
   if (getSetting('business_type') === 'wines_spirits' && !db.prepare("SELECT id FROM stock_counts WHERE status='completed' AND completed_at>=? ORDER BY id DESC LIMIT 1").get(s.opened_at))
