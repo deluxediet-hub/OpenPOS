@@ -1,5 +1,7 @@
 # OpenPOS Wines & Spirits — Full Product, Security and Kenya Readiness Audit
 
+> **Latest focused review:** See [`FULL_AUDIT_NON_INTEGRATION.md`](FULL_AUDIT_NON_INTEGRATION.md) for the 27 August 2026 line-by-line audit of application logic, permissions, accounting, stock, printing, backup and market readiness excluding live external integrations.
+
 **Audit date:** 26 August 2026
 **Repository baseline reviewed:** `090cc9a` plus the improvements in this workspace
 **Target operation:** one Kenyan off-licence wines and spirits shop, one owner/admin and approximately two sellers
