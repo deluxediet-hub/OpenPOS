@@ -305,8 +305,9 @@ const loadToday = async () => { TODAY = (await (await fetch(BASE + '/api/today')
   r = await cashier.get('/api/gift-cards/lookup/NOPE-0000-0000-0000');
   ck('unknown gift card 404s', r.status === 404);
 
-  r = await cashier.post('/api/gift-cards', { value: 1000 });
-  ck('issue gift card', r.status === 200 && /^GC-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(r.data.code), 'code=' + (r.data || {}).code);
+  await admin.post('/api/shifts', { opening_float: 0 });
+  r = await admin.post('/api/gift-cards', { value: 1000, payment_method: 'cash' });
+  ck('admin funds and issues gift card', r.status === 200 && /^GC-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(r.data.code), 'code=' + (r.data || {}).code);
   const gc = r.data;
 
   /* spend part of it */

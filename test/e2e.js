@@ -273,8 +273,10 @@ const login = async (pin) => { const c = mk(); await c.post('/api/login', { pin 
   r = await mgr.get(`/api/reports/summary?from=${t}&to=${t}`);
   ck('void counted in report', r.data.orders_void >= 1, 'voids=' + r.data.orders_void);
 
-  r = await mgr.post(`/api/orders/${order.id}/refund`, { amount: 50, reason: 'test refund' });
-  ck('manager issues refund', r.status === 200);
+  const returnOrder = (await mgr.get(`/api/orders/${order.id}`)).data;
+  r = await mgr.post(`/api/orders/${order.id}/refund`, { amount: 50, method: 'cash', reason: 'test refund',
+    restock: false, items: [{ order_item_id: returnOrder.items[0].id, qty: 1 }] });
+  ck('manager issues item-linked refund', r.status === 200 && r.data.return_record.amount === 5000);
   r = await cashier.post(`/api/orders/${order.id}/refund`, { amount: 50, reason: 'x' });
   ck('cashier cannot refund', r.status === 403, r.data.error);
 
@@ -316,7 +318,7 @@ const login = async (pin) => { const c = mk(); await c.post('/api/login', { pin 
   r = await mgr.get('/api/audit?limit=500');
   ck('audit log populated', r.status === 200 && r.data.length > 10, r.data.length + ' entries');
   const actions = [...new Set(r.data.map((x) => x.action))];
-  ['login', 'order.open', 'order.send', 'item.void', 'order.discount', 'payment', 'refund', 'order.void', 'stock.adjust', 'user.create']
+  ['login', 'order.open', 'order.send', 'item.void', 'order.discount', 'payment', 'return.issue', 'order.void', 'stock.adjust', 'user.create']
     .forEach((a) => ck('audit has ' + a, actions.includes(a)));
   r = await waiter.get('/api/audit');
   ck('waiter blocked from audit log', r.status === 403);

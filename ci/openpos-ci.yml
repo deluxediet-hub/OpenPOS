@@ -1,0 +1,64 @@
+name: OpenPOS CI
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [20]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Verify Windows launcher and installer invariants
+        run: node test/packaging.js
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-failure-${{ matrix.os }}
+          path: |
+            logs
+            shots
+          if-no-files-found: ignore
+  windows-installer-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Static packaging contract
+        run: node test/packaging.js
+      - name: Portable hidden launcher files exist
+        shell: powershell
+        run: |
+          if (-not (Test-Path .\start-pos.bat)) { throw 'start-pos.bat missing' }
+          if (-not (Test-Path .\start-pos-hidden.vbs)) { throw 'start-pos-hidden.vbs missing' }
+          node --check server.js
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+      - name: Build real Windows installer
+        shell: powershell
+        run: .\packaging\build-installer.ps1
+      - name: Verify installer artifact
+        shell: powershell
+        run: |
+          $installer = '.\packaging\output\OpenPOS-Setup.exe'
+          if (-not (Test-Path $installer)) { throw 'Installer was not produced' }
+          if ((Get-Item $installer).Length -lt 10MB) { throw 'Installer artifact is unexpectedly small' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenPOS-Windows-installer
+          path: packaging/output/OpenPOS-Setup.exe

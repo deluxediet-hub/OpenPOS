@@ -11,6 +11,7 @@
     "test:api": "BASE=http://127.0.0.1:3000 node test/e2e.js",
     "test:ui": "BASE=http://127.0.0.1:3000 node test/ui.js",
     "backup": "node scripts/backup.js",
+    "backup:verify": "node scripts/verify-backup.js",
     "test:visual": "node test/responsive.js"
   },
   "engines": {

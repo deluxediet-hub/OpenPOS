@@ -586,14 +586,20 @@ const Manager2 = (() => {
     host.querySelector('#addGc').onclick = () => {
       modal({ title: 'Issue gift card',
         body: `<label class="fld">Value (${sym()})</label><input class="inp" id="gv" type="number" step="0.01" placeholder="e.g. 2000">
+          <div class="grid2" style="margin-top:12px"><div><label class="fld">Funding payment</label><select class="inp" id="gm"><option value="cash">Cash</option><option value="card">Card</option><option value="mpesa">M-Pesa</option></select></div>
+            <div><label class="fld">Card/M-Pesa reference</label><input class="inp mono" id="gr" placeholder="Required for non-cash"></div></div>
           <div style="margin-top:12px"><label class="fld">Code (leave blank to auto-generate)</label>
-            <input class="inp mono" id="gc" placeholder="${State.settings.giftcard_prefix || 'SRN'}-XXXX-XXXX-XXXX"></div>`,
+            <input class="inp mono" id="gc" placeholder="${State.settings.giftcard_prefix || 'SRN'}-XXXX-XXXX-XXXX"></div>
+          <p class="tiny muted">The card activates only after this funding payment is recorded against the open till.</p>`,
         footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Issue</button>` });
       const ov = document.querySelector('#modalRoot .ov');
+      const fundingKey = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : `gift-${Date.now()}-${Math.random()}`;
       ov.querySelector('[data-no]').onclick = closeModal;
       ov.querySelector('[data-yes]').onclick = async () => {
         try {
-          const res = await api('/api/gift-cards', { body: { value: Number(ov.querySelector('#gv').value), code: ov.querySelector('#gc').value } });
+          const res = await api('/api/gift-cards', { body: { value: Number(ov.querySelector('#gv').value),
+            code: ov.querySelector('#gc').value, payment_method: ov.querySelector('#gm').value,
+            reference: ov.querySelector('#gr').value.trim(), idempotency_key: fundingKey } });
           closeModal(); cards(host);
           modal({ title: 'Gift card issued', body: `<div class="center" style="padding:16px">
             <div class="mono" style="font-size:22px;font-weight:700;letter-spacing:2px">${esc(res.code)}</div>

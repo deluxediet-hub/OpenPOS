@@ -59,7 +59,7 @@ function broadcast(type, payload = {}) {
   const msg = `event: ${type}\ndata: ${JSON.stringify({ ...payload, _t: Date.now() })}\n\n`;
   for (const c of clients) { try { c.write(msg); } catch { clients.delete(c); } }
 }
-app.get('/api/events', (req, res) => {
+app.get('/api/events', requireAuth, (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive', 'X-Accel-Buffering': 'no'
@@ -160,11 +160,17 @@ const orderWithTotals = (o) => {
       return { ...i, modifiers: mods };
     });
   const s = getSettings();
-  const paid = db.prepare('SELECT COALESCE(SUM(amount),0) p FROM payments WHERE order_id = ?').get(o.id).p;
-  return { ...o, items, totals: computeTotals(items, o.discount, s, o.tip), paid, balance: 0,
+  const paid = db.prepare("SELECT COALESCE(SUM(amount),0) p FROM payments WHERE order_id=? AND kind='sale'").get(o.id).p;
+  const calculated = computeTotals(items, o.discount, s, o.tip);
+  const totals = o.status === 'closed' && o.total_snapshot != null ? {
+    subtotal: o.subtotal_snapshot, discount: o.discount, service: o.service_snapshot,
+    vat: o.vat_snapshot, total: o.total_snapshot, tip: o.tip,
+    grand_total: o.grand_total_snapshot, currency: s.currency
+  } : calculated;
+  return { ...o, items, totals, paid, balance: 0,
     payments: db.prepare('SELECT * FROM payments WHERE order_id = ? ORDER BY id').all(o.id) };
 };
-const decorate = (o) => { const d = orderWithTotals(o); d.balance = d.totals.grand_total - d.paid; return d; };
+const decorate = (o) => { const d = orderWithTotals(o); d.balance = o.status === 'closed' ? 0 : d.totals.grand_total - d.paid; return d; };
 /* Always re-read the row before serialising: callers frequently mutate the order
    immediately beforehand and a stale row would return pre-update discount/tip/status. */
 const readOrder = (id) => db.prepare('SELECT * FROM orders WHERE id=?').get(id);
@@ -319,12 +325,15 @@ app.put('/api/menu-items/:id', requireAuth, requireRole('manager', 'admin'), (re
 app.delete('/api/menu-items/:id', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const cur = db.prepare('SELECT * FROM menu_items WHERE id=?').get(req.params.id);
   if (!cur) return bad(res, 'Not found', 404);
+  if(db.prepare('SELECT id FROM order_items WHERE menu_item_id=? LIMIT 1').get(cur.id))
+    return bad(res,'Sold products cannot be deleted; mark the product unavailable instead',409);
   const linkedStock = db.prepare('SELECT stock_item_id FROM recipes WHERE menu_item_id=?').all(cur.id).map((r) => r.stock_item_id);
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM menu_items WHERE id=?').run(cur.id);
     if (getSetting('business_type') === 'wines_spirits') for (const stockId of linkedStock) {
       const stillUsed = db.prepare('SELECT id FROM recipes WHERE stock_item_id=? LIMIT 1').get(stockId);
-      if (!stillUsed) db.prepare('DELETE FROM stock_items WHERE id=?').run(stockId);
+      const history = db.prepare('SELECT id FROM goods_receipt_items WHERE stock_item_id=? LIMIT 1').get(stockId);
+      if (!stillUsed && !history) db.prepare('DELETE FROM stock_items WHERE id=?').run(stockId);
     }
   });
   tx();
@@ -352,6 +361,8 @@ app.put('/api/categories/:id', requireAuth, requireRole('manager', 'admin'), (re
   res.json(db.prepare('SELECT * FROM categories WHERE id=?').get(c.id));
 });
 app.delete('/api/categories/:id', requireAuth, requireRole('manager', 'admin'), (req, res) => {
+  if(db.prepare('SELECT id FROM menu_items WHERE category_id=? LIMIT 1').get(req.params.id))
+    return bad(res,'Only empty categories can be deleted; move or archive their products first',409);
   db.prepare('DELETE FROM categories WHERE id=?').run(req.params.id);
   broadcast('menu');
   res.json({ ok: true });
@@ -441,8 +452,8 @@ app.post('/api/orders/:id/items', requireAuth, requireRole('seller', 'waiter', '
   const dayparts = db.prepare('SELECT * FROM dayparts WHERE active = 1').all();
   const groups = db.prepare('SELECT * FROM modifier_groups').all();
   const options = db.prepare('SELECT * FROM modifier_options').all();
-  const ins = db.prepare(`INSERT INTO order_items(order_id,menu_item_id,name,price,qty,note,station,added_by,modifiers,stock_factor)
-    VALUES(?,?,?,?,?,?,?,?,?,?)`);
+  const ins = db.prepare(`INSERT INTO order_items(order_id,menu_item_id,name,price,qty,note,station,added_by,modifiers,stock_factor,cost_snapshot)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?)`);
   const tx = db.transaction(() => {
     for (const l of lines) {
       const m = db.prepare('SELECT * FROM menu_items WHERE id=?').get(Number(l.menu_item_id));
@@ -506,7 +517,8 @@ app.post('/api/orders/:id/items', requireAuth, requireRole('seller', 'waiter', '
           AND COALESCE(note,'')=COALESCE(?,'') AND COALESCE(modifiers,'')=COALESCE(?,'')
         ORDER BY id LIMIT 1`).get(o.id, m.id, effectiveName, price, stockFactor, l.note || null, modifierJson) : null;
       if (existing) db.prepare('UPDATE order_items SET qty=qty+? WHERE id=?').run(qty, existing.id);
-      else ins.run(o.id, m.id, effectiveName, price, qty, l.note || null, m.station, req.user.id, modifierJson, stockFactor);
+      else ins.run(o.id, m.id, effectiveName, price, qty, l.note || null, m.station, req.user.id,
+        modifierJson, stockFactor, Math.round(m.cost * stockFactor));
     }
   });
   try { tx(); } catch (e) { return bad(res, e.message); }
@@ -537,11 +549,11 @@ app.patch('/api/orders/:id/items/:itemId/quantity', requireAuth, requireRole('se
   res.json(decorate(readOrder(order.id)));
 });
 
-app.patch('/api/orders/:id/items/:itemId', requireAuth, (req, res) => {
+app.patch('/api/orders/:id/items/:itemId', requireAuth, requireRole('kitchen','bartender','manager','admin'), (req, res) => {
   const it = db.prepare('SELECT * FROM order_items WHERE order_id=? AND id=?').get(req.params.id, req.params.itemId);
   if (!it) return bad(res, 'Item not found', 404);
   const to = req.body.status;
-  if (!['pending', 'sent', 'ready', 'served', 'void'].includes(to)) return bad(res, 'Bad status');
+  if (!['ready','void'].includes(to)) return bad(res, 'This endpoint only permits ready or void transitions');
   if (to === 'ready' && !['kitchen', 'bartender', 'manager', 'admin'].includes(req.user.role))
     return bad(res, 'Only kitchen/bar can mark ready', 403);
   /* Station isolation: the kitchen readies kitchen lines, the bar readies bar lines. */
@@ -561,7 +573,7 @@ app.patch('/api/orders/:id/items/:itemId', requireAuth, (req, res) => {
   res.json(decorate(db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id)));
 });
 
-app.delete('/api/orders/:id/items/:itemId', requireAuth, (req, res) => {
+app.delete('/api/orders/:id/items/:itemId', requireAuth, requireRole('seller','waiter','cashier','manager','admin'), (req, res) => {
   const it = db.prepare('SELECT * FROM order_items WHERE order_id=? AND id=?').get(req.params.id, req.params.itemId);
   if (!it) return bad(res, 'Item not found', 404);
   if (it.status !== 'pending' && !['manager', 'admin'].includes(req.user.role))
@@ -637,8 +649,18 @@ app.post('/api/orders/:id/void', requireAuth, requireRole('manager', 'admin'), (
 
 /* ------------------------------- payments ------------------------------- */
 app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
+  const idempotencyKey = String(req.body.idempotency_key || '').trim().slice(0, 100) || null;
+  if (idempotencyKey) {
+    const prior = db.prepare('SELECT * FROM payments WHERE idempotency_key=?').get(idempotencyKey);
+    if (prior) {
+      if (prior.order_id !== Number(req.params.id)) return bad(res, 'Payment key belongs to another sale', 409);
+      const priorOrder = db.prepare('SELECT * FROM orders WHERE id=?').get(prior.order_id);
+      return res.json({ idempotent_replay: true, change: 0, paid: decorate(priorOrder).paid, order: decorate(priorOrder) });
+    }
+  }
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return bad(res, 'Order not found', 404);
+  if (!['open', 'billed'].includes(o.status) || o.closed_out) return bad(res, 'Sale is already closed or void', 409);
   const d = decorate(o);
   const s = getSettings();
   if (s.business_type === 'wines_spirits' && !ensureRetailTill(req.user))
@@ -654,8 +676,8 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
     return bad(res, 'M-Pesa confirmation code is required');
   if (method === 'mpesa' && db.prepare("SELECT id FROM payments WHERE method='mpesa' AND upper(reference)=upper(?)").get(String(req.body.reference).trim()))
     return bad(res, 'That M-Pesa confirmation code has already been used');
-  if (method !== 'cash' && amount > balance)
-    return bad(res, `${method} payment cannot exceed the balance due`);
+  if (amount > balance)
+    return bad(res, `Payment exceeds the balance due by ${((amount - balance) / 100).toFixed(2)}`);
 
   /* Cash: the amount tendered is what actually lands in the drawer, so the server
      must see it — the client alone cannot be trusted to work out the change. */
@@ -676,6 +698,7 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
     const code = String(req.body.reference || '').trim().toUpperCase();
     card = db.prepare('SELECT * FROM gift_cards WHERE code=?').get(code);
     if (!card) return bad(res, 'No gift card with that code');
+    if (s.business_type === 'wines_spirits' && !card.funding_id) return bad(res, 'Gift card is not backed by a recorded funding payment');
     if (card.status !== 'active') return bad(res, `Gift card is ${card.status}`);
     if (card.balance < amount) return bad(res, `Gift card holds only ${(card.balance / 100).toFixed(2)}`);
     reference = `Gift card ${card.code}`;
@@ -710,8 +733,9 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
   }
 
   const tx = db.transaction(() => {
-    db.prepare('INSERT INTO payments(order_id,method,amount,reference,tip,cashier_id,shift_id) VALUES(?,?,?,?,?,?,?)')
-      .run(o.id, method, amount, reference, tip, req.user.id, openShift ? openShift.id : null);
+    db.prepare(`INSERT INTO payments(order_id,method,amount,reference,tip,cashier_id,shift_id,kind,idempotency_key)
+      VALUES(?,?,?,?,?,?,?,'sale',?)`).run(o.id, method, amount, reference, tip, req.user.id,
+      openShift ? openShift.id : null, idempotencyKey);
 
     if (card) {
       const left = card.balance - amount;
@@ -734,11 +758,26 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
     const after = db.prepare('SELECT COALESCE(SUM(amount),0) p FROM payments WHERE order_id=?').get(o.id).p;
 
     if (after >= d.totals.grand_total + tip) {
-      db.prepare("UPDATE orders SET status='closed', closed_at=datetime('now','localtime'), closed_by=?, shift_id=? WHERE id=?")
-        .run(req.user.id, openShift ? openShift.id : null, o.id);
-      closeOut(o.id, d, s, req.user, customer ? customer.id : null);
+      db.prepare(`UPDATE order_items SET cost_snapshot=ROUND(COALESCE((SELECT cost FROM menu_items m WHERE m.id=order_items.menu_item_id),0)*stock_factor)
+        WHERE order_id=? AND cost_snapshot IS NULL`).run(o.id);
+      const finalOrder = readOrder(o.id);
+      const finalItems = db.prepare("SELECT * FROM order_items WHERE order_id=? AND status!='void' ORDER BY id").all(o.id);
+      const totals = computeTotals(finalItems, finalOrder.discount, s, finalOrder.tip);
+      let allocated = 0;
+      finalItems.forEach((line, index) => {
+        const share = index === finalItems.length - 1 ? totals.discount - allocated
+          : Math.round(totals.discount * (line.price * line.qty) / Math.max(1, totals.subtotal));
+        allocated += share;
+        db.prepare('UPDATE order_items SET discount_allocated=? WHERE id=?').run(share, line.id);
+      });
+      const closed = db.prepare(`UPDATE orders SET status='closed',closed_out=1,closed_at=datetime('now','localtime'),closed_by=?,shift_id=?,
+        subtotal_snapshot=?,service_snapshot=?,vat_snapshot=?,total_snapshot=?,grand_total_snapshot=?
+        WHERE id=? AND status IN ('open','billed') AND closed_out=0`).run(req.user.id, openShift ? openShift.id : null,
+        totals.subtotal, totals.service, totals.vat, totals.total, totals.grand_total, o.id);
+      if (closed.changes !== 1) throw new Error('Sale was already closed by another request');
+      closeOut(o.id, { ...d, totals }, s, req.user, customer ? customer.id : null);
     } else {
-      db.prepare("UPDATE orders SET status='billed' WHERE id=?").run(o.id);
+      db.prepare("UPDATE orders SET status='billed' WHERE id=? AND status='open'").run(o.id);
     }
   });
   tx();
@@ -787,15 +826,82 @@ function closeOut(orderId, d, s, user, customerId) {
 app.post('/api/orders/:id/refund', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return bad(res, 'Order not found', 404);
+  if (o.status !== 'closed' || !o.closed_out) return bad(res, 'Only a closed sale can be returned');
+  const idem=String(req.body.idempotency_key||'').trim().slice(0,100)||null;
+  if(idem){
+    const priorPayment=db.prepare("SELECT id FROM payments WHERE idempotency_key=? AND kind='refund'").get(`return-${idem}`);
+    const prior=priorPayment?db.prepare('SELECT * FROM returns WHERE order_id=? ORDER BY id DESC LIMIT 1').get(o.id):null;
+    if(prior)return res.json({idempotent_replay:true,return_record:prior,order:decorate(o)});
+  }
+  const method = String(req.body.method || '').toLowerCase();
+  if (!['cash','card','mpesa'].includes(method)) return bad(res, 'Refund method must be Cash, Card or M-Pesa');
+  const reason = String(req.body.reason || '').trim();
+  const externalReference=String(req.body.reference||'').trim().toUpperCase();
+  if (!reason) return bad(res, 'Return reason is required');
+  if(['card','mpesa'].includes(method)&&!externalReference) return bad(res, `${method.toUpperCase()} refund reference is required`);
+  if(externalReference&&db.prepare('SELECT id FROM payments WHERE upper(reference)=upper(?)').get(externalReference))
+    return bad(res,'That refund reference has already been used');
+  const shift = db.prepare("SELECT * FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get();
+  if (getSetting('business_type') === 'wines_spirits' && !shift) return bad(res, 'Open the till before issuing a refund');
   const amount = Math.round(Number(req.body.amount) * 100);
-  const paid = db.prepare('SELECT COALESCE(SUM(amount),0) p FROM payments WHERE order_id=?').get(o.id).p;
+  const refundable = db.prepare("SELECT COALESCE(SUM(amount),0) v FROM payments WHERE order_id=? AND kind IN ('sale','refund')").get(o.id).v;
   if (!amount || amount <= 0) return bad(res, 'Amount must be greater than zero');
-  if (amount > paid) return bad(res, 'Refund exceeds amount paid');
-  db.prepare('INSERT INTO payments(order_id,method,amount,reference,cashier_id) VALUES(?,?,?,?,?)')
-    .run(o.id, 'refund', -amount, req.body.reason || 'Refund', req.user.id);
-  audit(req.user, 'refund', `#${o.number} KSh${(amount / 100).toFixed(2)} — ${req.body.reason || ''}`);
-  broadcast('sales'); broadcast('orders');
-  res.json(decorate(db.prepare('SELECT * FROM orders WHERE id=?').get(o.id)));
+  if (amount > refundable) return bad(res, 'Refund exceeds the remaining paid amount');
+  const methodRemaining=db.prepare("SELECT COALESCE(SUM(amount),0) v FROM payments WHERE order_id=? AND method=? AND kind IN ('sale','refund')").get(o.id,method).v;
+  if(amount>methodRemaining) return bad(res, `Refund exceeds the remaining ${method.toUpperCase()} amount of ${(methodRemaining/100).toFixed(2)}`);
+  const requested = Array.isArray(req.body.items) ? req.body.items : [];
+  if (!requested.length) return bad(res, 'Select at least one returned product');
+  let lines;
+  try { lines=requested.map((x) => {
+    const line = db.prepare("SELECT * FROM order_items WHERE id=? AND order_id=? AND status!='void'").get(Number(x.order_item_id), o.id);
+    const qty = Number(x.qty);
+    if (!line || !(qty > 0)) throw new Error('Invalid returned product or quantity');
+    const returned = db.prepare('SELECT COALESCE(SUM(qty),0) q FROM return_items WHERE order_item_id=?').get(line.id).q;
+    if (returned + qty > line.qty) throw new Error(`${line.name}: return exceeds sold quantity`);
+    return { line, qty };
+  }); } catch(e){ return bad(res,e.message); }
+  const selectedValue=lines.reduce((n,x)=>n+Math.round(((x.line.price*x.line.qty-x.line.discount_allocated)/Math.max(1,x.line.qty))*x.qty),0);
+  if (amount > selectedValue) return bad(res, 'Refund exceeds selected product value');
+  const restock = !!req.body.restock;
+  const reference = String(req.body.reference || '').trim() || reason;
+  let returnId;
+  const tx = db.transaction(() => {
+    returnId = db.prepare('INSERT INTO returns(order_id,amount,method,reason,restocked,shift_id,created_by) VALUES(?,?,?,?,?,?,?)')
+      .run(o.id,amount,method,reason,restock?1:0,shift?shift.id:null,req.user.id).lastInsertRowid;
+    const ins = db.prepare('INSERT INTO return_items(return_id,order_item_id,menu_item_id,item_name,qty,stock_factor,amount,cost) VALUES(?,?,?,?,?,?,?,?)');
+    let allocatedRefund=0;
+    for (const [index,x] of lines.entries()) {
+      const lineAmount=index===lines.length-1?amount-allocatedRefund:Math.round(amount*(x.line.price*x.qty)/Math.max(1,selectedValue));
+      allocatedRefund+=lineAmount;
+      ins.run(returnId,x.line.id,x.line.menu_item_id,x.line.name,x.qty,x.line.stock_factor||1,lineAmount,
+        Math.round((x.line.cost_snapshot||0)*x.qty));
+      if (restock) {
+        const recipes = db.prepare('SELECT * FROM recipes WHERE menu_item_id=?').all(x.line.menu_item_id);
+        for (const recipe of recipes) {
+          const stock = db.prepare('SELECT * FROM stock_items WHERE id=?').get(recipe.stock_item_id);
+          const add = recipe.qty*x.qty*(x.line.stock_factor||1);
+          if (!stock || stock.deduction_mode==='count') continue;
+          db.prepare('UPDATE stock_items SET qty=ROUND(qty+?,6) WHERE id=?').run(add,stock.id);
+          db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
+            .run(stock.id,add,`Return #${returnId} · sale #${o.number}`,req.user.id);
+        }
+      }
+    }
+    db.prepare(`INSERT INTO payments(order_id,method,amount,reference,cashier_id,shift_id,kind,idempotency_key)
+      VALUES(?,?,?,?,?,?,'refund',?)`).run(o.id,method,-amount,externalReference||reference,req.user.id,shift?shift.id:null,idem?`return-${idem}`:null);
+  });
+  try { tx(); } catch(e) { return bad(res,e.message); }
+  audit(req.user,'return.issue',`#${o.number} ${method} KSh${(amount/100).toFixed(2)} · ${restock?'restocked':'not restocked'} · ${reason}`);
+  broadcast('sales');broadcast('orders');broadcast('stock');
+  res.json({ return_record:db.prepare('SELECT * FROM returns WHERE id=?').get(returnId),order:decorate(readOrder(o.id)) });
+});
+
+app.get('/api/returns/:id', requireAuth, requireRole('manager','admin'), (req,res) => {
+  const r=db.prepare(`SELECT r.*,o.number order_number,u.name created_by_name FROM returns r JOIN orders o ON o.id=r.order_id
+    LEFT JOIN users u ON u.id=r.created_by WHERE r.id=?`).get(req.params.id);
+  if(!r) return bad(res,'Return not found',404);
+  r.items=db.prepare('SELECT * FROM return_items WHERE return_id=? ORDER BY id').all(r.id);
+  res.json(r);
 });
 
 app.get('/api/receipt/:id', requireAuth, (req, res) => {
@@ -835,6 +941,9 @@ app.put('/api/stock/:id', requireAuth, requireRole('manager', 'admin'), (req, re
 });
 
 app.delete('/api/stock/:id', requireAuth, requireRole('manager', 'admin'), (req, res) => {
+  if(db.prepare('SELECT id FROM recipes WHERE stock_item_id=? LIMIT 1').get(req.params.id)
+    ||db.prepare('SELECT id FROM goods_receipt_items WHERE stock_item_id=? LIMIT 1').get(req.params.id))
+    return bad(res,'Stock with product or delivery history cannot be deleted',409);
   db.prepare('DELETE FROM stock_items WHERE id=?').run(req.params.id);
   res.json({ ok: true });
 });
@@ -1142,6 +1251,9 @@ app.put('/api/users/:id', requireAuth, requireRole('manager', 'admin'), (req, re
     return bad(res, 'Unknown role');
   if ((u.role === 'admin' || nextRole === 'admin') && req.user.role !== 'admin')
     return bad(res, 'Only an admin can manage administrator accounts', 403);
+  const nextActive=req.body.active!=null?(req.body.active?1:0):u.active;
+  if(u.role==='admin' && (nextRole!=='admin'||!nextActive) && db.prepare("SELECT COUNT(*) c FROM users WHERE role='admin' AND active=1").get().c<=1)
+    return bad(res,'You cannot disable or demote the last active admin');
   db.prepare('UPDATE users SET name=?, pin=?, role=?, active=? WHERE id=?')
     .run(req.body.name ?? u.name, newPin ? hashPin(newPin) : u.pin, nextRole,
       req.body.active != null ? (req.body.active ? 1 : 0) : u.active, u.id);
@@ -1163,59 +1275,42 @@ const dayBounds = (d) => `${d} 00:00:00`;
 const dayEnd = (d) => `${d} 23:59:59`;
 
 app.get('/api/reports/summary', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
-  const from = req.query.from || todayLocal();
-  const to = req.query.to || from;
-  const a = dayBounds(from), b = dayEnd(to);
-  const s = getSettings();
-  const vatRate = s.vat_rate / 100;
-
-  const g = (sql, p) => db.prepare(sql).get(...p) || {};
-  const paid = g(`SELECT COALESCE(SUM(amount),0) v FROM payments
-    WHERE created_at BETWEEN ? AND ? AND method != 'refund'`, [a, b]).v || 0;
-  const refunded = -1 * (g(`SELECT COALESCE(SUM(amount),0) v FROM payments
-    WHERE created_at BETWEEN ? AND ? AND method = 'refund'`, [a, b]).v || 0);
-  const gross = paid - refunded;
-  const closed = g(`SELECT COUNT(*) c FROM orders WHERE closed_at BETWEEN ? AND ? AND status='closed'`, [a, b]).c;
-  const voids = g(`SELECT COUNT(*) c FROM orders WHERE closed_at BETWEEN ? AND ? AND status='void'`, [a, b]).c;
-  const covers = g(`SELECT COALESCE(SUM(people),0) c FROM orders WHERE closed_at BETWEEN ? AND ? AND status='closed'`, [a, b]).c;
-  const discounts = g(`SELECT COALESCE(SUM(discount),0) c FROM orders WHERE closed_at BETWEEN ? AND ?`, [a, b]).c;
-  const tips = g(`SELECT COALESCE(SUM(tip),0) c FROM orders WHERE closed_at BETWEEN ? AND ? AND status='closed'`, [a, b]).c;
-  const comps = g(`SELECT COUNT(*) n,COALESCE(SUM(retail_value),0) retail,COALESCE(SUM(cost_value),0) cost
-    FROM complimentary_issues WHERE created_at BETWEEN ? AND ?`, [a, b]);
-  const cost = g(`SELECT COALESCE(SUM(oi.price*oi.qty - m.cost*oi.qty*oi.stock_factor),0) gp,
-      COALESCE(SUM(m.cost*oi.qty*oi.stock_factor),0) c
-    FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN menu_items m ON m.id=oi.menu_item_id
-    WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed' AND oi.status != 'void'`, [a, b]);
-
-  const byMethod = db.prepare(`SELECT method, COALESCE(SUM(amount),0) total, COUNT(*) n FROM payments
-    WHERE created_at BETWEEN ? AND ? GROUP BY method ORDER BY total DESC`).all(a, b);
-
-  const inclusive = s.tax_mode === 'inclusive';
-  const netSales = inclusive ? Math.round(gross / (1 + vatRate)) : Math.round(gross - gross * vatRate / (1 + vatRate));
-  const vatCollected = gross - netSales;
-
-  res.json({
-    from, to, gross, refunded, paid, net: netSales, vat_collected: vatCollected,
-    orders_closed: closed, orders_void: voids, covers,
-    avg_ticket: closed ? Math.round(gross / closed) : 0,
-    avg_per_cover: covers ? Math.round(gross / covers) : 0,
-    discounts, tips, complimentary_count: comps.n || 0, complimentary_value: comps.retail || 0,
-    complimentary_cost: comps.cost || 0, cogs: cost.c || 0, gross_profit: cost.gp || 0,
-    margin: cost.c ? Math.round(((cost.gp) / (cost.gp + cost.c)) * 1000) / 10 : 0,
-    by_method: byMethod
-  });
+  const from=req.query.from||todayLocal(),to=req.query.to||from,a=dayBounds(from),b=dayEnd(to);
+  const g=(sql,p=[])=>db.prepare(sql).get(...p)||{};
+  const paid=g("SELECT COALESCE(SUM(amount),0) v FROM payments WHERE created_at BETWEEN ? AND ? AND kind='sale'",[a,b]).v||0;
+  const refunded=-(g("SELECT COALESCE(SUM(amount),0) v FROM payments WHERE created_at BETWEEN ? AND ? AND kind='refund'",[a,b]).v||0);
+  const sales=g(`SELECT COALESCE(SUM(COALESCE(total_snapshot,(SELECT COALESCE(SUM(price*qty),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.status!='void')-discount)),0) gross,
+      COALESCE(SUM(COALESCE(vat_snapshot,0)),0) vat,COUNT(*) closed,COALESCE(SUM(people),0) covers,
+      COALESCE(SUM(discount),0) discounts,COALESCE(SUM(tip),0) tips
+    FROM orders o WHERE closed_at BETWEEN ? AND ? AND status='closed'`,[a,b]);
+  const returnTax=g(`SELECT COALESCE(SUM(CASE WHEN o.total_snapshot>0 THEN r.amount*o.vat_snapshot/o.total_snapshot ELSE 0 END),0) v
+    FROM returns r JOIN orders o ON o.id=r.order_id WHERE r.created_at BETWEEN ? AND ?`,[a,b]).v||0;
+  const returnedCost=g('SELECT COALESCE(SUM(ri.cost),0) v FROM return_items ri JOIN returns r ON r.id=ri.return_id WHERE r.created_at BETWEEN ? AND ?',[a,b]).v||0;
+  const soldCost=g(`SELECT COALESCE(SUM(COALESCE(oi.cost_snapshot,m.cost*oi.stock_factor)*oi.qty),0) v FROM order_items oi
+    JOIN orders o ON o.id=oi.order_id LEFT JOIN menu_items m ON m.id=oi.menu_item_id
+    WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed' AND oi.status!='void'`,[a,b]).v||0;
+  const gross=Math.round((sales.gross||0)-refunded),vatCollected=Math.max(0,Math.round((sales.vat||0)-returnTax));
+  const netSales=gross-vatCollected,cogs=Math.max(0,Math.round(soldCost-returnedCost)),grossProfit=gross-cogs;
+  const voids=g("SELECT COUNT(*) c FROM orders WHERE closed_at BETWEEN ? AND ? AND status='void'",[a,b]).c||0;
+  const comps=g(`SELECT COUNT(*) n,COALESCE(SUM(retail_value),0) retail,COALESCE(SUM(cost_value),0) cost FROM complimentary_issues WHERE created_at BETWEEN ? AND ?`,[a,b]);
+  const byMethod=db.prepare(`SELECT method,COALESCE(SUM(amount),0) total,COUNT(*) n FROM payments WHERE created_at BETWEEN ? AND ? GROUP BY method ORDER BY total DESC`).all(a,b);
+  res.json({from,to,gross,refunded,paid,net:netSales,vat_collected:vatCollected,orders_closed:sales.closed||0,orders_void:voids,covers:sales.covers||0,
+    avg_ticket:sales.closed?Math.round(gross/sales.closed):0,avg_per_cover:sales.covers?Math.round(gross/sales.covers):0,
+    discounts:sales.discounts||0,tips:sales.tips||0,complimentary_count:comps.n||0,complimentary_value:comps.retail||0,
+    complimentary_cost:comps.cost||0,cogs,gross_profit:grossProfit,margin:gross?Math.round(grossProfit/gross*1000)/10:0,by_method:byMethod});
 });
 
-app.get('/api/reports/items', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
-  const from = req.query.from || todayLocal();
-  const to = req.query.to || from;
-  res.json(db.prepare(`
-    SELECT oi.name, oi.station, COUNT(*) lines, SUM(oi.qty) qty,
-           SUM(oi.price*oi.qty) revenue, SUM(m.cost*oi.qty*oi.stock_factor) cogs
-    FROM order_items oi JOIN orders o ON o.id = oi.order_id
-    LEFT JOIN menu_items m ON m.id = oi.menu_item_id
-    WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed' AND oi.status != 'void'
-    GROUP BY oi.name, oi.station ORDER BY revenue DESC LIMIT 100`).all(dayBounds(from), dayEnd(to)));
+app.get('/api/reports/items', requireAuth, requireRole('manager','admin','cashier'), (req,res)=>{
+  const from=req.query.from||todayLocal(),to=req.query.to||from,a=dayBounds(from),b=dayEnd(to);
+  res.json(db.prepare(`SELECT name,station,SUM(lines) lines,SUM(qty) qty,SUM(revenue) revenue,SUM(cogs) cogs FROM (
+      SELECT oi.name,oi.station,1 lines,oi.qty qty,oi.price*oi.qty-oi.discount_allocated revenue,
+        COALESCE(oi.cost_snapshot,m.cost*oi.stock_factor)*oi.qty cogs
+      FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN menu_items m ON m.id=oi.menu_item_id
+      WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed' AND oi.status!='void'
+      UNION ALL
+      SELECT ri.item_name,oi.station,0,-ri.qty,-ri.amount,-ri.cost FROM return_items ri JOIN returns r ON r.id=ri.return_id
+        LEFT JOIN order_items oi ON oi.id=ri.order_item_id WHERE r.created_at BETWEEN ? AND ?
+    ) GROUP BY name,station HAVING ABS(SUM(qty))>0.000001 OR SUM(revenue)!=0 ORDER BY revenue DESC LIMIT 100`).all(a,b,a,b));
 });
 
 app.get('/api/reports/waiters', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
@@ -1223,21 +1318,23 @@ app.get('/api/reports/waiters', requireAuth, requireRole('manager', 'admin', 'ca
   const to = req.query.to || from;
   res.json(db.prepare(`
     SELECT u.name AS waiter, COUNT(DISTINCT o.id) orders, COALESCE(SUM(o.people),0) covers,
-           COALESCE(SUM((SELECT SUM(p.amount) FROM payments p WHERE p.order_id=o.id AND p.method!='refund')),0) revenue
+           COALESCE(SUM((SELECT SUM(p.amount) FROM payments p WHERE p.order_id=o.id AND p.kind IN ('sale','refund'))),0) revenue
     FROM orders o LEFT JOIN users u ON u.id = o.waiter_id
     WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed'
     GROUP BY u.name ORDER BY revenue DESC`).all(dayBounds(from), dayEnd(to)));
 });
 
-app.get('/api/reports/categories', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
-  const from = req.query.from || todayLocal();
-  const to = req.query.to || from;
-  res.json(db.prepare(`
-    SELECT c.name AS category, c.station, SUM(oi.qty) qty, SUM(oi.price*oi.qty) revenue
-    FROM order_items oi JOIN orders o ON o.id = oi.order_id
-    JOIN menu_items m ON m.id = oi.menu_item_id JOIN categories c ON c.id = m.category_id
-    WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed' AND oi.status != 'void'
-    GROUP BY c.id ORDER BY revenue DESC`).all(dayBounds(from), dayEnd(to)));
+app.get('/api/reports/categories', requireAuth, requireRole('manager','admin','cashier'), (req,res)=>{
+  const from=req.query.from||todayLocal(),to=req.query.to||from,a=dayBounds(from),b=dayEnd(to);
+  res.json(db.prepare(`SELECT category,station,SUM(qty) qty,SUM(revenue) revenue FROM (
+      SELECT c.name category,c.station,oi.qty,oi.price*oi.qty-oi.discount_allocated revenue
+      FROM order_items oi JOIN orders o ON o.id=oi.order_id JOIN menu_items m ON m.id=oi.menu_item_id JOIN categories c ON c.id=m.category_id
+      WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed' AND oi.status!='void'
+      UNION ALL
+      SELECT COALESCE(c.name,'Archived product'),COALESCE(c.station,'retail'),-ri.qty,-ri.amount FROM return_items ri
+        JOIN returns r ON r.id=ri.return_id LEFT JOIN menu_items m ON m.id=ri.menu_item_id LEFT JOIN categories c ON c.id=m.category_id
+        WHERE r.created_at BETWEEN ? AND ?
+    ) GROUP BY category,station HAVING ABS(SUM(qty))>0.000001 OR SUM(revenue)!=0 ORDER BY revenue DESC`).all(a,b,a,b));
 });
 
 app.get('/api/reports/expenses', requireAuth, requireRole('manager', 'admin'), (req, res) => {
@@ -1270,8 +1367,7 @@ app.get('/api/zreport', requireAuth, requireRole('seller', 'manager', 'admin', '
   res.json({
     date: day, settings: getSettings(), by_method: sales, orders, voids, tips, discounts, covers,
     complimentary_count: comps.n, complimentary_value: comps.retail, complimentary_cost: comps.cost,
-    net: sales.filter((s) => s.method !== 'refund').reduce((x, s) => x + s.total, 0)
-      + sales.filter((s) => s.method === 'refund').reduce((x, s) => x + s.total, 0)
+    net: sales.reduce((x,s)=>x+s.total,0)
   });
 });
 
@@ -1436,22 +1532,27 @@ app.get('/api/shifts/current', requireAuth, (req, res) => {
 function drawerFigures(s) {
   const a = s.opened_at, b = s.closed_at || nowLocal();
   const g = (sql, ...p) => db.prepare(sql).get(...p).v || 0;
+  const funding = (method) => g(`SELECT COALESCE(SUM(amount),0) v FROM gift_card_funding
+    WHERE method=? AND shift_id=? AND created_at BETWEEN ? AND ?`, method, s.id, a, b);
   const cashSales = g(`SELECT COALESCE(SUM(amount),0) v FROM payments
-    WHERE method='cash' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
+    WHERE method='cash' AND kind='sale' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b) + funding('cash');
   const mpesaSales = g(`SELECT COALESCE(SUM(amount),0) v FROM payments
-    WHERE method='mpesa' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
+    WHERE method='mpesa' AND kind='sale' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b) + funding('mpesa');
   const cardSales = g(`SELECT COALESCE(SUM(amount),0) v FROM payments
-    WHERE method='card' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
+    WHERE method='card' AND kind='sale' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b) + funding('card');
   const cashRefunds = -g(`SELECT COALESCE(SUM(amount),0) v FROM payments
-    WHERE method='refund' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
+    WHERE method='cash' AND kind='refund' AND shift_id=? AND created_at BETWEEN ? AND ?`, s.id, a, b);
   const cashExpenses = g(`SELECT COALESCE(SUM(amount),0) v FROM cash_payouts
     WHERE shift_id=? AND method='cash' AND created_at BETWEEN ? AND ?`, s.id, a, b);
   const mpesaExpenses = g(`SELECT COALESCE(SUM(amount),0) v FROM cash_payouts
     WHERE shift_id=? AND method='mpesa' AND created_at BETWEEN ? AND ?`, s.id, a, b);
   const expected = domain.expectedCash({ openingFloat: s.opening_float, cashSales, cashRefunds, payouts: cashExpenses });
-  const expectedMpesa = (s.opening_mpesa || 0) + mpesaSales - mpesaExpenses;
-  const expectedCard = (s.opening_card || 0) + cardSales;
+  const mpesaRefunds = -g(`SELECT COALESCE(SUM(amount),0) v FROM payments WHERE method='mpesa' AND kind='refund' AND shift_id=?`, s.id);
+  const cardRefunds = -g(`SELECT COALESCE(SUM(amount),0) v FROM payments WHERE method='card' AND kind='refund' AND shift_id=?`, s.id);
+  const expectedMpesa = (s.opening_mpesa || 0) + mpesaSales - mpesaRefunds - mpesaExpenses;
+  const expectedCard = (s.opening_card || 0) + cardSales - cardRefunds;
   return { cash_sales: cashSales, mpesa_sales: mpesaSales, card_sales: cardSales, cash_refunds: cashRefunds,
+    mpesa_refunds: mpesaRefunds, card_refunds: cardRefunds,
     payouts: cashExpenses + mpesaExpenses, cash_expenses: cashExpenses, mpesa_expenses: mpesaExpenses,
     expected, expected_mpesa: expectedMpesa, expected_card: expectedCard };
 }
@@ -1553,8 +1654,11 @@ app.get('/api/shift-clearing', requireAuth, requireRole('seller', 'cashier', 'ma
         || db.prepare('SELECT * FROM shifts ORDER BY id DESC LIMIT 1').get();
   const q = (sql) => s ? db.prepare(sql).all(s.id) : [];
   const one = (sql) => s ? db.prepare(sql).get(s.id).v : 0;
-  const byMethod = q(`SELECT method, COALESCE(SUM(amount),0) total, COUNT(*) n FROM payments
-    WHERE shift_id=? GROUP BY method ORDER BY total DESC`);
+  const saleMethods = q(`SELECT method,COALESCE(SUM(amount),0) total,COUNT(*) n FROM payments WHERE shift_id=? GROUP BY method`);
+  const fundingMethods = q(`SELECT method,COALESCE(SUM(amount),0) total,COUNT(*) n FROM gift_card_funding WHERE shift_id=? GROUP BY method`);
+  const methodMap=new Map();
+  for(const row of [...saleMethods,...fundingMethods]){const cur=methodMap.get(row.method)||{method:row.method,total:0,n:0};cur.total+=row.total;cur.n+=row.n;methodMap.set(row.method,cur);}
+  const byMethod=[...methodMap.values()].sort((a,b)=>b.total-a.total);
   const byStation = q(`SELECT oi.station, COALESCE(SUM(oi.price*oi.qty),0) v, COUNT(*) lines
     FROM order_items oi JOIN orders o ON o.id=oi.order_id
     WHERE o.shift_id=? AND o.status='closed' AND oi.status!='void' GROUP BY oi.station`);
@@ -1613,11 +1717,12 @@ app.post('/api/tabs/:id/release', requireAuth, requireRole('manager', 'admin'), 
 
 /* ===================== STAFF TIME & LABOUR (3.10) ====================== */
 app.get('/api/timeclock', requireAuth, (req, res) => {
-  const from = req.query.from || todayLocal();
-  const to = req.query.to || from;
-  res.json(db.prepare(`SELECT t.*, u.name, u.hourly_rate FROM timeclock t
-    JOIN users u ON u.id = t.user_id
-    WHERE t.clock_in BETWEEN ? AND ? ORDER BY t.clock_in DESC`).all(from + ' 00:00:00', to + ' 23:59:59'));
+  const from=req.query.from||todayLocal(),to=req.query.to||from;
+  if(!['manager','admin'].includes(req.user.role)) return res.json(db.prepare(`SELECT t.id,t.user_id,t.clock_in,t.clock_out,t.note,u.name
+    FROM timeclock t JOIN users u ON u.id=t.user_id WHERE t.user_id=? AND t.clock_in BETWEEN ? AND ? ORDER BY t.clock_in DESC`)
+    .all(req.user.id,from+' 00:00:00',to+' 23:59:59'));
+  res.json(db.prepare(`SELECT t.*,u.name,u.hourly_rate FROM timeclock t JOIN users u ON u.id=t.user_id
+    WHERE t.clock_in BETWEEN ? AND ? ORDER BY t.clock_in DESC`).all(from+' 00:00:00',to+' 23:59:59'));
 });
 app.post('/api/timeclock/in', requireAuth, (req, res) => {
   const open = db.prepare('SELECT * FROM timeclock WHERE user_id=? AND clock_out IS NULL').get(req.user.id);
@@ -1725,7 +1830,7 @@ app.get('/api/customers/:id', requireAuth, (req, res) => {
     points_log: db.prepare('SELECT * FROM loyalty_log WHERE customer_id=? ORDER BY id DESC LIMIT 30').all(c.id)
   });
 });
-app.get('/api/gift-cards', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) =>
+app.get('/api/gift-cards', requireAuth, requireRole('manager', 'admin'), (req, res) =>
   res.json(db.prepare(`SELECT g.*, c.name AS customer_name FROM gift_cards g
     LEFT JOIN customers c ON c.id = g.customer_id ORDER BY g.id DESC LIMIT 200`).all()));
 app.get('/api/gift-cards/lookup/:code', requireAuth, (req, res) => {
@@ -1733,17 +1838,34 @@ app.get('/api/gift-cards/lookup/:code', requireAuth, (req, res) => {
   if (!g) return bad(res, 'No gift card with that code', 404);
   res.json(g);
 });
-app.post('/api/gift-cards', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
-  const s = getSettings();
-  const value = Math.round(Number(req.body.value) * 100);
+app.post('/api/gift-cards', requireAuth, requireRole('manager','admin'), (req, res) => {
+  const idem=String(req.body.idempotency_key||'').trim().slice(0,100)||null;
+  if(idem){const funded=db.prepare('SELECT id FROM gift_card_funding WHERE idempotency_key=?').get(idem);if(funded){const prior=db.prepare('SELECT * FROM gift_cards WHERE funding_id=?').get(funded.id);return res.json({...prior,idempotent_replay:true});}}
+  const s = getSettings(), value = Math.round(Number(req.body.value) * 100);
+  const method = String(req.body.payment_method || '').toLowerCase();
   if (!value || value <= 0) return bad(res, 'Value must be greater than zero');
+  if (!['cash','card','mpesa'].includes(method)) return bad(res, 'Gift card funding method must be Cash, Card or M-Pesa');
+  const shift = db.prepare("SELECT * FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get();
+  if (!shift) return bad(res, 'Open the till before funding a gift card');
+  const reference = String(req.body.reference || '').trim().toUpperCase() || null;
+  if (['card','mpesa'].includes(method) && !reference) return bad(res, `${method.toUpperCase()} reference is required`);
+  if (reference && (db.prepare('SELECT id FROM gift_card_funding WHERE upper(reference)=upper(?)').get(reference)
+      || db.prepare("SELECT id FROM payments WHERE upper(reference)=upper(?) AND reference IS NOT NULL").get(reference)))
+    return bad(res, 'That payment reference has already been used');
   let code = String(req.body.code || '').trim().toUpperCase() || domain.randomGiftCode(s.giftcard_prefix);
   if (db.prepare('SELECT id FROM gift_cards WHERE code=?').get(code)) return bad(res, 'That code already exists');
-  const r = db.prepare('INSERT INTO gift_cards(code,value,balance,customer_id,created_by) VALUES(?,?,?,?,?)')
-    .run(code, value, value, req.body.customer_id || null, req.user.id);
-  audit(req.user, 'giftcard.issue', `${code} KSh${(value / 100).toFixed(2)}`);
-  res.json(db.prepare('SELECT * FROM gift_cards WHERE id=?').get(r.lastInsertRowid));
+  let cardId;
+  const tx = db.transaction(() => {
+    const fundingId = db.prepare('INSERT INTO gift_card_funding(amount,method,reference,shift_id,created_by,idempotency_key) VALUES(?,?,?,?,?,?)')
+      .run(value, method, reference, shift.id, req.user.id, idem).lastInsertRowid;
+    cardId = db.prepare('INSERT INTO gift_cards(code,value,balance,customer_id,created_by,funding_id) VALUES(?,?,?,?,?,?)')
+      .run(code, value, value, req.body.customer_id || null, req.user.id, fundingId).lastInsertRowid;
+  }); tx();
+  audit(req.user, 'giftcard.issue', `${code} KSh${(value / 100).toFixed(2)} funded by ${method}${reference ? ' '+reference : ''}`);
+  broadcast('sales');
+  res.json(db.prepare('SELECT * FROM gift_cards WHERE id=?').get(cardId));
 });
+
 app.post('/api/gift-cards/:id/void', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   db.prepare("UPDATE gift_cards SET status='void' WHERE id=?").run(req.params.id);
   audit(req.user, 'giftcard.void', String(req.params.id));
@@ -1777,7 +1899,7 @@ const printerTarget = (which) => {
   return { enabled: s.printer_enabled === '1', host, port: Number(port) || 9100, settings: s };
 };
 
-app.post('/api/print/receipt/:id', requireAuth, async (req, res) => {
+app.post('/api/print/receipt/:id', requireAuth, requireRole('seller','cashier','manager','admin'), async (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return bad(res, 'Order not found', 404);
   const d = decorate(o);
@@ -1785,8 +1907,10 @@ app.post('/api/print/receipt/:id', requireAuth, async (req, res) => {
   const w = db.prepare('SELECT name FROM users WHERE id=?').get(o.waiter_id);
   const c = db.prepare('SELECT name FROM users WHERE id=?').get(o.closed_by);
   const cust = o.customer_id ? db.prepare('SELECT * FROM customers WHERE id=?').get(o.customer_id) : null;
+  const printSettings=getSettings();
+  if(req.query.kick!=='1') printSettings.drawer_kick_enabled='0';
   const payload = {
-    order: d, table: t, waiter: w, settings: getSettings(),
+    order: d, table: t, waiter: w, settings: printSettings,
     items: d.items, cashier: (c || {}).name || req.user.name,
     customer_phone: cust ? cust.phone : null
   };

@@ -43,11 +43,31 @@ function receiptHtml(r, { paid = false } = {}) {
   </div>`;
 }
 
-async function printReceipt(orderId, { paid = true } = {}) {
+async function printReceipt(orderId, { paid = true, kick = false } = {}) {
   try {
+    if (State.settings.printer_enabled === '1' && State.settings.printer_host) {
+      try {
+        const result = await api(`/api/print/receipt/${orderId}?paid=${paid?1:0}&kick=${kick?1:0}`, { method: 'POST' });
+        if (result.sent) return toast('Receipt sent to thermal printer', 'ok');
+      } catch (e) { toast('Network printer unavailable — using browser print', 'err'); }
+    }
     const r = await api('/api/receipt/' + orderId);
     doPrint(receiptHtml(r, { paid }));
   } catch (e) { toast('Could not print: ' + e.message, 'err'); }
+}
+
+async function printReturnReceipt(returnId) {
+  try {
+    const r=await api('/api/returns/'+returnId);
+    const rows=r.items.map((i)=>`<tr><td>${i.qty}x</td><td>${esc(i.item_name)}</td><td class="right">${(i.amount/100).toFixed(2)}</td></tr>`).join('');
+    doPrint(`<div class="receipt"><div class="receipt-brand">${esc(State.settings.business_name)}</div><div class="receipt-title">RETURN / REFUND</div>
+      <div class="r"><span>Return</span><span>#${r.id}</span></div><div class="r"><span>Original sale</span><span>#${r.order_number}</span></div>
+      <div class="r"><span>Date</span><span>${esc(r.created_at.slice(0,16))}</span></div><div class="r"><span>By</span><span>${esc(r.created_by_name||'—')}</span></div>
+      <div class="receipt-rule"></div><table class="receipt-items"><tbody>${rows}</tbody></table><div class="receipt-rule"></div>
+      <div class="r receipt-total"><span>REFUNDED ${esc(State.settings.currency_symbol||'KSh')}</span><span>${(r.amount/100).toFixed(2)}</span></div>
+      <div class="r"><span>Method</span><span>${esc(r.method.toUpperCase())}</span></div><div class="c receipt-footer">${esc(r.reason)}</div>
+      <div class="c receipt-warning">${r.restocked?'RETURNED TO STOCK':'NOT RETURNED TO STOCK'}</div></div>`);
+  } catch(e){toast('Could not print return receipt: '+e.message,'err');}
 }
 
 async function printTicketHtml(orderId, station) {

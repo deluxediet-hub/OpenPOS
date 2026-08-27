@@ -513,6 +513,8 @@ async function loginWithPin(w, pin) {
   click(m.w, $('[data-s="cards"]', m.w));
   await waitFor(() => $('#addGc', m.w), 'gift card panel');
   ck('gift card panel shows outstanding liability', vtext().includes('Outstanding liability'));
+  const shiftState = await m.w.__h.api('/api/shifts/current');
+  if (!shiftState.shift) await m.w.__h.api('/api/shifts', { body: { opening_float: 0 } });
   click(m.w, $('#addGc', m.w));
   await waitFor(() => $('#gv', m.w), 'gift card form');
   setVal(m.w, $('#gv', m.w), '1500');

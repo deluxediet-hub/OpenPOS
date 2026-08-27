@@ -118,6 +118,17 @@ lib/                      Domain, ESC/POS and integration helpers
 test/                     Domain, API and UI tests
 ```
 
+## Transaction and recovery safeguards
+
+- Browser checkout sends an idempotency key; retries return the original result instead of adding another payment.
+- Closed/void sales reject new payments, Cash cannot exceed the remaining bill, and stock/loyalty close-out is guarded to run once.
+- Closed sales snapshot subtotal, discount allocation, VAT, totals and line cost so later price/cost edits do not rewrite history.
+- Returns are item-linked, tender-specific, shift-linked and optionally restock resellable goods; a dedicated return receipt is printed.
+- Gift cards activate only after an owner/manager records Cash, Card or M-Pesa funding against an open till.
+- Configured network thermal printing is used directly after checkout, with browser fallback; drawer kick occurs only for the original Cash checkout, never a reprint.
+- Installed backups now write to `%ProgramData%\\OpenPOS\\backups`, run `integrity_check`, and can be tested with `npm run backup:verify`.
+- GitHub CI runs the complete suite on Node 20 for Windows and Linux and compiles the actual Inno Setup installer on Windows.
+
 ## Security basics
 
 - Every employee should use a separate PIN; do not share the owner PIN.

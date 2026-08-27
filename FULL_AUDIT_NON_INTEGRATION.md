@@ -1,5 +1,7 @@
 # OpenPOS Wines & Spirits — Full Non-Integration Audit
 
+> **Post-audit update:** The transaction-hardening release in [`HARDENING_RELEASE.md`](HARDENING_RELEASE.md) addresses payment replay/close-once posting, funded gift cards, item-linked returns, immutable close snapshots, key permission findings, backup destination/verification, checkout network printing and CI/installer compilation. The findings below preserve the original audit baseline and rationale.
+
 **Audit date:** 27 August 2026  
 **Code reviewed:** branch `arena/01a03f39-openpos`, commit `e3db610`  
 **Scope:** application logic, permissions, sales, payments, stock, stocktake, reconciliation, complementaries, purchasing, reporting, printing, privacy, security, backup, installation, maintainability and market readiness.  

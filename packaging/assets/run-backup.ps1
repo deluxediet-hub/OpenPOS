@@ -9,12 +9,15 @@ $base = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $node = Join-Path $base 'runtime\node.exe'
 $bk   = Join-Path $base 'app\scripts\backup.js'
 $db   = Join-Path $env:ProgramData 'OpenPOS\data\pos.db'
+$dest = Join-Path $env:ProgramData 'OpenPOS\backups'
 
 if (-not (Test-Path $node)) { Write-Host "runtime not found"; exit 1 }
 if (-not (Test-Path $db))   { Write-Host "no database yet - nothing to back up"; exit 0 }
 
 $env:POS_DB = $db
+$env:POS_BACKUP_DIR = $dest
 $env:POS_BACKUP_KEEP = '14'
+New-Item -ItemType Directory -Path $dest -Force | Out-Null
 # Optional off-site copy: set this to an HTTPS receiver (S3 presigned, NAS webhook, etc.)
 # $env:POS_BACKUP_WEBHOOK = 'https://your-offsite.example/backup'
 

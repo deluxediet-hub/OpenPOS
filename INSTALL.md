@@ -108,7 +108,10 @@ Manual backup:
 
 ```bash
 npm run backup
+npm run backup:verify       # opens the newest copy read-only and runs integrity_check
 ```
+
+The Windows installer stores rotating copies in `%ProgramData%\\OpenPOS\\backups`, never under Program Files. Installed systems also get **Start menu → OpenPOS → Verify latest backup** for a one-click read-only restore drill.
 
 A production backup is only useful if it is copied off the till computer. Use an encrypted external disk or protected cloud-sync folder and retain multiple dated copies.
 

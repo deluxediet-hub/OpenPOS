@@ -1,7 +1,8 @@
 # =====================================================================
 #  OpenPOS - create the persistent data layout OUTSIDE the app directory.
 #  Idempotent: safe to run on install, reinstall and repair.
-#    %ProgramData%\OpenPOS\data         pos.db + backups (never in Program Files)
+#    %ProgramData%\OpenPOS\data         pos.db (never in Program Files)
+#    %ProgramData%\OpenPOS\backups      verified rotating database backups
 #    %ProgramData%\OpenPOS\spool        receipt reprint archive
 #    %ProgramData%\OpenPOS\app-backups  app code backups for rollback
 #    <app>\app\spool                    a directory JUNCTION to the spool above,
@@ -13,7 +14,7 @@ $base = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)   #
 $appSpool = Join-Path $base 'app\spool'
 $root = Join-Path $env:ProgramData 'OpenPOS'
 
-foreach ($d in @('data','spool','app-backups')) {
+foreach ($d in @('data','backups','spool','app-backups')) {
   New-Item -ItemType Directory -Path (Join-Path $root $d) -Force | Out-Null
 }
 

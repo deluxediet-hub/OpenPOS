@@ -84,10 +84,15 @@ const mk = () => {
   ck('selling price already includes VAT', r.data.totals.total === 300000 && r.data.totals.vat === 41379,
     JSON.stringify(r.data.totals));
   const due = r.data.totals.grand_total / 100;
-  r = await seller.post(`/api/orders/${sale.id}/pay`, { method: 'cash', amount: due, tendered: due });
+  const paymentKey='retail-idempotency-test';
+  r = await seller.post(`/api/orders/${sale.id}/pay`, { method: 'cash', amount: due, tendered: due, idempotency_key: paymentKey });
   ck('retail payment closes without an age prompt', r.status === 200 && r.data.order.status === 'closed', JSON.stringify(r.data));
+  const replay=await seller.post(`/api/orders/${sale.id}/pay`, { method: 'cash', amount: due, tendered: due, idempotency_key: paymentKey });
+  ck('payment retry is idempotent',replay.status===200&&replay.data.idempotent_replay===true);
+  const duplicate=await seller.post(`/api/orders/${sale.id}/pay`,{method:'cash',amount:due,tendered:due,idempotency_key:'different-key'});
+  ck('closed sale rejects a different payment',duplicate.status===409);
   stock = await seller.get('/api/stock');
-  ck('sale deducts three bottles from one consolidated line', stock.data.find((x) => x.id === product.stock_item_id).qty === 2);
+  ck('sale stock posts exactly once', stock.data.find((x) => x.id === product.stock_item_id).qty === 2);
   const measuredSale = (await seller.post('/api/orders', {})).data;
   r = await seller.post(`/api/orders/${measuredSale.id}/items`, { items: [{ menu_item_id: product.id, qty: 1, measure_ml: 31.25 }] });
   ck('31.25ml sale has proportional name, price and stock factor', r.status === 200 && Math.abs(r.data.items[0].stock_factor - 31.25/750) < 0.000001 &&

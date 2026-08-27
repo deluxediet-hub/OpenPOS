@@ -89,7 +89,10 @@ CREATE TABLE IF NOT EXISTS orders (
   closed_at      TEXT,
   closed_by      INTEGER REFERENCES users(id),
   age_verified   INTEGER NOT NULL DEFAULT 0,
-  age_check_note TEXT
+  age_check_note TEXT,
+  closed_out INTEGER NOT NULL DEFAULT 0,
+  subtotal_snapshot INTEGER, service_snapshot INTEGER, vat_snapshot INTEGER,
+  total_snapshot INTEGER, grand_total_snapshot INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_orders_status ON orders(status);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_number ON orders(number);
@@ -108,7 +111,8 @@ CREATE TABLE IF NOT EXISTS order_items (
   added_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   sent_at     TEXT,
   void_reason TEXT,
-  stock_factor REAL NOT NULL DEFAULT 1
+  stock_factor REAL NOT NULL DEFAULT 1,
+  cost_snapshot INTEGER, discount_allocated INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_oi_order ON order_items(order_id);
 
@@ -120,8 +124,11 @@ CREATE TABLE IF NOT EXISTS payments (
   reference  TEXT,
   tip        INTEGER NOT NULL DEFAULT 0,
   cashier_id INTEGER REFERENCES users(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  kind TEXT NOT NULL DEFAULT 'sale',
+  idempotency_key TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS ux_payment_idempotency ON payments(idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_pay_order ON payments(order_id);
 
 CREATE TABLE IF NOT EXISTS stock_items (
@@ -301,6 +308,12 @@ CREATE TABLE IF NOT EXISTS customers (
   visits     INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
+CREATE TABLE IF NOT EXISTS gift_card_funding (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, amount INTEGER NOT NULL, method TEXT NOT NULL,
+  reference TEXT, shift_id INTEGER REFERENCES shifts(id), created_by INTEGER REFERENCES users(id),
+  idempotency_key TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS gift_cards (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   code       TEXT NOT NULL UNIQUE,
@@ -309,7 +322,8 @@ CREATE TABLE IF NOT EXISTS gift_cards (
   status     TEXT NOT NULL DEFAULT 'active',   -- active|depleted|void
   customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-  created_by INTEGER REFERENCES users(id)
+  created_by INTEGER REFERENCES users(id),
+  funding_id INTEGER REFERENCES gift_card_funding(id)
 );
 CREATE TABLE IF NOT EXISTS loyalty_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -369,6 +383,8 @@ function migrate() {
 
   add('order_items', 'modifiers', 'modifiers TEXT');
   add('order_items', 'stock_factor', 'stock_factor REAL NOT NULL DEFAULT 1');
+  add('order_items', 'cost_snapshot', 'cost_snapshot INTEGER');
+  add('order_items', 'discount_allocated', 'discount_allocated INTEGER NOT NULL DEFAULT 0');
   add('orders', 'channel', "channel TEXT NOT NULL DEFAULT 'dine_in'");
   add('orders', 'commission', 'commission INTEGER NOT NULL DEFAULT 0');
   add('orders', 'location_id', 'location_id INTEGER REFERENCES locations(id)');
@@ -382,6 +398,10 @@ function migrate() {
   add('stock_items', 'deduction_mode', "deduction_mode TEXT NOT NULL DEFAULT 'auto'");
   add('stock_items', 'capacity_ml', 'capacity_ml REAL');
   add('payments', 'shift_id', 'shift_id INTEGER REFERENCES shifts(id)');
+  add('payments', 'kind', "kind TEXT NOT NULL DEFAULT 'sale'");
+  add('payments', 'idempotency_key', 'idempotency_key TEXT');
+  db.prepare("UPDATE payments SET kind='refund' WHERE method='refund'").run();
+  add('gift_cards', 'funding_id', 'funding_id INTEGER REFERENCES gift_card_funding(id)');
   add('menu_items', 'sku', 'sku TEXT');
   add('menu_items', 'barcode', 'barcode TEXT');
   add('menu_items', 'volume_ml', 'volume_ml INTEGER');
@@ -392,6 +412,15 @@ function migrate() {
   add('menu_items', 'tax_type', "tax_type TEXT NOT NULL DEFAULT 'B'");
   add('orders', 'age_verified', 'age_verified INTEGER NOT NULL DEFAULT 0');
   add('orders', 'age_check_note', 'age_check_note TEXT');
+  add('orders', 'closed_out', 'closed_out INTEGER NOT NULL DEFAULT 0');
+  add('orders', 'subtotal_snapshot', 'subtotal_snapshot INTEGER');
+  add('orders', 'service_snapshot', 'service_snapshot INTEGER');
+  add('orders', 'vat_snapshot', 'vat_snapshot INTEGER');
+  add('orders', 'total_snapshot', 'total_snapshot INTEGER');
+  add('orders', 'grand_total_snapshot', 'grand_total_snapshot INTEGER');
+  db.prepare("UPDATE orders SET closed_out=1 WHERE status='closed'").run();
+  db.prepare(`UPDATE order_items SET cost_snapshot=ROUND(COALESCE((SELECT cost FROM menu_items m WHERE m.id=order_items.menu_item_id),0)*stock_factor)
+    WHERE cost_snapshot IS NULL`).run();
   add('shifts', 'opening_mpesa', 'opening_mpesa INTEGER NOT NULL DEFAULT 0');
   add('shifts', 'opening_card', 'opening_card INTEGER NOT NULL DEFAULT 0');
   add('shifts', 'counted_mpesa', 'counted_mpesa INTEGER');
@@ -407,6 +436,26 @@ function migrate() {
   add('shifts', 'reconciliation_note', 'reconciliation_note TEXT');
   add('cash_payouts', 'method', "method TEXT NOT NULL DEFAULT 'cash'");
   db.exec(`
+    CREATE TABLE IF NOT EXISTS gift_card_funding (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, amount INTEGER NOT NULL, method TEXT NOT NULL,
+      reference TEXT, shift_id INTEGER REFERENCES shifts(id), created_by INTEGER REFERENCES users(id),
+      idempotency_key TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS returns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL REFERENCES orders(id),
+      amount INTEGER NOT NULL, method TEXT NOT NULL, reason TEXT NOT NULL,
+      restocked INTEGER NOT NULL DEFAULT 0, shift_id INTEGER REFERENCES shifts(id),
+      created_by INTEGER REFERENCES users(id), created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS return_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, return_id INTEGER NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+      order_item_id INTEGER REFERENCES order_items(id), menu_item_id INTEGER REFERENCES menu_items(id),
+      item_name TEXT NOT NULL, qty REAL NOT NULL, stock_factor REAL NOT NULL DEFAULT 1,
+      amount INTEGER NOT NULL DEFAULT 0, cost INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_payment_idempotency ON payments(idempotency_key) WHERE idempotency_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_gift_funding ON gift_cards(funding_id) WHERE funding_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_gift_funding_idem ON gift_card_funding(idempotency_key) WHERE idempotency_key IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS ux_menu_sku ON menu_items(sku) WHERE sku IS NOT NULL AND sku != '';
     CREATE UNIQUE INDEX IF NOT EXISTS ux_menu_barcode ON menu_items(barcode) WHERE barcode IS NOT NULL AND barcode != '';
     CREATE TABLE IF NOT EXISTS suppliers (

@@ -22,7 +22,7 @@ const Database = require('better-sqlite3');
 const DB = process.env.POS_DB || path.join(__dirname, '..', 'data', 'pos.db');
 const KEEP = Number(process.env.POS_BACKUP_KEEP ?? 14);
 const WEBHOOK = process.env.POS_BACKUP_WEBHOOK || '';
-const BACKUP_DIR = path.join(__dirname, '..', 'backups');
+const BACKUP_DIR = process.env.POS_BACKUP_DIR || path.join(__dirname, '..', 'backups');
 
 if (!fs.existsSync(DB)) {
   console.error('No database at ' + DB + ' — has the server been started at least once?');
@@ -88,6 +88,8 @@ src.backup(dest)
   .then(async () => {
     /* verify the copy is a readable database, not a truncated file */
     const chk = new Database(dest, { readonly: true });
+    const integrity = chk.pragma('integrity_check', { simple: true });
+    if (integrity !== 'ok') throw new Error('Backup integrity_check failed: ' + integrity);
     const orders = chk.prepare('SELECT COUNT(*) c FROM orders').get().c;
     const items = chk.prepare('SELECT COUNT(*) c FROM menu_items').get().c;
     chk.close();

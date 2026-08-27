@@ -64,9 +64,12 @@ ck('stop targets only the OpenPOS node process', /node\.exe/.test(stop) && /serv
 const wd  = P('assets/watchdog.vbs');
 ck('watchdog restarts only when the server is down', /healthz/.test(wd) && /start-hidden\.vbs/.test(wd) && /ServerUp/.test(wd));
 const rbk = P('assets/run-backup.ps1');
-ck('scheduled backup targets the ProgramData DB, not the app dir', /ProgramData/.test(rbk) && /POS_DB/.test(rbk));
+ck('scheduled backup targets ProgramData DB and backup directory', /ProgramData/.test(rbk) && /POS_DB/.test(rbk) && /POS_BACKUP_DIR/.test(rbk) && /OpenPOS\\backups/.test(rbk));
 ck('scheduled backup uses the bundled runtime + app backup.js', /runtime\\node\.exe/.test(rbk) && /backup\.js/.test(rbk));
 ck('scheduled backup keeps a bounded number of copies', /POS_BACKUP_KEEP/.test(rbk));
+const verifyBackup=fs.readFileSync(path.join(__dirname,'..','scripts','verify-backup.js'),'utf8');
+ck('restore drill runs SQLite integrity_check and checks core tables', /integrity_check/.test(verifyBackup) && /missing tables/.test(verifyBackup));
+ck('installer exposes owner-facing backup verification shortcut', /Verify latest backup/.test(iss) && fs.existsSync(path.join(__dirname,'..','packaging','assets','verify-latest-backup.ps1')));
 
 const build = P('build-installer.ps1');
 ck('build bundles the Windows native better-sqlite3 via npm once', /install --omit=dev/.test(build) && /node_modules/.test(build));

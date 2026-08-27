@@ -177,23 +177,34 @@ const Cashier = (() => {
   function refundModal(orderId) {
     requireManagerPin('Refunds need manager authorisation.', async () => {
       const o = State.orders.find((x) => x.id === orderId) || await api('/api/orders/' + orderId);
-      const paid = o.payments.reduce((a, p) => a + p.amount, 0);
-      modal({
-        title: 'Refund — order #' + o.number,
-        body: `<p class="muted" style="margin-top:0">Paid on this order: <b>${fmt(paid)}</b></p>
-          <label class="fld">Refund amount (${sym()})</label>
-          <input class="inp" id="ra" type="number" min="0.01" step="0.01" max="${paid/100}" value="${(paid/100).toFixed(2)}">
-          <div style="margin-top:12px"><label class="fld">Reason</label>
-            <input class="inp" id="rr" placeholder="${State.settings.business_type === 'wines_spirits' ? 'e.g. approved return, duplicate payment' : 'e.g. item not served, card chargeback'}"></div>`,
-        footer: `<button class="btn" data-no>Cancel</button><button class="btn red" data-yes>Issue refund</button>`
-      });
-      const ov = document.querySelector('#modalRoot .ov');
-      ov.querySelector('[data-no]').onclick = closeModal;
-      ov.querySelector('[data-yes]').onclick = async () => {
-        try {
-          await api(`/api/orders/${o.id}/refund`, { body: { amount: Number(ov.querySelector('#ra').value), reason: ov.querySelector('#rr').value } });
-          closeModal(); await Pos.refresh(); toast('Refund recorded', 'ok'); renderBills(document.getElementById('view'));
-        } catch (e) { toast(e.message, 'err'); }
+      const salePayments = o.payments.filter((p) => (p.kind || 'sale') === 'sale').reduce((a,p) => a+p.amount,0);
+      const refunds = -o.payments.filter((p) => p.kind === 'refund' || p.method === 'refund').reduce((a,p) => a+p.amount,0);
+      const refundable = Math.max(0,salePayments-refunds), key = `ret-${o.id}-${Date.now()}-${Math.random()}`;
+      const tenderRemaining={};
+      o.payments.forEach((p)=>{const kind=p.kind||(p.method==='refund'?'refund':'sale');if(['cash','card','mpesa'].includes(p.method))tenderRemaining[p.method]=(tenderRemaining[p.method]||0)+(kind==='refund'?p.amount:p.amount);});
+      const refundMethods=['cash','mpesa','card'].filter((m)=>(tenderRemaining[m]||0)>0);
+      modal({ title: 'Return / refund — sale #' + o.number, wide:true,
+        body: `<p class="muted" style="margin-top:0">Remaining refundable amount: <b>${fmt(refundable)}</b></p>
+          <div class="card"><div class="card-h"><h3>Select returned products</h3></div><div class="card-b">
+            ${o.items.map((i) => `<div class="row" style="margin-bottom:8px"><span style="flex:1"><b>${esc(i.name)}</b><br><span class="tiny muted">Sold ${i.qty} · ${fmt(Math.round((i.price*i.qty-(i.discount_allocated||0))/Math.max(1,i.qty)))} refundable each</span></span>
+              <input class="inp" data-return="${i.id}" data-price="${Math.round((i.price*i.qty-(i.discount_allocated||0))/Math.max(1,i.qty))}" type="number" min="0" max="${i.qty}" step="1" value="0" style="width:90px"></div>`).join('')}
+          </div></div>
+          <div class="grid2" style="margin-top:12px"><div><label class="fld">Refund method</label><select class="inp" id="rmethod">${refundMethods.map((m)=>`<option value="${m}">${m.toUpperCase()} · available ${fmt(tenderRemaining[m])}</option>`).join('')}</select></div>
+            <div><label class="fld">Refund amount (${sym()})</label><input class="inp" id="ra" type="number" min="0.01" step="0.01" max="${refundable/100}" value="0.00"></div></div>
+          <div style="margin-top:12px"><label class="fld">Card/M-Pesa refund reference</label><input class="inp mono" id="rref" placeholder="Required for non-cash refunds"></div>
+          <label class="row" style="margin-top:12px;gap:8px"><input type="checkbox" id="rstock" checked> Return resellable products to stock</label>
+          <div style="margin-top:12px"><label class="fld">Reason</label><input class="inp" id="rr" placeholder="Approved return / wrong product / duplicate charge"></div>`,
+        footer: '<button class="btn" data-no>Cancel</button><button class="btn red" data-yes>Issue return & refund</button>' });
+      const ov=document.querySelector('#modalRoot .ov');
+      const update=()=>{const cents=[...ov.querySelectorAll('[data-return]')].reduce((n,i)=>n+Number(i.value||0)*Number(i.dataset.price),0);const method=ov.querySelector('#rmethod').value;ov.querySelector('#ra').value=(Math.min(cents,refundable,tenderRemaining[method]||0)/100).toFixed(2);};
+      ov.querySelectorAll('[data-return]').forEach((i)=>i.oninput=update);ov.querySelector('#rmethod').onchange=update;
+      ov.querySelector('[data-no]').onclick=closeModal;
+      ov.querySelector('[data-yes]').onclick=async()=>{
+        const items=[...ov.querySelectorAll('[data-return]')].map((i)=>({order_item_id:Number(i.dataset.return),qty:Number(i.value)})).filter((i)=>i.qty>0);
+        try { const result=await api(`/api/orders/${o.id}/refund`,{body:{items,amount:Number(ov.querySelector('#ra').value),method:ov.querySelector('#rmethod').value,
+          restock:ov.querySelector('#rstock').checked,reason:ov.querySelector('#rr').value.trim(),reference:ov.querySelector('#rref').value.trim(),idempotency_key:key}});
+          closeModal();await Pos.refresh();toast('Return and refund recorded','ok');await printReturnReceipt(result.return_record.id);renderBills(document.getElementById('view'));
+        } catch(e){toast(e.message,'err');}
       };
     });
   }
@@ -205,6 +216,7 @@ const Cashier = (() => {
     let method = 'cash';
     let tip = 0;
     let tendered = o.balance;
+    const paymentKey = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : `pay-${o.id}-${Date.now()}-${Math.random()}`;
 
     const quick = [0, 500, 1000, 2000, 5000, 10000].map((v) => v);
 
@@ -385,7 +397,8 @@ const Cashier = (() => {
             amount: amount / 100,
             reference,
             tendered: tendered == null ? undefined : tendered / 100,
-            tip: tip / 100
+            tip: tip / 100,
+            idempotency_key: paymentKey
           }
         });
         closeModal();
@@ -393,7 +406,7 @@ const Cashier = (() => {
         else await Pos.refresh();
         State.openOrderId = null;
         toast(`${METHOD_LABEL[method]} ${fmt(amount)} received${r.change ? ' · change ' + fmt(r.change) : ''}`, 'ok');
-        await printReceipt(o.id, { paid: true });
+        await printReceipt(o.id, { paid: true, kick: method === 'cash' });
         const host = document.getElementById('view');
         if (State.view === 'bills') renderBills(host);
         else if (State.view === 'tables') Pos.renderFloor(host);
