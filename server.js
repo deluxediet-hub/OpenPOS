@@ -21,7 +21,6 @@ app.use(express.json({ limit: '3mb' })); // supports owner CSV onboarding/import
 /* --------------------------- session cookies --------------------------- */
 const SESSIONS = new Map(); // token -> {user_id}
 const LOGIN_ATTEMPTS = new Map(); // IP -> { failures, blockedUntil }; local brute-force protection
-const APPROVAL_ATTEMPTS = new Map(); // seller id -> failed remote owner approvals
 const COOKIE = 'pos_session';
 const genToken = () => require('crypto').randomBytes(24).toString('hex');
 
@@ -850,18 +849,6 @@ app.post('/api/stock/:id/adjust', requireAuth, requireRole('manager', 'admin'), 
 });
 
 /* ---------------- complimentary stock issues (no cash transaction) -------- */
-app.post('/api/complimentary-codes', requireAuth, requireRole('admin'), (req, res) => {
-  db.prepare("DELETE FROM complimentary_codes WHERE expires_at<datetime('now','localtime','-30 days')").run();
-  const code = String(require('crypto').randomInt(100000, 1000000));
-  const minutes = Math.max(5, Math.min(120, Number(req.body.minutes) || 30));
-  const expires = new Date(Date.now() + minutes * 60000);
-  const local = nowLocal(expires);
-  const id = db.prepare('INSERT INTO complimentary_codes(code_hash,owner_id,note,expires_at) VALUES(?,?,?,?)')
-    .run(hashPin(code), req.user.id, String(req.body.note || '').slice(0, 120) || null, local).lastInsertRowid;
-  audit(req.user, 'complimentary.code_create', `code #${id} expires ${local}`);
-  res.json({ id, code, expires_at: local, minutes });
-});
-
 app.get('/api/complimentaries', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const from = req.query.from || todayLocal(), to = req.query.to || from;
   res.json(db.prepare(`SELECT ci.*,u.name created_by_name,a.name authorized_by_name,si.unit stock_unit FROM complimentary_issues ci
@@ -872,24 +859,13 @@ app.get('/api/complimentaries', requireAuth, requireRole('manager', 'admin'), (r
 
 app.post('/api/complimentaries', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
   if (getSetting('business_type') !== 'wines_spirits') return bad(res, 'Complimentary issues are available in retail mode only');
-  let authorizer = req.user, approvalCode = null;
-  const authorizationReference = String(req.body.authorization_reference || '').trim();
+  let authorizer = req.user;
+  let authorizationReference = String(req.body.authorization_reference || '').trim();
   if (req.user.role === 'seller') {
-    const state = APPROVAL_ATTEMPTS.get(req.user.id) || { failures: 0, blockedUntil: 0 };
-    if (state.blockedUntil > Date.now()) return bad(res, 'Too many failed owner approvals. Try again in one minute.', 429);
-    const supplied = String(req.body.authorization_code || '').trim();
-    approvalCode = db.prepare("SELECT * FROM complimentary_codes WHERE used_at IS NULL AND expires_at>=datetime('now','localtime') ORDER BY id DESC LIMIT 100").all()
-      .find((x) => verifyPin(supplied, x.code_hash));
-    authorizer = approvalCode ? db.prepare("SELECT id,name,role FROM users WHERE id=? AND role='admin' AND active=1").get(approvalCode.owner_id) : null;
-    if (!authorizer) {
-      state.failures += 1;
-      if (state.failures >= 5) { state.failures = 0; state.blockedUntil = Date.now() + 60000; }
-      APPROVAL_ATTEMPTS.set(req.user.id, state);
-      audit(req.user, 'complimentary.approval_failed', authorizationReference || 'No reference');
-      return bad(res, 'Valid one-time owner authorization code required', 403);
-    }
-    if (!authorizationReference) return bad(res, 'Enter how the owner authorized this issue (for example, phone call)', 400);
-    APPROVAL_ATTEMPTS.delete(req.user.id);
+    if (!req.body.owner_authorized) return bad(res, 'Confirm that the owner authorized this complimentary issue', 400);
+    authorizer = db.prepare("SELECT id,name,role FROM users WHERE role='admin' AND active=1 ORDER BY id LIMIT 1").get();
+    if (!authorizer) return bad(res, 'No active owner account is available to authorize this issue', 400);
+    authorizationReference = authorizationReference || 'Owner authorized — declared by seller';
   }
   const shift = ensureRetailTill(req.user);
   if (!shift) return bad(res, 'Finish till reconciliation before recording a complimentary issue');
@@ -914,11 +890,6 @@ app.post('/api/complimentaries', requireAuth, requireRole('seller', 'manager', '
   const retailValue = Math.round(m.price * priceFactor * qty), costValue = Math.round(m.cost * stockFactor * qty);
   let id;
   const tx = db.transaction(() => {
-    if (approvalCode) {
-      const used = db.prepare("UPDATE complimentary_codes SET used_at=datetime('now','localtime'),used_by=? WHERE id=? AND used_at IS NULL")
-        .run(req.user.id, approvalCode.id);
-      if (used.changes !== 1) throw new Error('Owner authorization code was already used');
-    }
     const deducted = recipe.deduction_mode === 'count' ? 0 : 1;
     if (deducted) {
       db.prepare('UPDATE stock_items SET qty=qty-? WHERE id=?').run(stockQty, recipe.id);

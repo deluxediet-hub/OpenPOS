@@ -335,10 +335,10 @@ const Pos = (() => {
         <option>Owner consumption</option><option>Staff complimentary</option><option>Friends / guests</option><option>Promotion / tasting</option><option>Other</option></select></div>
         <div><label class="fld">Recipient / note</label><input class="inp" id="compRecipient" placeholder="Name or short explanation"></div></div>
       ${State.user.role === 'seller' ? `<div class="card" style="margin-top:12px;border-color:var(--amber);background:#211b10"><div class="card-b">
-        <b>Remote owner authorization</b><div class="tiny muted" style="margin:4px 0 10px">Ask the owner for a one-time complimentary code. The owner login PIN is never shared. Reports record both people.</div>
-        <div class="grid2"><div><label class="fld">One-time owner code</label><input class="inp mono" id="compAuthCode" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></div>
-          <div><label class="fld">Authorization reference</label><input class="inp" id="compAuthRef" placeholder="e.g. Phone call 14:20 / WhatsApp"></div></div>
-      </div></div>` : `<div class="row" style="margin-top:12px"><span class="tiny muted">Need to authorize a seller remotely?</span><button class="btn xs ghost" id="generateCompCode">Generate one-time seller code</button><span class="tiny muted" id="compCodeOut"></span></div>`}
+        <label class="row" style="gap:9px;cursor:pointer"><input type="checkbox" id="compOwnerAuthorized"> <b>I confirm the owner authorized this complimentary issue</b></label>
+        <div style="margin-top:10px"><label class="fld">Authorization note <span class="muted">(optional)</span></label><input class="inp" id="compAuthRef" placeholder="e.g. Phone call 14:20 / WhatsApp"></div>
+        <div class="tiny muted" style="margin-top:7px">Reports show who recorded it and that owner authorization was declared.</div>
+      </div></div>` : ''}
       <div class="card" style="margin-top:12px"><div class="card-b"><div class="tline"><span>Retail value given</span><b id="compValue">—</b></div>
         <div class="tiny muted" id="compEffect" style="margin-top:6px"></div></div></div>`,
       footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Record complimentary</button>' });
@@ -365,13 +365,6 @@ const Pos = (() => {
     productSelect.onchange = rebuildMeasures;
     measured.onchange = () => { ov.querySelector('#compMeasureFields').classList.toggle('hidden', !measured.checked); update(); };
     measureSelect.onchange = () => { custom.value = ''; update(); }; custom.oninput = update; ov.querySelector('#compQty').oninput = update;
-    const generateCode = ov.querySelector('#generateCompCode');
-    if (generateCode) generateCode.onclick = async () => {
-      try {
-        const result = await api('/api/complimentary-codes', { body: { minutes: 30, note: 'Remote complimentary approval' } });
-        ov.querySelector('#compCodeOut').innerHTML = `<b class="mono" style="font-size:16px;color:var(--amber)">${result.code}</b> · valid 30 min, one use`;
-      } catch (e) { toast(e.message, 'err'); }
-    };
     ov.querySelector('[data-no]').onclick = closeModal;
     ov.querySelector('[data-yes]').onclick = async () => {
       const product = selectedProduct(), ml = chosenMl();
@@ -380,7 +373,7 @@ const Pos = (() => {
         const result = await api('/api/complimentaries', { body: { menu_item_id: product.id,
           qty: Number(ov.querySelector('#compQty').value), measure_ml: ml || null,
           reason: ov.querySelector('#compReason').value, recipient: ov.querySelector('#compRecipient').value.trim(),
-          authorization_code: ov.querySelector('#compAuthCode')?.value || null,
+          owner_authorized: ov.querySelector('#compOwnerAuthorized')?.checked || false,
           authorization_reference: ov.querySelector('#compAuthRef')?.value.trim() || null } });
         closeModal(); await loadBootstrap(); State.openOrderId = activeOrder() ? activeOrder().id : State.openOrderId;
         renderEditor(host); toast(`Complimentary recorded · ${fmt(result.retail_value)} retail value · no cash due`, 'ok');

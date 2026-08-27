@@ -53,7 +53,7 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 - Whole-keg sales plus shot/glass products that show available servings and deduct the correct fraction from a tracked bottle or keg
 - Focused Top 5 dashboard plus a custom PDF builder where the owner selects summary, payments, Top 5 products, sellers, categories, low stock, expenses or full stock; A4 margins and pagination are print-safe
 - Repeated taps, scans and + actions consolidate into one product line with a single quantity across the basket, sales view and receipt
-- Complimentary stock for owner consumption, staff, friends or promotions—including measured pours—with no cash impact and full retail-value/cost reporting; sellers require a one-use owner code and reports show both recorder and authorizer
+- Complimentary stock for owner consumption, staff, friends or promotions—including measured pours—with no cash impact and full retail-value/cost reporting; sellers simply confirm owner authorization and reports show both recorder and owner
 - Full stocktakes with expected, counted and audited variance
 - Fast checkout with no buyer-age prompt; the configured 18+ notice remains on receipts
 - Duplicate M-Pesa confirmation-code rejection

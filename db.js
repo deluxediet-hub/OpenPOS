@@ -427,12 +427,6 @@ function migrate() {
       created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
     );
     CREATE INDEX IF NOT EXISTS ix_complimentary_created ON complimentary_issues(created_at);
-    CREATE TABLE IF NOT EXISTS complimentary_codes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, code_hash TEXT NOT NULL,
-      owner_id INTEGER NOT NULL REFERENCES users(id), note TEXT,
-      expires_at TEXT NOT NULL, used_at TEXT, used_by INTEGER REFERENCES users(id),
-      created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-    );
   `);
   add('stock_count_items', 'added_qty', 'added_qty REAL NOT NULL DEFAULT 0');
   add('goods_receipts', 'payment_method', "payment_method TEXT NOT NULL DEFAULT 'pay_later'");

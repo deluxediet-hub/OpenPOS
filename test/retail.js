@@ -116,19 +116,11 @@ const mk = () => {
   r = await admin.get('/api/complimentaries?from=2000-01-01&to=2099-12-31');
   ck('complimentary appears in owner reports', r.status === 200 && r.data.some((x) => x.reason === 'Owner consumption'));
   r = await seller.post('/api/complimentaries', { menu_item_id: product.id, qty: 1, reason: 'Staff complimentary', recipient: 'Seller 1' });
-  ck('seller complimentary requires owner authorization', r.status === 403 && /owner authorization/i.test(r.data.error));
+  ck('seller complimentary requires owner authorization declaration', r.status === 400 && /owner authorized/i.test(r.data.error));
   r = await seller.post('/api/complimentaries', { menu_item_id: product.id, qty: 1, reason: 'Staff complimentary', recipient: 'Seller 1',
-    authorization_code: '999999', authorization_reference: 'Phone call test' });
-  ck('wrong one-time owner code is rejected', r.status === 403);
-  const approval = await admin.post('/api/complimentary-codes', { minutes: 30, note: 'Test approval' });
-  ck('owner generates a one-time complimentary code', approval.status === 200 && /^\d{6}$/.test(approval.data.code));
-  r = await seller.post('/api/complimentaries', { menu_item_id: product.id, qty: 1, reason: 'Staff complimentary', recipient: 'Seller 1',
-    authorization_code: approval.data.code, authorization_reference: 'Phone call test' });
-  ck('seller records remotely authorized complimentary with both identities', r.status === 200 && r.data.created_by !== r.data.authorized_by,
+    owner_authorized: true, authorization_reference: 'Phone call test' });
+  ck('seller records owner-authorized complimentary with both identities', r.status === 200 && r.data.created_by !== r.data.authorized_by,
     JSON.stringify(r.data));
-  r = await seller.post('/api/complimentaries', { menu_item_id: product.id, qty: 1, reason: 'Staff complimentary', recipient: 'Seller 1',
-    authorization_code: approval.data.code, authorization_reference: 'Re-use attempt' });
-  ck('owner complimentary code cannot be reused', r.status === 403);
   ck('seller-authorized complimentary still leaves expected cash unchanged', (await admin.get('/api/shifts/current')).data.drawer.expected === cashBeforeComp);
   r = await seller.post('/api/goods-receipts', { payment_method: 'pay_later',
     items: [{ stock_item_id: boot.menu[0].stock_item_id, qty: 1 }] });
