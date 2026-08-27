@@ -98,17 +98,22 @@ const Cashier = (() => {
           subtitle: `Shift opened ${c.shift.opened_at}${c.shift.closed_at ? ' · closed ' + c.shift.closed_at : ' · still open'}`,
           tables: [
             { title: 'Takings by payment method', head: ['Method', 'Txns', 'Total'], right: [1, 2],
-              rows: c.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]) },
+              rows: c.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]),
+              footer: ['TOTAL', String(c.by_method.reduce((n,m) => n + m.n, 0)), (c.by_method.reduce((n,m) => n + m.total, 0) / 100).toFixed(2)] },
             State.settings.business_type === 'wines_spirits'
               ? { title: 'Sales by category', head: ['Category', 'Units', 'Sales'], right: [1, 2],
-                  rows: (c.by_category || []).map((x) => [x.category, String(x.units), (x.v / 100).toFixed(2)]) }
+                  rows: (c.by_category || []).map((x) => [x.category, String(x.units), (x.v / 100).toFixed(2)]),
+                  footer: ['TOTAL', String((c.by_category || []).reduce((n,x) => n + Number(x.units),0)), ((c.by_category || []).reduce((n,x) => n + x.v,0)/100).toFixed(2)] }
               : { title: 'Sales by station', head: ['Station', 'Lines', 'Sales'], right: [1, 2],
-                  rows: c.by_station.map((s2) => [s2.station.toUpperCase(), String(s2.lines), (s2.v / 100).toFixed(2)]) },
+                  rows: c.by_station.map((s2) => [s2.station.toUpperCase(), String(s2.lines), (s2.v / 100).toFixed(2)]),
+                  footer: ['TOTAL', String(c.by_station.reduce((n,x) => n + x.lines,0)), (c.by_station.reduce((n,x) => n + x.v,0)/100).toFixed(2)] },
             ...((c.complimentary || []).length ? [{ title: 'Complimentary stock',
               head: ['Product', 'Qty', 'Recipient', 'Reason', 'Recorded / Authorized', 'Reference', 'Retail / Cost'], right: [1, 6],
               rows: c.complimentary.map((x) => [x.item_name, String(x.qty), x.recipient || '—', x.reason,
                 `${x.created_by_name || '—'} / ${x.authorized_by_name || '—'}`, x.authorization_reference || '—',
-                `${(x.retail_value / 100).toFixed(2)} / ${(x.cost_value / 100).toFixed(2)}`]) }] : [])
+                `${(x.retail_value / 100).toFixed(2)} / ${(x.cost_value / 100).toFixed(2)}`]),
+              footer: ['TOTAL', String(c.complimentary.reduce((n,x) => n + Number(x.qty),0)), '', '', '', '',
+                `${(c.complimentary_value/100).toFixed(2)} / ${(c.complimentary_cost/100).toFixed(2)}`] }] : [])
           ],
           summary: State.settings.business_type === 'wines_spirits' ? [
             ['Business expenses', money2(c.payouts)],

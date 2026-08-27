@@ -93,7 +93,8 @@ function reportHtml({ settings, title, subtitle, tables = [], summary = [], sign
     ${tables.map((t) => `<div class="rpt-table">
         ${t.title ? `<div class="rpt-tt">${esc(t.title)}</div>` : ''}
         <table><thead><tr>${t.head.map((h, i) => `<th class="${(t.right || []).includes(i) ? 'right' : ''}">${esc(h)}</th>`).join('')}</tr></thead>
-        <tbody>${t.rows.map((r) => `<tr>${r.map((c, i) => `<td class="${(t.right || []).includes(i) ? 'right' : ''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>
+        <tbody>${t.rows.map((r) => `<tr>${r.map((c, i) => `<td class="${(t.right || []).includes(i) ? 'right' : ''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>
+        ${t.footer ? `<tfoot><tr>${t.footer.map((c, i) => `<td class="${(t.right || []).includes(i) ? 'right' : ''}">${esc(c)}</td>`).join('')}</tr></tfoot>` : ''}</table>
       </div>`).join('')}
     ${summary.length ? `<div class="rpt-sum">${summary.map(([l, v]) => `<div class="r"><span>${esc(l)}</span><b>${esc(v)}</b></div>`).join('')}</div>` : ''}
     ${signature ? signatureHtml() : ''}
@@ -153,7 +154,8 @@ function printZReport(z) {
   const s = z.settings;
   printReport({ settings: s, title: 'Z-REPORT - END OF DAY', subtitle: 'Business date ' + z.date,
     tables: [{ title: 'Takings by payment method', head: ['Method', 'Count', 'Total'], right: [1, 2],
-      rows: z.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]) }],
+      rows: z.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]),
+      footer: ['TOTAL', String(z.by_method.reduce((n,m) => n + m.n,0)), (z.by_method.reduce((n,m) => n + m.total,0)/100).toFixed(2)] }],
     summary: [
       ['Net sales', (z.net / 100).toFixed(2)], ['Receipts closed', String(z.orders)],
       ...(s.business_type === 'wines_spirits' ? [] : [['Covers', String(z.covers)]]),

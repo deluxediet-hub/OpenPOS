@@ -164,7 +164,9 @@ Database migrations run automatically, but a backup is still mandatory.
 - [ ] Closing Cash, M-Pesa and Card/EDC variances are correct and stored.
 - [ ] Extra tender that offsets missing stock at retail value produces `RECONCILED — POSSIBLE UNRECORDED SALES` and requires a note.
 - [ ] A day with no POS entries can still reconcile from actual tenders and the mandatory stocktake.
-- [ ] Owner can review audit log and build a PDF containing only selected sections such as Top 5 products, low stock or expenses.
+- [ ] PDF builder opens with every section unselected and refuses to print until at least one is chosen.
+- [ ] Owner can print sales, inventory, stocktake, reconciliation, products, deliveries, suppliers, stock movements, loyalty, gift cards, staff and audit sections independently.
+- [ ] Stock, low-stock, expenses, deliveries, payment, sales, gift-card and other aggregatable tables show totals.
 - [ ] PDF reports have visible A4 side margins and do not add a blank trailing page.
 - [ ] KRA-approved eTIMS process is operational separately or through a completed integration.
 - [ ] Backup exists off-device and has been restored successfully.

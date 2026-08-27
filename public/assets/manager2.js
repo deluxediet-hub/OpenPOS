@@ -654,7 +654,8 @@ const Manager2 = (() => {
           ['Hours worked', String(lab.hours)], ['Labour cost', fmt(lab.cost)],
           ['Labour % of sales', lab.pct + '% (target ' + lab.target_pct + '%)'], ['Net sales', fmt(lab.sales)] ] },
         { title: 'Staff on the clock', head: ['Name', 'Hours', 'Cost'], right: [1, 2],
-          rows: lab.by_user.map((u) => [u.name, String(u.hours), fmt(u.cost)]) },
+          rows: lab.by_user.map((u) => [u.name, String(u.hours), fmt(u.cost)]),
+          footer: ['TOTAL', String(lab.hours), fmt(lab.cost)] },
         { title: 'Theoretical stock usage', head: ['Ingredient', 'Used', 'On hand'], right: [1, 2],
           rows: usage.filter((u) => u.theoretical > 0).map((u) => [u.name, (Math.round(u.theoretical * 100) / 100) + ' ' + u.unit, stockQtyLabel(u.on_hand, u.unit, u.capacity_ml)]) }
       ]

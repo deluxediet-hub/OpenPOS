@@ -387,6 +387,9 @@ async function loginWithPin(w, pin) {
 
   await goTop('Reports');
   ck('reports has a PDF export', !!$('#spdf', m.w));
+  click(m.w, $('#spdf', m.w)); await wait(100);
+  ck('PDF builder starts with every section unselected', $$('[data-pdf]:checked', m.w).length === 0);
+  click(m.w, $('[data-no]', m.w)); await wait(100);
   ck('reports tab: range quick filters', $$('[data-q]', m.w).length === 5);
   ck('reports tab: waiter table', m.w.document.body.textContent.includes('Brian (Waiter)'));
   ck('reports tab: item performance rows', $$(m.w, 'table.tbl tbody tr').length > 0,

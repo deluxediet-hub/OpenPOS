@@ -160,6 +160,7 @@ const Manager = (() => {
         ['summary', 'Sales summary', 'Sales, refunds, VAT, receipts and average ticket'],
         ['payments', 'Payment methods', 'Cash, Card and M-Pesa totals'],
         ['top', 'Top 5 products', 'Five highest-revenue products'],
+        ['itemsall', 'All product sales', 'Quantity, revenue, COGS and margin for every sold product'],
         ['sellers', 'Sales by seller', 'Sales and revenue attributed to each person'],
         ['categories', 'Sales by category', 'Units and revenue by category'],
         ['low', 'Low stock only', 'Products at or below their reorder level'],
@@ -167,12 +168,21 @@ const Manager = (() => {
         ['complimentary', 'Complimentary issues', 'Owner, staff, friends, tasting and promotion stock'],
         ['stocktake', 'Latest stocktake', 'Expected, counted, quantity variance and financial impact'],
         ['reconciliation', 'Latest reconciliation', 'Cash, M-Pesa, Card, stock and overall operational variance'],
-        ['stock', 'Full stock position', 'On-hand quantity and inventory value']
+        ['stock', 'Full stock position', 'On-hand quantity and inventory value'],
+        ['products', 'Product catalogue', 'Categories, sizes, prices, cost, margin and availability'],
+        ['deliveries', 'Stock deliveries', 'Supplier, payment status, lines and delivery value'],
+        ['suppliers', 'Supplier directory', 'Contacts, address and KRA PIN'],
+        ['stockmoves', 'Stock movement log', 'Sales, deliveries, counts and corrections'],
+        ['shifts', 'Till history', 'Opening, closing and overall reconciliation status'],
+        ['loyalty', 'Customer loyalty', 'Customer points, visits and total spend'],
+        ['giftcards', 'Gift cards', 'Issued value, current balance and liability'],
+        ['staff', 'Staff list', 'Role and active status; PINs are never printed'],
+        ['audit', 'Audit log', 'Owner-visible operational actions for the selected period']
       ];
       modal({ title: 'Build PDF report', wide: true,
-        body: `<p class="muted" style="margin-top:0">Choose exactly what the PDF should contain. You can generate a single-section PDF such as Low stock or Expenses only.</p>
-          <div class="grid2">${options.map(([id, title, help], n) => `<label class="card" style="cursor:pointer"><div class="card-b row" style="align-items:flex-start">
-            <input type="checkbox" data-pdf="${id}" ${n < 3 ? 'checked' : ''}><span><b>${title}</b><br><span class="tiny muted">${help}</span></span></div></label>`).join('')}</div>`,
+        body: `<p class="muted" style="margin-top:0">Nothing is selected by default. Choose only the sections this PDF should contain.</p>
+          <div class="grid2">${options.map(([id, title, help]) => `<label class="card" style="cursor:pointer"><div class="card-b row" style="align-items:flex-start">
+            <input type="checkbox" data-pdf="${id}"><span><b>${title}</b><br><span class="tiny muted">${help}</span></span></div></label>`).join('')}</div>`,
         footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Generate selected PDF</button>' });
       const ov = document.querySelector('#modalRoot .ov');
       ov.querySelector('[data-no]').onclick = closeModal;
@@ -181,13 +191,26 @@ const Manager = (() => {
         if (!selected.size) return toast('Select at least one report section', 'err');
         const { q, t, s: sm, items, waiters, cats, comps } = last;
         try {
-          const [stock, expenses, stocktakes, reconciliations] = await Promise.all([
+          const [stock, expenses, stocktakes, reconciliations, products, deliveries, suppliers, stockMoves, staff, auditRows, customers, giftCards] = await Promise.all([
             selected.has('low') || selected.has('stock') ? api('/api/stock') : Promise.resolve([]),
             selected.has('expenses') ? api(`/api/reports/expenses?from=${q}&to=${t}`) : Promise.resolve([]),
             selected.has('stocktake') ? api('/api/stock-counts') : Promise.resolve([]),
-            selected.has('reconciliation') ? api('/api/shifts') : Promise.resolve([])
+            selected.has('reconciliation') || selected.has('shifts') ? api('/api/shifts') : Promise.resolve([]),
+            selected.has('products') ? api('/api/menu') : Promise.resolve([]),
+            selected.has('deliveries') ? api('/api/goods-receipts') : Promise.resolve([]),
+            selected.has('suppliers') ? api('/api/suppliers') : Promise.resolve([]),
+            selected.has('stockmoves') ? api('/api/stock-moves?limit=500') : Promise.resolve([]),
+            selected.has('staff') ? api('/api/users') : Promise.resolve([]),
+            selected.has('audit') ? api('/api/audit?limit=1000') : Promise.resolve([]),
+            selected.has('loyalty') ? api('/api/customers') : Promise.resolve([]),
+            selected.has('giftcards') ? api('/api/gift-cards') : Promise.resolve([])
           ]);
-          const latestReconciliation = reconciliations.find((x) => x.status === 'closed' && (x.closed_at || '').slice(0,10) >= q && (x.closed_at || '').slice(0,10) <= t);
+          const inPeriod = (value) => String(value || '').slice(0, 10) >= q && String(value || '').slice(0, 10) <= t;
+          const latestReconciliation = reconciliations.find((x) => x.status === 'closed' && inPeriod(x.closed_at));
+          const periodShifts = reconciliations.filter((x) => inPeriod(x.closed_at || x.opened_at));
+          const periodDeliveries = deliveries.filter((x) => inPeriod(x.received_at));
+          const periodMoves = stockMoves.filter((x) => inPeriod(x.created_at));
+          const periodAudit = auditRows.filter((x) => inPeriod(x.created_at));
           const latestCount = stocktakes.find((x) => x.status === 'completed' && (x.completed_at || '').slice(0, 10) >= q && (x.completed_at || '').slice(0, 10) <= t);
           const stocktake = latestCount ? await api('/api/stock-counts/' + latestCount.id) : null;
           const tables = [];
@@ -198,23 +221,39 @@ const Manager = (() => {
             ['Average ticket', fmt(sm.avg_ticket)],
             ...(retail ? [['Complimentary retail value', fmt(sm.complimentary_value)], ['Complimentary inventory cost', fmt(sm.complimentary_cost)]] : []) ] });
           if (selected.has('payments')) tables.push({ title: 'Payment methods', head: ['Method', 'Transactions', 'Total'], right: [1, 2],
-            rows: sm.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]) });
-          if (selected.has('top')) tables.push({ title: 'Top 5 products', head: ['Product', 'Qty', 'Revenue'], right: [1, 2],
-            rows: items.slice(0, 5).map((i) => [i.name, String(i.qty), (i.revenue / 100).toFixed(2)]) });
+            rows: sm.by_method.map((m) => [m.method.toUpperCase(), String(m.n), (m.total / 100).toFixed(2)]),
+            footer: ['TOTAL', String(sm.by_method.reduce((n, m) => n + m.n, 0)), (sm.by_method.reduce((n, m) => n + m.total, 0) / 100).toFixed(2)] });
+          if (selected.has('top')) { const top = items.slice(0, 5); tables.push({ title: 'Top 5 products', head: ['Product', 'Qty', 'Revenue'], right: [1, 2],
+            rows: top.map((i) => [i.name, String(i.qty), (i.revenue / 100).toFixed(2)]),
+            footer: ['TOP 5 TOTAL', String(top.reduce((n, i) => n + Number(i.qty), 0)), (top.reduce((n, i) => n + i.revenue, 0) / 100).toFixed(2)] }); }
+          if (selected.has('itemsall')) tables.push({ title: 'All product sales',
+            head: ['Product', 'Qty', 'Revenue', 'COGS', 'Margin'], right: [1,2,3,4],
+            rows: items.map((x) => [x.name, String(x.qty), (x.revenue/100).toFixed(2), ((x.cogs||0)/100).toFixed(2),
+              x.revenue ? Math.round((x.revenue-(x.cogs||0))/x.revenue*100)+'%' : '—']),
+            footer: ['TOTAL', String(items.reduce((n,x) => n+Number(x.qty),0)), (items.reduce((n,x)=>n+x.revenue,0)/100).toFixed(2),
+              (items.reduce((n,x)=>n+(x.cogs||0),0)/100).toFixed(2), ''] });
           if (selected.has('sellers')) tables.push({ title: 'Sales by seller', head: ['Seller', 'Sales', 'Revenue'], right: [1, 2],
-            rows: waiters.map((w) => [w.waiter || 'Unassigned', String(w.orders), (w.revenue / 100).toFixed(2)]) });
+            rows: waiters.map((w) => [w.waiter || 'Unassigned', String(w.orders), (w.revenue / 100).toFixed(2)]),
+            footer: ['TOTAL', String(waiters.reduce((n, w) => n + w.orders, 0)), (waiters.reduce((n, w) => n + w.revenue, 0) / 100).toFixed(2)] });
           if (selected.has('categories')) tables.push({ title: 'Sales by category', head: ['Category', 'Qty', 'Revenue'], right: [1, 2],
-            rows: cats.map((c) => [c.category, String(c.qty), (c.revenue / 100).toFixed(2)]) });
-          if (selected.has('low')) tables.push({ title: 'Low stock', head: ['Product', 'On hand', 'Reorder at', 'Unit'], right: [1, 2],
-            rows: stock.filter((x) => x.qty <= x.min_qty).map((x) => [x.name, stockQtyLabel(x.qty, x.unit, x.capacity_ml), String(roundStock(x.min_qty)), x.unit]) });
+            rows: cats.map((c) => [c.category, String(c.qty), (c.revenue / 100).toFixed(2)]),
+            footer: ['TOTAL', String(cats.reduce((n, c) => n + Number(c.qty), 0)), (cats.reduce((n, c) => n + c.revenue, 0) / 100).toFixed(2)] });
+          if (selected.has('low')) { const low = stock.filter((x) => x.qty <= x.min_qty); tables.push({ title: 'Low stock',
+            head: ['Product', 'On hand', 'Reorder at', 'Unit cost', 'Stock value'], right: [1, 2, 3, 4],
+            rows: low.map((x) => [x.name, stockQtyLabel(x.qty, x.unit, x.capacity_ml), `${roundStock(x.min_qty)} ${x.unit}`,
+              (x.cost / 100).toFixed(2), (x.qty * x.cost / 100).toFixed(2)]),
+            footer: [`${low.length} LOW PRODUCT(S)`, '', '', '', (low.reduce((n, x) => n + x.qty * x.cost, 0) / 100).toFixed(2)] }); }
           if (selected.has('expenses')) tables.push({ title: 'Expenses', head: ['Date', 'Paid via', 'Amount', 'Reason', 'Recorded by'], right: [2],
             rows: expenses.map((x) => [(x.created_at || '').slice(0, 16), String(x.method || 'cash').toUpperCase(),
-              (x.amount / 100).toFixed(2), x.reason || '', x.user_name || '—']) });
+              (x.amount / 100).toFixed(2), x.reason || '', x.user_name || '—']),
+            footer: ['TOTAL', '', (expenses.reduce((n, x) => n + x.amount, 0) / 100).toFixed(2), '', ''] });
           if (selected.has('complimentary')) tables.push({ title: 'Complimentary issues',
             head: ['Date', 'Product', 'Qty', 'Recipient', 'Reason', 'Recorded / Authorized', 'Reference', 'Retail / Cost'], right: [2, 7],
             rows: comps.map((x) => [(x.created_at || '').slice(0, 16), x.item_name, String(x.qty), x.recipient || '—', x.reason,
               `${x.created_by_name || '—'} / ${x.authorized_by_name || '—'}`, x.authorization_reference || '—',
-              `${(x.retail_value / 100).toFixed(2)} / ${(x.cost_value / 100).toFixed(2)}`]) });
+              `${(x.retail_value / 100).toFixed(2)} / ${(x.cost_value / 100).toFixed(2)}`]),
+            footer: ['TOTAL', '', String(comps.reduce((n, x) => n + Number(x.qty), 0)), '', '', '', '',
+              `${(comps.reduce((n, x) => n + x.retail_value, 0) / 100).toFixed(2)} / ${(comps.reduce((n, x) => n + x.cost_value, 0) / 100).toFixed(2)}`] });
           if (selected.has('stocktake')) {
             tables.push({ title: stocktake ? `Stocktake — ${stocktake.reference}` : 'Stocktake',
               head: ['Product', 'Expected (system + added)', 'Counted', 'Variance', 'Cost impact', 'Retail impact'], right: [1, 2, 3, 4, 5],
@@ -222,7 +261,8 @@ const Manager = (() => {
                   `${roundStock(x.expected)} + ${roundStock(x.added_qty || 0)} = ${stockQtyLabel(x.expected + (x.added_qty || 0), x.unit, x.capacity_ml)}`,
                   stockQtyLabel(x.counted, x.unit, x.capacity_ml),
                   `${x.variance > 0 ? '+' : ''}${roundStock(x.variance, 4)} ${x.unit}`, (x.cost_variance / 100).toFixed(2), (x.retail_variance / 100).toFixed(2)])
-                : [['No completed stocktake in this period', '', '', '', '', '']] });
+                : [['No completed stocktake in this period', '', '', '', '', '']],
+              footer: stocktake ? ['TOTAL FINANCIAL IMPACT', '', '', '', (stocktake.cost_variance / 100).toFixed(2), (stocktake.retail_variance / 100).toFixed(2)] : null });
           }
           if (selected.has('reconciliation')) tables.push({ title: 'Latest operational reconciliation', head: ['Metric', 'Value'], right: [1],
             rows: latestReconciliation ? [
@@ -233,7 +273,50 @@ const Manager = (() => {
               ['Status', latestReconciliation.reconciliation_status || '—'], ['Note', latestReconciliation.reconciliation_note || '—']
             ] : [['No closed reconciliation in this period', '']] });
           if (selected.has('stock')) tables.push({ title: 'Stock position', head: ['Product', 'On hand', 'Unit cost', 'Value'], right: [1, 2, 3],
-            rows: stock.map((x) => [x.name, stockQtyLabel(x.qty, x.unit, x.capacity_ml), (x.cost / 100).toFixed(2), (x.qty * x.cost / 100).toFixed(2)]) });
+            rows: stock.map((x) => [x.name, stockQtyLabel(x.qty, x.unit, x.capacity_ml), (x.cost / 100).toFixed(2), (x.qty * x.cost / 100).toFixed(2)]),
+            footer: [`TOTAL · ${stock.length} PRODUCT(S)`, '', '', (stock.reduce((n, x) => n + x.qty * x.cost, 0) / 100).toFixed(2)] });
+          if (selected.has('products')) tables.push({ title: 'Product catalogue',
+            head: ['Product', 'Category', 'Size', 'Selling price', 'Cost', 'Margin', 'Status'], right: [2, 3, 4, 5],
+            rows: products.map((x) => [x.name, x.category_name, x.volume_ml ? `${x.volume_ml}ml` : '—',
+              (x.price / 100).toFixed(2), (x.cost / 100).toFixed(2), x.price ? Math.round((x.price - x.cost) / x.price * 100) + '%' : '—', x.available ? 'Available' : 'Unavailable']),
+            footer: [`TOTAL · ${products.length} PRODUCT(S)`, '', '', '', '', '', `${products.filter((x) => x.available).length} available`] });
+          if (selected.has('deliveries')) tables.push({ title: 'Stock deliveries',
+            head: ['Date', 'Reference', 'Supplier', 'Payment', 'Lines', 'Value', 'Received by'], right: [4, 5],
+            rows: periodDeliveries.map((x) => [(x.received_at || '').slice(0,16), x.invoice_no, x.supplier_name || 'Not listed',
+              x.payment_method === 'pay_later' ? 'PAY LATER' : String(x.payment_method || '').toUpperCase(), String(x.lines),
+              (x.total_cost / 100).toFixed(2), x.received_by_name || '—']),
+            footer: [`TOTAL · ${periodDeliveries.length} DELIVERY(IES)`, '', '', '', String(periodDeliveries.reduce((n,x) => n + x.lines, 0)),
+              (periodDeliveries.reduce((n,x) => n + x.total_cost, 0) / 100).toFixed(2), ''] });
+          if (selected.has('suppliers')) tables.push({ title: 'Supplier directory',
+            head: ['Supplier', 'Phone', 'Email', 'KRA PIN', 'Address'], rows: suppliers.map((x) => [x.name, x.phone || '—', x.email || '—', x.kra_pin || '—', x.address || '—']),
+            footer: [`TOTAL · ${suppliers.length} SUPPLIER(S)`, '', '', '', ''] });
+          if (selected.has('stockmoves')) tables.push({ title: 'Stock movement log',
+            head: ['Date', 'Product', 'Change', 'Reason', 'By'], right: [2],
+            rows: periodMoves.map((x) => [(x.created_at || '').slice(0,16), x.name, `${x.delta > 0 ? '+' : ''}${roundStock(x.delta,4)} ${x.unit}`, x.reason || '—', x.user_name || 'system']),
+            footer: [`TOTAL · ${periodMoves.length} MOVEMENT(S)`, '', '', '', ''] });
+          if (selected.has('shifts')) tables.push({ title: 'Till and reconciliation history',
+            head: ['Closed', 'By', 'Cash var.', 'M-Pesa var.', 'Card var.', 'Stock retail var.', 'Overall', 'Status'], right: [2,3,4,5,6],
+            rows: periodShifts.map((x) => [(x.closed_at || x.opened_at || '').slice(0,16), x.closed_by_name || x.opened_by_name || '—',
+              ((x.variance || 0)/100).toFixed(2), ((x.mpesa_variance || 0)/100).toFixed(2), ((x.card_variance || 0)/100).toFixed(2),
+              ((x.stock_retail_variance || 0)/100).toFixed(2), ((x.overall_variance || 0)/100).toFixed(2), x.reconciliation_status || x.status]),
+            footer: [`TOTAL · ${periodShifts.length} TILL(S)`, '', '', '', '', '', (periodShifts.reduce((n,x) => n + (x.overall_variance || 0),0)/100).toFixed(2), ''] });
+          if (selected.has('loyalty')) { const redeem = Number(State.settings.loyalty_redeem_per) || 1; tables.push({ title: 'Customer loyalty',
+            head: ['Customer', 'Phone', 'Points', 'Points value', 'Visits', 'Total spend'], right: [2,3,4,5],
+            rows: customers.map((x) => [x.name, x.phone || '—', String(x.points), (x.points*redeem).toFixed(2), String(x.visits), (x.total_spend/100).toFixed(2)]),
+            footer: [`TOTAL · ${customers.length} CUSTOMER(S)`, '', String(customers.reduce((n,x)=>n+x.points,0)),
+              (customers.reduce((n,x)=>n+x.points*redeem,0)).toFixed(2), String(customers.reduce((n,x)=>n+x.visits,0)),
+              (customers.reduce((n,x)=>n+x.total_spend,0)/100).toFixed(2)] }); }
+          if (selected.has('giftcards')) tables.push({ title: 'Gift cards',
+            head: ['Code', 'Holder', 'Issued value', 'Balance', 'Issued', 'Status'], right: [2,3],
+            rows: giftCards.map((x) => [x.code, x.customer_name || '—', (x.value/100).toFixed(2), (x.balance/100).toFixed(2), (x.created_at||'').slice(0,10), x.status]),
+            footer: [`TOTAL · ${giftCards.length} CARD(S)`, '', (giftCards.reduce((n,x)=>n+x.value,0)/100).toFixed(2),
+              (giftCards.filter((x)=>x.status==='active').reduce((n,x)=>n+x.balance,0)/100).toFixed(2), '', 'ACTIVE LIABILITY'] });
+          if (selected.has('staff')) tables.push({ title: 'Staff list', head: ['Name', 'Role', 'Status'],
+            rows: staff.map((x) => [x.name, x.role, x.active ? 'Active' : 'Disabled']),
+            footer: [`TOTAL · ${staff.length} ACCOUNT(S)`, '', `${staff.filter((x) => x.active).length} active`] });
+          if (selected.has('audit')) tables.push({ title: 'Audit log', head: ['Date', 'Who', 'Action', 'Detail'],
+            rows: periodAudit.map((x) => [x.created_at, x.user_name || 'system', x.action, x.detail || '']),
+            footer: [`TOTAL · ${periodAudit.length} EVENT(S)`, '', '', ''] });
           closeModal();
           printReport({ title: 'Custom Management Report', subtitle: `Period ${q} to ${t}`, tables, signature: false });
         } catch (e) { toast(e.message, 'err'); }

@@ -51,7 +51,7 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 - Live stock shown at the till with optional negative-stock prevention
 - Supplier directory and fast receiving: staff select product and quantity, invoice/reference is optional, configured costs remain owner-controlled, and Cash/M-Pesa/other/pay-later status is tracked
 - Whole-keg sales plus shot/glass products that show available servings and deduct the correct fraction from a tracked bottle or keg
-- Focused Top 5 dashboard plus a custom PDF builder where the owner selects summary, payments, Top 5 products, sellers, categories, low stock, expenses or full stock; A4 margins and pagination are print-safe
+- Comprehensive PDF builder starts fully unselected and lets the owner include only needed sections: sales summary, payments, Top 5 or all product sales, sellers, categories, low/full stock, stocktake, expenses, complementaries, reconciliation/till history, products, deliveries, suppliers, stock movements, loyalty, gift cards, staff or audit; financial reports include explicit totals
 - Repeated taps, scans and + actions consolidate into one product line with a single quantity across the basket, sales view and receipt
 - Complimentary stock for owner consumption, staff, friends or promotions—including measured pours—with no cash impact and full retail-value/cost reporting; sellers simply confirm owner authorization and reports show both recorder and owner
 - Bottle balances retain six-decimal accuracy internally but display at two decimals with open-container ml (for example `0.96 bottle · 718.75ml open`); stocktake accepts sealed units plus open ml
