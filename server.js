@@ -431,6 +431,8 @@ app.post('/api/orders/:id/items', requireAuth, requireRole('seller', 'waiter', '
       if (!m) throw new Error('Menu item not found');
       if (!m.available && !['manager', 'admin'].includes(req.user.role)) throw new Error(`${m.name} is unavailable`);
       const requestedQty = Number(l.qty) || 1;
+      if (getSetting('business_type') === 'wines_spirits' && (!Number.isInteger(requestedQty) || requestedQty <= 0))
+        throw new Error('Retail sale quantity must be a positive whole number');
       if (getSetting('business_type') === 'wines_spirits' && getSetting('prevent_negative_stock') === '1') {
         const tracked = db.prepare(`SELECT si.qty,r.qty deduction FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
           WHERE r.menu_item_id=? ORDER BY r.id LIMIT 1`).get(m.id);
@@ -470,14 +472,42 @@ app.post('/api/orders/:id/items', requireAuth, requireRole('seller', 'waiter', '
         if (requiredGroups.length) throw new Error(`Please choose: ${requiredGroups[0].name}`);
       }
 
-      ins.run(o.id, m.id, m.name, price, Number(l.qty) || 1, l.note || null, m.station, req.user.id,
-        chosen.length ? JSON.stringify(chosen) : null);
+      const qty = Number(l.qty) || 1;
+      const modifierJson = chosen.length ? JSON.stringify(chosen.sort((a, b) => a.id - b.id)) : null;
+      /* Retail baskets consolidate identical products instead of creating repeated rows. */
+      const existing = getSetting('business_type') === 'wines_spirits' ? db.prepare(`SELECT id FROM order_items
+        WHERE order_id=? AND menu_item_id=? AND price=? AND status='pending'
+          AND COALESCE(note,'')=COALESCE(?,'') AND COALESCE(modifiers,'')=COALESCE(?,'')
+        ORDER BY id LIMIT 1`).get(o.id, m.id, price, l.note || null, modifierJson) : null;
+      if (existing) db.prepare('UPDATE order_items SET qty=qty+? WHERE id=?').run(qty, existing.id);
+      else ins.run(o.id, m.id, m.name, price, qty, l.note || null, m.station, req.user.id, modifierJson);
     }
   });
   try { tx(); } catch (e) { return bad(res, e.message); }
   audit(req.user, 'order.add_items', `#${o.number} x${lines.length}`);
   broadcast('orders'); broadcast('kitchen');
   res.json(decorate(db.prepare('SELECT * FROM orders WHERE id=?').get(o.id)));
+});
+
+app.patch('/api/orders/:id/items/:itemId/quantity', requireAuth, requireRole('seller', 'waiter', 'cashier', 'manager', 'admin'), (req, res) => {
+  const order = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
+  const item = db.prepare('SELECT * FROM order_items WHERE order_id=? AND id=?').get(req.params.id, req.params.itemId);
+  if (!order || !item) return bad(res, 'Sale item not found', 404);
+  if (!['open', 'billed'].includes(order.status) || item.status !== 'pending') return bad(res, 'Only pending sale items can change quantity');
+  const qty = Number(req.body.qty);
+  if (!(qty > 0)) return bad(res, 'Quantity must be greater than zero');
+  if (getSetting('business_type') === 'wines_spirits' && !Number.isInteger(qty))
+    return bad(res, 'Retail sale quantity must be a whole number');
+  if (getSetting('business_type') === 'wines_spirits' && getSetting('prevent_negative_stock') === '1') {
+    const tracked = db.prepare(`SELECT si.qty,r.qty deduction FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
+      WHERE r.menu_item_id=? ORDER BY r.id LIMIT 1`).get(item.menu_item_id);
+    if (tracked && qty * tracked.deduction > tracked.qty)
+      return bad(res, `Only ${Math.floor(tracked.qty / tracked.deduction)} sale unit(s) available`);
+  }
+  db.prepare('UPDATE order_items SET qty=? WHERE id=?').run(qty, item.id);
+  audit(req.user, 'order.quantity', `#${order.number} ${item.name} x${qty}`);
+  broadcast('orders');
+  res.json(decorate(readOrder(order.id)));
 });
 
 app.patch('/api/orders/:id/items/:itemId', requireAuth, (req, res) => {

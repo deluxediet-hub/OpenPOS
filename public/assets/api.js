@@ -211,6 +211,16 @@ const priceOf = (m) => (State.pricing[m.id] ? State.pricing[m.id].price : m.pric
 const ruleFor = (m) => State.pricing[m.id] ? State.pricing[m.id].rule : null;
 const orderLabel = (o) => { const t = orderTable(o); return t ? t.name : (State.settings.business_type === 'wines_spirits' ? 'Sale #' : 'Takeaway #') + o.number; };
 const activeOrder = () => State.orders.find((o) => o.id === State.openOrderId);
+function groupedSaleItems(items = []) {
+  const grouped = [];
+  for (const item of items) {
+    const key = [item.menu_item_id, item.name, item.price, item.note || '', JSON.stringify(item.modifiers || [])].join('|');
+    const existing = grouped.find((x) => x._groupKey === key);
+    if (existing) existing.qty += Number(item.qty);
+    else grouped.push({ ...item, qty: Number(item.qty), _groupKey: key });
+  }
+  return grouped;
+}
 const waiterName = (id) => (State.users.find((u) => u.id === id) || {}).name || '—';
 const tableStatus = (tid) => {
   const o = State.orders.find((x) => x.table_id === tid && ['open', 'billed'].includes(x.status));

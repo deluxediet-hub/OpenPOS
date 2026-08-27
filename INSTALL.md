@@ -135,7 +135,8 @@ Database migrations run automatically, but a backup is still mandatory.
 - [ ] Seller is prompted to open the till, then lands directly in a ready New Sale basket.
 - [ ] Opening Cash and M-Pesa balances are correct.
 - [ ] Five invalid PINs trigger temporary lockout.
-- [ ] Every product scans correctly.
+- [ ] Every product scans correctly; repeated scans and + taps keep one basket line and increase its quantity.
+- [ ] Basket, Sales view, browser receipt and ESC/POS receipt show the same consolidated quantity.
 - [ ] Out-of-stock product is blocked when negative stock protection is enabled.
 - [ ] Checkout proceeds without an age prompt and the configured 18+ notice prints on the receipt.
 - [ ] Cash payment calculates correct change.

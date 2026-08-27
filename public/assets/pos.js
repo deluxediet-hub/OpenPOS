@@ -379,22 +379,10 @@ const Pos = (() => {
     const line = o.items.find((i) => i.id === lineId);
     if (!line) return;
     try {
-      if (dir > 0) {
-        await api(`/api/orders/${o.id}/items`, { body: { items: [{ menu_item_id: line.menu_item_id, qty: 1, note: line.note }] } });
-      } else if (line.qty > 1 || line.status !== 'pending') {
-        await api(`/api/orders/${o.id}/items/${lineId}`, { method: 'PATCH', body: { status: 'void', reason: 'Quantity reduced' } })
-          .catch(async () => {
-            // non-managers cannot void sent lines: just remove pending ones
-            await api(`/api/orders/${o.id}/items/${lineId}`, { method: 'DELETE' });
-          });
-        if (line.qty > 1) {
-          await api(`/api/orders/${o.id}/items`, { body: { items: [{ menu_item_id: line.menu_item_id, qty: line.qty - 1, note: line.note }] } });
-        }
-      } else {
-        await api(`/api/orders/${o.id}/items/${lineId}`, { method: 'DELETE' });
-      }
-      await refresh();
-      renderEditor(host);
+      const nextQty = Number(line.qty) + dir;
+      if (nextQty <= 0) await api(`/api/orders/${o.id}/items/${lineId}`, { method: 'DELETE' });
+      else await api(`/api/orders/${o.id}/items/${lineId}/quantity`, { method: 'PATCH', body: { qty: nextQty } });
+      await refresh(); renderEditor(host);
     } catch (e) { toast(e.message, 'err'); }
   }
 

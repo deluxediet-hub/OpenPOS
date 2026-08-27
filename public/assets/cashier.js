@@ -28,7 +28,7 @@ const Cashier = (() => {
       </div>
       <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
         ${open.length ? open.map((o) => {
-          const t = orderTable(o);
+          const t = orderTable(o), lines = groupedSaleItems(o.items);
           return `<div class="card">
             <div class="card-h">
               <h3>${t ? esc(t.name) + ' · ' + esc(t.area) : (State.settings.business_type === 'wines_spirits' ? 'Sale #' : 'Takeaway #') + o.number}</h3>
@@ -38,9 +38,9 @@ const Cashier = (() => {
             <div class="card-b" style="padding:12px 15px">
               <div class="tiny muted">#${o.number}${State.settings.business_type === 'wines_spirits' ? '' : ' · ' + o.people + ' guests'} · ${esc(waiterName(o.waiter_id))} · ${ago(o.opened_at)}</div>
               <div style="margin:10px 0;font-size:12.5px;color:var(--dim);max-height:130px;overflow:auto">
-                ${o.items.slice(0, 12).map((i) => `<div class="row" style="gap:8px;justify-content:space-between">
+                ${lines.slice(0, 12).map((i) => `<div class="row" style="gap:8px;justify-content:space-between">
                   <span>${i.qty} × ${esc(i.name)}</span><span class="mono">${fmt(i.price*i.qty)}</span></div>`).join('')}
-                ${o.items.length > 12 ? `<div class="tiny muted">+ ${o.items.length - 12} more…</div>` : ''}
+                ${lines.length > 12 ? `<div class="tiny muted">+ ${lines.length - 12} more products…</div>` : ''}
               </div>
               <div class="tline"><span>Subtotal</span><b>${fmt(o.totals.subtotal)}</b></div>
               ${o.totals.service ? `<div class="tline"><span>Service</span><b>${fmt(o.totals.service)}</b></div>` : ''}
@@ -138,12 +138,12 @@ const Cashier = (() => {
     try {
       const closed = await api('/api/orders?status=closed');
       box.innerHTML = closed.length ? `<table class="tbl"><thead><tr>
-          <th>#</th><th>Sale</th><th>Seller</th><th>Closed</th><th>Items</th><th class="right">Total</th><th></th></tr></thead>
+          <th>#</th><th>Sale</th><th>Seller</th><th>Closed</th><th>Products</th><th class="right">Total</th><th></th></tr></thead>
         <tbody>${closed.slice(0, 25).map((o) => {
           const t = orderTable(o);
           return `<tr><td class="mono">${o.number}</td><td>${t ? esc(t.name) : (State.settings.business_type === 'wines_spirits' ? 'Retail sale' : 'Takeaway')}</td>
             <td>${esc(waiterName(o.waiter_id))}</td><td>${clockTime(o.closed_at)}</td>
-            <td>${o.items.length}</td><td class="right mono"><b>${fmt(o.totals.total)}</b></td>
+            <td>${groupedSaleItems(o.items).length}</td><td class="right mono"><b>${fmt(o.totals.total)}</b></td>
             <td class="right"><button class="btn xs ghost" data-rp="${o.id}">Receipt</button>
             ${['manager','admin'].includes(State.user.role) ? `<button class="btn xs red" data-rf="${o.id}">Refund</button>` : ''}</td></tr>`;
         }).join('')}</tbody></table>` : '<div class="empty">No closed orders today yet.</div>';

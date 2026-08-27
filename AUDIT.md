@@ -33,7 +33,8 @@ The workspace now has a focused bottle-shop workflow: barcode/SKU products, live
 - Cash, card and manually confirmed M-Pesa payments.
 - Barcode, SKU or product-name search; owner-controlled global scanner mode can pull a matching product into the current sale from any normal page.
 - Scanner capture pauses in forms and modals so owner-entered data is not corrupted.
-- Quantity changes, parked/open sales, part-payments and receipt reprints.
+- Repeated taps, barcode scans and quantity increases consolidate identical products into one line. Quantity changes preserve notes/modifiers, totals use the consolidated quantity, reports sum it, and browser/ESC-POS receipts defensively group older duplicate records.
+- Parked/open sales, part-payments and receipt reprints.
 - Server-side change calculation and overpayment guards.
 - Duplicate M-Pesa confirmation references are rejected.
 - VAT-inclusive KES defaults and no restaurant service charge: an entered KSh 200 price remains KSh 200 while VAT is extracted for reporting.
@@ -81,7 +82,8 @@ A 2025 national policy proposed raising the threshold to 21, but reporting descr
 - Price changes, discounts, voids, refunds, payments, expenses, deliveries and stock corrections are audited.
 - Sellers must open the retail till before sales. Owners may use that shared till with attribution to their own account; if none is open, an owner sale automatically opens a zero-balance owner till. Starting end-of-day stocktake moves it into reconciliation, blocks further sales, and closing requires both Cash and M-Pesa actual balances.
 - Cash and M-Pesa expenses—including paid stock deliveries—reduce their respective expected balances; both variances are stored and audited at close.
-- Empty automatically prepared sale tabs are discarded at stocktake and again at till close, so they cannot block reconciliation.
+- Empty automatically prepared sale tabs are discarded at stocktake and again immediately before the close validation, so they cannot block reconciliation.
+- Management PDFs use a dedicated A4 page profile with side margins, row-aware pagination and no forced signature footer for custom reports, preventing a blank trailing page.
 - Runtime database files are no longer committed to Git.
 
 ## 3. Compliance assessment

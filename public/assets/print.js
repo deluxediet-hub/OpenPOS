@@ -8,7 +8,7 @@ function receiptHtml(r, { paid = false } = {}) {
   const seller = esc((r.waiter || {}).name || '—');
   const cashier = State.user ? esc(State.user.name) : seller;
   const chars = Number(s.printer_chars) || 42;
-  const items = r.items.map((i) => `<tr>
+  const items = groupedSaleItems(r.items).map((i) => `<tr>
     <td class="rq">${i.qty}</td><td class="ri">${esc(i.name)}${i.note ? `<div class="receipt-note">${esc(i.note)}</div>` : ''}
       <div class="receipt-unit">@ ${money(i.price)}</div></td><td class="ra">${money(i.price * i.qty)}</td></tr>`).join('');
   const payments = paid && o.payments && o.payments.length ? o.payments.map((p) =>
@@ -84,7 +84,7 @@ function signatureHtml() {
       `<div class="rpt-sign-col"><div class="rpt-line"></div><div class="rpt-sign-l">${r}<br>Name / Signature / Date</div></div>`).join('')}
   </div>`;
 }
-function reportHtml({ settings, title, subtitle, tables = [], summary = [], signature = true }) {
+function reportHtml({ settings, title, subtitle, tables = [], summary = [], signature = false }) {
   const s = settings || State.settings;
   return `<div class="sheet">
     ${letterheadHtml(s)}
@@ -123,6 +123,8 @@ function doPrint(html) {
   const root = document.getElementById('printRoot');
   if (!root) return;
   root.innerHTML = html;
+  root.classList.toggle('print-report', html.includes('class="sheet"'));
+  root.classList.toggle('print-receipt', html.includes('class="receipt'));
   // hide the running app so only the receipt goes to the printer, then restore
   const app = document.getElementById('app');
   const login = document.getElementById('login');
@@ -135,6 +137,7 @@ function doPrint(html) {
     window.print();
     setTimeout(() => {
       root.style.display = 'none';
+      root.classList.remove('print-report', 'print-receipt');
       hidden.forEach((el) => { el.style.display = ''; });
     }, 120);
   }, 60);

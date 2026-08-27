@@ -49,7 +49,8 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 - Live stock shown at the till with optional negative-stock prevention
 - Supplier directory and fast receiving: staff select product and quantity, invoice/reference is optional, configured costs remain owner-controlled, and Cash/M-Pesa/other/pay-later status is tracked
 - Whole-keg sales plus shot/glass products that show available servings and deduct the correct fraction from a tracked bottle or keg
-- Focused Top 5 dashboard plus a custom PDF builder where the owner selects summary, payments, Top 5 products, sellers, categories, low stock, expenses or full stock
+- Focused Top 5 dashboard plus a custom PDF builder where the owner selects summary, payments, Top 5 products, sellers, categories, low stock, expenses or full stock; A4 margins and pagination are print-safe
+- Repeated taps, scans and + actions consolidate into one product line with a single quantity across the basket, sales view and receipt
 - Full stocktakes with expected, counted and audited variance
 - Fast checkout with no buyer-age prompt; the configured 18+ notice remains on receipts
 - Duplicate M-Pesa confirmation-code rejection

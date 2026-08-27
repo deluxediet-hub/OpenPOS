@@ -415,8 +415,9 @@ function migrate() {
   add('stock_count_items', 'added_qty', 'added_qty REAL NOT NULL DEFAULT 0');
   add('goods_receipts', 'payment_method', "payment_method TEXT NOT NULL DEFAULT 'pay_later'");
   add('goods_receipts', 'payment_status', "payment_status TEXT NOT NULL DEFAULT 'unpaid'");
+  const isRetailDatabase = (db.prepare("SELECT value FROM settings WHERE key='business_type'").get() || {}).value === 'wines_spirits';
   /* Retail policy: buyers are handled as adults at entry; checkout must stay fast. */
-  if ((db.prepare("SELECT value FROM settings WHERE key='business_type'").get() || {}).value === 'wines_spirits') {
+  if (isRetailDatabase) {
     db.prepare("INSERT INTO settings(key,value) VALUES('age_verification_required','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();
     /* Remove restaurant station semantics from existing retail catalogues once. */
     if (!db.prepare("SELECT value FROM settings WHERE key='retail_catalogue_cleanup_v1'").get()) {
@@ -425,6 +426,20 @@ function migrate() {
       db.prepare("INSERT INTO settings(key,value) VALUES('retail_catalogue_cleanup_v1','1')").run();
     }
   }
+
+  /* Consolidate duplicate pending retail lines created by earlier builds. */
+  const duplicateLines = isRetailDatabase ? db.prepare(`SELECT MIN(id) keep_id,order_id,menu_item_id,price,
+      COALESCE(note,'') note_key,COALESCE(modifiers,'') modifiers_key,SUM(qty) total_qty,COUNT(*) n
+    FROM order_items WHERE status='pending' GROUP BY order_id,menu_item_id,price,COALESCE(note,''),COALESCE(modifiers,'') HAVING COUNT(*)>1`).all() : [];
+  const mergeLines = db.transaction(() => {
+    for (const row of duplicateLines) {
+      db.prepare('UPDATE order_items SET qty=? WHERE id=?').run(row.total_qty, row.keep_id);
+      db.prepare(`DELETE FROM order_items WHERE order_id=? AND menu_item_id=? AND price=? AND id!=?
+        AND COALESCE(note,'')=? AND COALESCE(modifiers,'')=? AND status='pending'`)
+        .run(row.order_id, row.menu_item_id, row.price, row.keep_id, row.note_key, row.modifiers_key);
+    }
+  });
+  mergeLines();
 
   /* Upgrade any credentials left in plaintext by an older release.
      A stored value not starting with the hash marker is plaintext. */
