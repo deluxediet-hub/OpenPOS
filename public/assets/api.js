@@ -43,6 +43,18 @@ async function api(path, opts = {}) {
   return data;
 }
 
+/* ----------------------- retail product CSV ---------------------------- */
+const PRODUCT_CSV_TEMPLATE = `name,category,size_ml,selling_unit,price,cost,opening_stock,reorder_level,sku,barcode,stock_mode,source_sku,source_size_ml,kra_item_code,tax_type,available
+Chrome Vodka,Spirits,250,bottle,450,320,24,6,CHR-250,616000000001,unit,,,,B,1
+House Wine Keg,Wine,20000,kg,0,900,20,5,KEG-WINE-20L,,weighed,,,,B,0
+House Wine Glass,Wine,150,glass,350,0,0,0,WINE-GLASS-150,,pour,KEG-WINE-20L,20000,,B,1`;
+function downloadProductCsvTemplate() {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([PRODUCT_CSV_TEMPLATE], { type: 'text/csv' }));
+  a.download = 'openpos-products-template.csv'; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 /* ---------------------------- formatting ------------------------------ */
 const sym = () => State.settings.currency_symbol || 'KSh';
 function fmt(cents) {

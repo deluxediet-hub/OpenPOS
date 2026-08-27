@@ -5,7 +5,7 @@
 const path = require('path');
 const express = require('express');
 const {
-  db, seed, loadSampleData, setupStatus, runSetup, hashPin, verifyPin, findUserByPin, pinTaken,
+  db, seed, loadSampleData, importRetailCsv, setupStatus, runSetup, hashPin, verifyPin, findUserByPin, pinTaken,
   getSettings, getSetting, setSetting, computeTotals, nextOrderNumber, audit, money,
   nowLocal, todayLocal
 } = require('./db');
@@ -16,7 +16,7 @@ const escpos = require('./lib/escpos');
 seed();
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '3mb' })); // supports owner CSV onboarding/import up to the validated 2 MB limit
 
 /* --------------------------- session cookies --------------------------- */
 const SESSIONS = new Map(); // token -> {user_id}
@@ -202,6 +202,16 @@ app.get('/api/bootstrap', requireAuth, (req, res) => {
 /* ------------------------------- catalogue ------------------------------ */
 app.get('/api/menu', requireAuth, (req, res) => res.json(listMenu()));
 
+app.post('/api/products/import', requireAuth, requireRole('admin'), (req, res) => {
+  if (getSetting('business_type') !== 'wines_spirits') return bad(res, 'CSV retail import is available in wines & spirits mode only');
+  try {
+    const result = importRetailCsv(req.body.csv, req.user.id);
+    audit(req.user, 'products.csv_import', `${result.imported} products`);
+    broadcast('menu'); broadcast('stock');
+    res.json({ ok: true, ...result });
+  } catch (e) { return bad(res, e.message); }
+});
+
 app.post('/api/menu-items', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const { name, category_id, price, cost = 0, station = 'bar', available = 1,
     sku = '', barcode = '', volume_ml = null, kra_item_code = '', tax_type = 'B',
@@ -210,14 +220,14 @@ app.post('/api/menu-items', requireAuth, requireRole('manager', 'admin'), (req, 
   if (!name || !category_id) return bad(res, 'Name and category required');
   const retail = getSetting('business_type') === 'wines_spirits';
   const effectiveStation = retail ? 'retail' : station;
-  const mode = retail && stock_mode === 'pour' ? 'pour' : 'unit';
+  const mode = retail && stock_mode === 'pour' ? 'pour' : (retail && stock_mode === 'weighed' ? 'weighed' : 'unit');
   let sourceStock = null, deduction = 1;
   if (mode === 'pour') {
     sourceStock = db.prepare('SELECT * FROM stock_items WHERE id=?').get(Number(source_stock_item_id));
     const serving = Number(serving_ml || volume_ml), container = Number(source_volume_ml);
     if (!sourceStock) return bad(res, 'Choose the bottle or keg stock used for this pour');
     if (!(serving > 0) || !(container >= serving)) return bad(res, 'Serving and source container sizes are required');
-    deduction = serving / container;
+    deduction = sourceStock.deduction_mode === 'count' ? serving / 1000 : serving / container;
   }
   if (barcode && db.prepare('SELECT id FROM menu_items WHERE barcode=?').get(String(barcode).trim())) return bad(res, 'Barcode already belongs to another product');
   if (sku && db.prepare('SELECT id FROM menu_items WHERE sku=?').get(String(sku).trim())) return bad(res, 'SKU already belongs to another product');
@@ -234,8 +244,10 @@ app.post('/api/menu-items', requireAuth, requireRole('manager', 'admin'), (req, 
       db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,?)').run(itemId, sourceStock.id, deduction);
     } else if (retail) {
       const opening = Number(opening_qty) || 0;
-      const stockId = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost) VALUES(?,?,?,?,?)')
-        .run(name.trim(), unit || 'bottle', opening, Number(min_qty) || 0, effectiveCost).lastInsertRowid;
+      const stockUnit = mode === 'weighed' ? 'kg' : (unit || 'bottle');
+      const deductionMode = mode === 'weighed' ? 'count' : 'auto';
+      const stockId = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost,deduction_mode) VALUES(?,?,?,?,?,?)')
+        .run(name.trim(), stockUnit, opening, Number(min_qty) || 0, effectiveCost, deductionMode).lastInsertRowid;
       db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,1)').run(itemId, stockId);
       if (opening) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
         .run(stockId, opening, 'Opening stock', req.user.id);
@@ -265,7 +277,7 @@ app.put('/api/menu-items/:id', requireAuth, requireRole('manager', 'admin'), (re
     const inferredContainer = currentRecipe && currentRecipe.qty ? serving / currentRecipe.qty : 0;
     const container = Number(b.source_volume_ml) || inferredContainer;
     if (!pourSource || !(serving > 0) || !(container >= serving)) return bad(res, 'Valid pour source and sizes are required');
-    pourDeduction = serving / container;
+    pourDeduction = pourSource.deduction_mode === 'count' ? serving / 1000 : serving / container;
   }
   const tx = db.transaction(() => {
     db.prepare(`UPDATE menu_items SET category_id=?,name=?,price=?,cost=?,station=?,available=?,sku=?,barcode=?,volume_ml=?,stock_mode=?,serving_ml=?,sale_unit=?,kra_item_code=?,tax_type=? WHERE id=?`)
@@ -423,8 +435,8 @@ app.post('/api/orders/:id/items', requireAuth, requireRole('seller', 'waiter', '
   const dayparts = db.prepare('SELECT * FROM dayparts WHERE active = 1').all();
   const groups = db.prepare('SELECT * FROM modifier_groups').all();
   const options = db.prepare('SELECT * FROM modifier_options').all();
-  const ins = db.prepare(`INSERT INTO order_items(order_id,menu_item_id,name,price,qty,note,station,added_by,modifiers)
-    VALUES(?,?,?,?,?,?,?,?,?)`);
+  const ins = db.prepare(`INSERT INTO order_items(order_id,menu_item_id,name,price,qty,note,station,added_by,modifiers,stock_factor)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`);
   const tx = db.transaction(() => {
     for (const l of lines) {
       const m = db.prepare('SELECT * FROM menu_items WHERE id=?').get(Number(l.menu_item_id));
@@ -433,20 +445,28 @@ app.post('/api/orders/:id/items', requireAuth, requireRole('seller', 'waiter', '
       const requestedQty = Number(l.qty) || 1;
       if (getSetting('business_type') === 'wines_spirits' && (!Number.isInteger(requestedQty) || requestedQty <= 0))
         throw new Error('Retail sale quantity must be a positive whole number');
+      const fullMl = Number(m.volume_ml) || 0;
+      const measureMl = Number(l.measure_ml) || 0;
+      if (measureMl && (!(fullMl > 0) || measureMl <= 0 || measureMl > fullMl))
+        throw new Error('Measured sale must be greater than zero and no larger than the product size');
+      const priceFactor = measureMl ? measureMl / fullMl : 1;
+      const stockFactor = measureMl ? (m.stock_mode === 'weighed' ? measureMl / 1000 : priceFactor) : 1;
       if (getSetting('business_type') === 'wines_spirits' && getSetting('prevent_negative_stock') === '1') {
         const tracked = db.prepare(`SELECT si.qty,r.qty deduction FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
           WHERE r.menu_item_id=? ORDER BY r.id LIMIT 1`).get(m.id);
-        const already = db.prepare(`SELECT COALESCE(SUM(qty),0) q FROM order_items
+        const already = db.prepare(`SELECT COALESCE(SUM(qty*stock_factor),0) q FROM order_items
           WHERE order_id=? AND menu_item_id=? AND status!='void'`).get(o.id, m.id).q;
-        if (tracked && (already + requestedQty) * tracked.deduction > tracked.qty) {
-          const servings = Math.floor(tracked.qty / tracked.deduction);
-          throw new Error(`${m.name}: only ${servings} sale unit(s) available`);
+        if (tracked && (already + requestedQty * stockFactor) * tracked.deduction > tracked.qty) {
+          const servings = Math.floor(tracked.qty / (tracked.deduction * stockFactor));
+          throw new Error(`${m.name}: only ${servings} measured sale unit(s) available`);
         }
       }
 
       /* base price, less any active daypart discount */
       const rule = domain.bestDiscountFor(m, dayparts);
       let price = rule ? domain.discountedPrice(m.price, rule.discount_pct) : m.price;
+      if (priceFactor !== 1) price = Math.round(price * priceFactor);
+      const effectiveName = measureMl ? `${m.name} — ${Number(measureMl.toFixed(2))}ml` : m.name;
       const chosen = [];
 
       /* modifiers: validate every one against the menu item's allowed groups */
@@ -476,11 +496,11 @@ app.post('/api/orders/:id/items', requireAuth, requireRole('seller', 'waiter', '
       const modifierJson = chosen.length ? JSON.stringify(chosen.sort((a, b) => a.id - b.id)) : null;
       /* Retail baskets consolidate identical products instead of creating repeated rows. */
       const existing = getSetting('business_type') === 'wines_spirits' ? db.prepare(`SELECT id FROM order_items
-        WHERE order_id=? AND menu_item_id=? AND price=? AND status='pending'
+        WHERE order_id=? AND menu_item_id=? AND name=? AND price=? AND stock_factor=? AND status='pending'
           AND COALESCE(note,'')=COALESCE(?,'') AND COALESCE(modifiers,'')=COALESCE(?,'')
-        ORDER BY id LIMIT 1`).get(o.id, m.id, price, l.note || null, modifierJson) : null;
+        ORDER BY id LIMIT 1`).get(o.id, m.id, effectiveName, price, stockFactor, l.note || null, modifierJson) : null;
       if (existing) db.prepare('UPDATE order_items SET qty=qty+? WHERE id=?').run(qty, existing.id);
-      else ins.run(o.id, m.id, m.name, price, qty, l.note || null, m.station, req.user.id, modifierJson);
+      else ins.run(o.id, m.id, effectiveName, price, qty, l.note || null, m.station, req.user.id, modifierJson, stockFactor);
     }
   });
   try { tx(); } catch (e) { return bad(res, e.message); }
@@ -501,8 +521,9 @@ app.patch('/api/orders/:id/items/:itemId/quantity', requireAuth, requireRole('se
   if (getSetting('business_type') === 'wines_spirits' && getSetting('prevent_negative_stock') === '1') {
     const tracked = db.prepare(`SELECT si.qty,r.qty deduction FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
       WHERE r.menu_item_id=? ORDER BY r.id LIMIT 1`).get(item.menu_item_id);
-    if (tracked && qty * tracked.deduction > tracked.qty)
-      return bad(res, `Only ${Math.floor(tracked.qty / tracked.deduction)} sale unit(s) available`);
+    const factor = Number(item.stock_factor) || 1;
+    if (tracked && qty * factor * tracked.deduction > tracked.qty)
+      return bad(res, `Only ${Math.floor(tracked.qty / (tracked.deduction * factor))} sale unit(s) available`);
   }
   db.prepare('UPDATE order_items SET qty=? WHERE id=?').run(qty, item.id);
   audit(req.user, 'order.quantity', `#${order.number} ${item.name} x${qty}`);
@@ -674,7 +695,8 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
 
   const openShift = db.prepare("SELECT * FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get();
   if (s.business_type === 'wines_spirits' && s.prevent_negative_stock === '1' && d.paid + amount >= d.totals.grand_total + tip) {
-    const movements = domain.stockMovementsFor(d.items, db.prepare('SELECT * FROM recipes').all());
+    const movements = domain.stockMovementsFor(d.items.map((i) => ({ ...i, qty: i.qty * (i.stock_factor || 1) })),
+      db.prepare('SELECT * FROM recipes').all());
     for (const movement of movements) {
       const stock = db.prepare('SELECT name,qty FROM stock_items WHERE id=?').get(movement.stock_item_id);
       if (stock && stock.qty < movement.qty) return bad(res, `${stock.name}: only ${stock.qty} in stock; recount before payment`);
@@ -733,7 +755,10 @@ function closeOut(orderId, d, s, user, customerId) {
   /* ---- Recipe / BOM stock depletion (Phase 2.4) ---- */
   const lines = db.prepare("SELECT * FROM order_items WHERE order_id=? AND status != 'void'").all(orderId);
   const recipes = db.prepare('SELECT * FROM recipes').all();
-  for (const mv of domain.stockMovementsFor(lines, recipes)) {
+  const stockLines = lines.map((line) => ({ ...line, qty: line.qty * (line.stock_factor || 1) }));
+  for (const mv of domain.stockMovementsFor(stockLines, recipes)) {
+    const stock = db.prepare('SELECT deduction_mode FROM stock_items WHERE id=?').get(mv.stock_item_id);
+    if (stock && stock.deduction_mode === 'count') continue; // weighed keg is adjusted only at stocktake
     db.prepare('UPDATE stock_items SET qty = qty - ? WHERE id=?').run(mv.qty, mv.stock_item_id);
     db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
       .run(mv.stock_item_id, -mv.qty, `Recipe usage — order #${orderId}`, user ? user.id : null);
@@ -1073,7 +1098,8 @@ app.get('/api/reports/summary', requireAuth, requireRole('manager', 'admin', 'ca
   const covers = g(`SELECT COALESCE(SUM(people),0) c FROM orders WHERE closed_at BETWEEN ? AND ? AND status='closed'`, [a, b]).c;
   const discounts = g(`SELECT COALESCE(SUM(discount),0) c FROM orders WHERE closed_at BETWEEN ? AND ?`, [a, b]).c;
   const tips = g(`SELECT COALESCE(SUM(tip),0) c FROM orders WHERE closed_at BETWEEN ? AND ? AND status='closed'`, [a, b]).c;
-  const cost = g(`SELECT COALESCE(SUM(oi.price*oi.qty - m.cost*oi.qty),0) gp, COALESCE(SUM(m.cost*oi.qty),0) c
+  const cost = g(`SELECT COALESCE(SUM(oi.price*oi.qty - m.cost*oi.qty*oi.stock_factor),0) gp,
+      COALESCE(SUM(m.cost*oi.qty*oi.stock_factor),0) c
     FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN menu_items m ON m.id=oi.menu_item_id
     WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed' AND oi.status != 'void'`, [a, b]);
 
@@ -1100,7 +1126,7 @@ app.get('/api/reports/items', requireAuth, requireRole('manager', 'admin', 'cash
   const to = req.query.to || from;
   res.json(db.prepare(`
     SELECT oi.name, oi.station, COUNT(*) lines, SUM(oi.qty) qty,
-           SUM(oi.price*oi.qty) revenue, SUM(m.cost*oi.qty) cogs
+           SUM(oi.price*oi.qty) revenue, SUM(m.cost*oi.qty*oi.stock_factor) cogs
     FROM order_items oi JOIN orders o ON o.id = oi.order_id
     LEFT JOIN menu_items m ON m.id = oi.menu_item_id
     WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed' AND oi.status != 'void'
@@ -1254,7 +1280,7 @@ app.get('/api/reports/stock-usage', requireAuth, requireRole('manager', 'admin')
   const to = req.query.to || from;
   const rows = db.prepare(`
     SELECT s.id, s.name, s.unit, s.qty AS on_hand,
-           COALESCE(SUM(r.qty * oi.qty), 0) AS theoretical
+           COALESCE(SUM(r.qty * oi.qty * oi.stock_factor), 0) AS theoretical
     FROM stock_items s
     LEFT JOIN recipes r ON r.stock_item_id = s.id
     LEFT JOIN order_items oi ON oi.menu_item_id = r.menu_item_id

@@ -39,8 +39,9 @@ The workspace now has a focused bottle-shop workflow: barcode/SKU products, live
 - Duplicate M-Pesa confirmation references are rejected.
 - VAT-inclusive KES defaults and no restaurant service charge: an entered KSh 200 price remains KSh 200 while VAT is extracted for reporting.
 - Product selling price, unit cost and gross-margin visibility for management.
-- Guided product creation puts standard shot/bottle/keg size, retail category and selling unit directly after the product name, followed by barcode/SKU, VAT-inclusive price, cost and stock controls.
-- Whole units deduct one stock unit. Pour/shot products link to a tracked bottle or keg and deduct `serving ml ÷ source container ml`, preventing a 50ml shot from removing a whole keg.
+- Guided product creation puts standard shot/bottle/keg size, retail category and selling unit directly after the product name. Owner-only transactional CSV import supports onboarding or later imports of up to 2,000 products, including quoted values, categories, opening stock, weighed kegs and source-linked pours.
+- Whole units deduct one stock unit. A sales-screen measure toggle supports Full, Half, Quarter, ⅛ shot and custom ml; price, VAT, cost, availability checks, reporting and stock all use the same stored fraction.
+- Named pour/shot products link to a tracked bottle or keg. Weighed-keg sources retain theoretical kg usage while actual stock is posted only from the end-of-shift physical weight, avoiding false precision during service.
 - Retail categories and products use a neutral internal `retail` route; kitchen/bar preparation fields, docket actions and station columns are suppressed throughout retail screens and reports.
 
 ### Alcohol controls

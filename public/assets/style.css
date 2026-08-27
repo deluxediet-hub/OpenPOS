@@ -168,6 +168,7 @@ table.tbl tr:last-child td{border-bottom:0}
 .cat:hover{color:var(--txt)}
 .cat.active{background:var(--amber);border-color:var(--amber2);color:#20160a}
 .search{padding:10px 12px;border-bottom:1px solid var(--line);flex-shrink:0}
+.search .row{flex-wrap:wrap}.search .row>.inp{flex:1 1 220px}.search .row>label.btn{flex:0 0 auto}
 .items{flex:1;overflow:auto;padding:12px;display:grid;
   grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px;align-content:start}
 .item{background:#1a232d;border:1px solid #2c3947;border-radius:11px;padding:11px;text-align:left;

@@ -50,7 +50,9 @@ If the starter catalogue is loaded, immediately change the sample seller PINs (`
 
 Under **Management**:
 
-- **Products & Pricing:** enter each real product's name, SKU, barcode, size, selling unit, cost, selling price, category and KRA classification code. For shots/glasses, choose Pour mode and link the serving size to its source bottle or keg size.
+- **Products & Pricing:** enter products individually or download/import the CSV template (also available during first-run onboarding). Required CSV fields are `name,category,size_ml,price`; optional fields cover barcode, opening stock, weighed kegs and pour products linked by `source_sku`.
+- For ad-hoc half/quarter/shot sales from a bottle, enable **Sell measured amount** on the sales screen and choose the ml amount. For regular named shots/glasses, use Pour mode and link the serving to its source bottle or keg.
+- For kegs measured by weight, create the source in **Weighed keg** mode, enter cost per kg, receive/count it in kg, and let stocktake post the actual end-of-shift reduction.
 - **Stock:** enter reorder levels and conduct an opening full stocktake.
 - **Suppliers:** add distributors and KRA/contact details.
 - **Settings:** enter the alcohol licence number/expiry, KRA details, minimum age control and receipt printer.

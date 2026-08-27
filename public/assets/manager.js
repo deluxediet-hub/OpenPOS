@@ -294,7 +294,8 @@ const Manager = (() => {
       <div class="row" style="margin-bottom:14px">
         <input class="inp" id="ms" placeholder="Search products…" value="${esc(menuSearch)}" style="max-width:240px">
         <span class="grow"></span>
-        ${canEdit() ? `<button class="btn ghost" id="addCat">+ Category</button>
+        ${canEdit() ? `${State.user.role === 'admin' && retail ? '<button class="btn ghost" id="csvTemplate">CSV template</button><button class="btn ghost" id="csvImport">Import CSV</button>' : ''}
+          <button class="btn ghost" id="addCat">+ Category</button>
           <button class="btn primary" id="add">+ New product</button>` : '<span class="tag info">Read only</span>'}
       </div>
       <div class="pos" style="grid-template-columns:230px 1fr;height:auto">
@@ -340,6 +341,23 @@ const Manager = (() => {
       menuCat = b.dataset.c === 'null' ? null : Number(b.dataset.c); menu(body);
     });
     if (canEdit()) {
+      body.querySelector('#csvTemplate')?.addEventListener('click', downloadProductCsvTemplate);
+      body.querySelector('#csvImport')?.addEventListener('click', () => {
+        modal({ title: 'Bulk import products', body: `<p class="muted" style="margin-top:0">Upload the OpenPOS CSV template. The entire file is validated and imported as one transaction—an invalid row imports nothing.</p>
+          <label class="fld">Product CSV</label><input class="inp" type="file" id="productCsvFile" accept=".csv,text/csv">
+          <div class="tiny muted" style="margin-top:10px">Required: name, category, size_ml and price. Optional columns support stock, barcode, weighed kegs and pours linked by source_sku.</div>`,
+          footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Import products</button>' });
+        const ov = document.querySelector('#modalRoot .ov');
+        ov.querySelector('[data-no]').onclick = closeModal;
+        ov.querySelector('[data-yes]').onclick = async () => {
+          const file = ov.querySelector('#productCsvFile').files[0];
+          if (!file) return toast('Choose a CSV file', 'err');
+          try {
+            const result = await api('/api/products/import', { body: { csv: await file.text() } });
+            closeModal(); await reload(); menu(body); toast(`${result.imported} products imported`, 'ok');
+          } catch (e) { toast(e.message, 'err'); }
+        };
+      });
       body.querySelector('#add').onclick = () => itemForm(null, body);
       body.querySelector('#addCat').onclick = () => catForm(body);
       body.querySelectorAll('[data-avail]').forEach((b) => b.onclick = async () => {
@@ -400,7 +418,7 @@ const Manager = (() => {
       <div><label class="fld">Size</label><select class="inp" id="ivol">${sizeOptions}</select></div>
       <div><label class="fld">Category</label><select class="inp" id="icat">${State.categories.map((c) =>
         `<option value="${c.id}" ${c.id === m.category_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
-      <div><label class="fld">Selling unit</label><select class="inp" id="iunit">${['bottle','can','pack','crate','carton','piece','keg','shot','glass'].map((u) =>
+      <div><label class="fld">Selling unit</label><select class="inp" id="iunit">${['bottle','can','pack','crate','carton','piece','keg','kg','shot','glass'].map((u) =>
         `<option value="${u}" ${u === unit ? 'selected' : ''}>${u[0].toUpperCase() + u.slice(1)}</option>`).join('')}</select></div>
     </div>`;
     const legacyIdentity = `<div class="grid3" style="margin-top:12px">
@@ -416,6 +434,7 @@ const Manager = (() => {
         ${retail ? `<div class="card" style="margin-top:12px;background:#101820"><div class="card-b">
           <div class="grid2"><div><label class="fld">Stock deduction</label><select class="inp" id="imode" ${isNew ? '' : 'disabled'}>
             <option value="unit" ${stockMode === 'unit' ? 'selected' : ''}>Whole unit — bottle, can, pack or keg</option>
+            <option value="weighed" ${stockMode === 'weighed' ? 'selected' : ''}>Weighed keg source — adjust actual kg at stocktake</option>
             <option value="pour" ${stockMode === 'pour' ? 'selected' : ''}>Pour / shot from a tracked bottle or keg</option></select></div>
             <div class="tiny muted" style="align-self:end;padding-bottom:10px">Pour mode deducts only the serving fraction from its source stock.</div></div>
           <div class="grid2 ${stockMode === 'pour' ? '' : 'hidden'}" id="pourFields" style="margin-top:12px">
@@ -430,7 +449,7 @@ const Manager = (() => {
         </div>
         <div class="grid3" style="margin-top:12px">
           <div><label class="fld">Selling price (${sym()}, VAT incl.)</label><input class="inp" id="ip" type="number" min="0" step="0.01" value="${(m.price/100).toFixed(2)}"></div>
-          <div><label class="fld">Unit cost (${sym()})</label><input class="inp" id="ic" type="number" min="0" step="0.01" value="${(m.cost/100).toFixed(2)}"></div>
+          <div><label class="fld" id="costLabel">${stockMode === 'weighed' ? 'Cost per kg' : 'Unit cost'} (${sym()})</label><input class="inp" id="ic" type="number" min="0" step="0.01" value="${(m.cost/100).toFixed(2)}"></div>
           <div><label class="fld">Gross margin</label><input class="inp" id="im" disabled></div>
         </div>
         ${retail ? `<div class="grid2 ${stockMode === 'pour' ? 'hidden' : ''}" id="ownStockFields" style="margin-top:12px">
@@ -445,9 +464,13 @@ const Manager = (() => {
     const modeSelect = ov.querySelector('#imode');
     const toggleStockMode = () => {
       const pour = modeSelect && modeSelect.value === 'pour';
+      const weighed = modeSelect && modeSelect.value === 'weighed';
       ov.querySelector('#pourFields')?.classList.toggle('hidden', !pour);
       ov.querySelector('#ownStockFields')?.classList.toggle('hidden', pour);
       if (pour && ov.querySelector('#iunit') && !['shot', 'glass'].includes(ov.querySelector('#iunit').value)) ov.querySelector('#iunit').value = 'shot';
+      if (weighed && ov.querySelector('#iunit')) ov.querySelector('#iunit').value = 'kg';
+      if (ov.querySelector('#costLabel')) ov.querySelector('#costLabel').textContent = (weighed ? 'Cost per kg' : 'Unit cost') + ` (${sym()})`;
+      if (weighed && isNew && ov.querySelector('#ia')) ov.querySelector('#ia').checked = false;
       if (pour && isNew && Number(ov.querySelector('#ivol')?.value) > 250) ov.querySelector('#ivol').value = '50';
     };
     if (modeSelect) modeSelect.onchange = toggleStockMode;

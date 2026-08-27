@@ -48,7 +48,11 @@
       <label class="row" style="gap:8px;cursor:pointer;margin-top:16px">
         <input type="checkbox" id="suSample"> Load a starter Kenyan wines &amp; spirits catalogue and two seller accounts
       </label>
-      <p class="tiny muted" style="margin-top:6px">Includes common whisky, vodka, gin, wine, beer, cider and mixers. Stock starts at 12 units per product; edit all quantities and prices before trading. Seller PINs are shown in the setup guide.</p>
+      <p class="tiny muted" style="margin-top:6px">Includes common whisky, vodka, gin, wine, beer, cider and mixers. Stock starts at 12 units per product; edit all quantities and prices before trading.</p>
+      <div class="card" style="margin-top:14px"><div class="card-b">
+        <label class="fld">Or import your product CSV</label><input class="inp" type="file" id="suCsv" accept=".csv,text/csv">
+        <div class="row" style="margin-top:8px"><span class="tiny muted">Ideal for 10–2,000 products. Choose starter products or CSV, not both.</span><span class="grow"></span><button class="btn xs ghost" type="button" id="suCsvTemplate">Download CSV template</button></div>
+      </div></div>
 
       <div class="login-err" id="setupErr"></div>
       <button class="btn primary" id="suGo" style="width:100%;justify-content:center;margin-top:12px">Finish setup</button>

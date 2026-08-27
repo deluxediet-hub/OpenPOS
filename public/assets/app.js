@@ -208,6 +208,10 @@ function onLiveUpdate(e) {
 function initSetup() {
   const f = document.getElementById('setupForm');
   if (!f) return;
+  document.getElementById('suCsvTemplate').onclick = downloadProductCsvTemplate;
+  const sample = document.getElementById('suSample'), csvInput = document.getElementById('suCsv');
+  sample.onchange = () => { if (sample.checked) csvInput.value = ''; };
+  csvInput.onchange = () => { if (csvInput.files.length) sample.checked = false; };
   f.addEventListener('submit', async (e) => {
     e.preventDefault();
     const err = document.getElementById('setupErr');
@@ -215,6 +219,8 @@ function initSetup() {
     const pin = document.getElementById('suPin').value.trim();
     if (pin !== document.getElementById('suPin2').value.trim()) { err.textContent = 'The two PINs do not match.'; return; }
     try {
+      const csvFile = document.getElementById('suCsv').files[0];
+      const productCsv = csvFile ? await csvFile.text() : '';
       const r = await fetch('/api/setup', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -233,7 +239,8 @@ function initSetup() {
           },
           owner_name: document.getElementById('suOwner').value,
           owner_pin: pin,
-          sample: document.getElementById('suSample').checked
+          sample: document.getElementById('suSample').checked,
+          product_csv: productCsv
         })
       });
       const d = await r.json();

@@ -34,8 +34,14 @@ const mk = () => {
   ck('seller opens morning till with cash and M-Pesa balances', r.status === 200 && r.data.status === 'open', JSON.stringify(r.data));
 
   const cat = boot.categories[0];
+  let stock;
   r = await admin.post('/api/categories', { name: 'Champagne', station: 'kitchen' });
   ck('new retail category has no kitchen/bar station semantics', r.status === 200 && r.data.station === 'retail', JSON.stringify(r.data));
+  const csv = 'name,category,size_ml,selling_unit,price,cost,opening_stock,reorder_level,sku,barcode,stock_mode,source_sku,source_size_ml,kra_item_code,tax_type\nBulk Test Vodka,Vodka,350,bottle,600,400,2,1,BULK-350,,unit,,,,B';
+  r = await admin.post('/api/products/import', { csv });
+  ck('owner bulk-imports products from CSV', r.status === 200 && r.data.imported === 1, JSON.stringify(r.data));
+  r = await seller.post('/api/products/import', { csv });
+  ck('seller cannot bulk-import products', r.status === 403);
   r = await admin.post('/api/menu-items', { name: 'Audit Test Gin 750ml', category_id: cat.id, price: 1000, cost: 700,
     sku: 'TEST-GIN-750', barcode: '616000000001', volume_ml: 750, opening_qty: 5, min_qty: 1, unit: 'bottle' });
   ck('owner creates sized retail product and matching stock', r.status === 200 && r.data.barcode === '616000000001' &&
@@ -47,6 +53,20 @@ const mk = () => {
   ck('shot product draws a fractional quantity from its source bottle', r.status === 200 && r.data.stock_mode === 'pour' &&
     r.data.sale_unit === 'shot' && r.data.stock_item_id === product.stock_item_id && Math.abs(r.data.stock_deduction - 50/750) < 0.000001,
     JSON.stringify(r.data));
+  r = await admin.post('/api/menu-items', { name: 'House Wine Keg', category_id: cat.id, price: 0, cost: 900,
+    volume_ml: 20000, stock_mode: 'weighed', opening_qty: 20, min_qty: 5, unit: 'kg', available: 0 });
+  const keg = r.data;
+  ck('weighed keg is tracked in kg for stocktake', r.status === 200 && keg.stock_mode === 'weighed' && keg.stock_unit === 'kg');
+  r = await admin.post('/api/menu-items', { name: 'House Wine Glass', category_id: cat.id, price: 350, cost: 0,
+    volume_ml: 150, stock_mode: 'pour', serving_ml: 150, source_volume_ml: 20000,
+    source_stock_item_id: keg.stock_item_id, unit: 'glass' });
+  ck('keg glass records theoretical kg usage', r.status === 200 && Math.abs(r.data.stock_deduction - 0.15) < 0.000001, JSON.stringify(r.data));
+  const kegGlass = r.data;
+  const kegSale = (await seller.post('/api/orders', {})).data;
+  r = await seller.post(`/api/orders/${kegSale.id}/items`, { items: [{ menu_item_id: kegGlass.id, qty: 2 }] });
+  r = await seller.post(`/api/orders/${kegSale.id}/pay`, { method: 'card', amount: r.data.totals.grand_total / 100 });
+  stock = await seller.get('/api/stock');
+  ck('keg pours do not reduce actual kg before end-shift weighing', stock.data.find((x) => x.id === keg.stock_item_id).qty === 20);
   r = await seller.post('/api/menu-items', { name: 'Forbidden', category_id: cat.id, price: 1 });
   ck('seller cannot change product catalogue', r.status === 403);
   r = await seller.put('/api/settings', { barcode_scanner_enabled: '0' });
@@ -66,8 +86,16 @@ const mk = () => {
   const due = r.data.totals.grand_total / 100;
   r = await seller.post(`/api/orders/${sale.id}/pay`, { method: 'cash', amount: due, tendered: due });
   ck('retail payment closes without an age prompt', r.status === 200 && r.data.order.status === 'closed', JSON.stringify(r.data));
-  let stock = await seller.get('/api/stock');
+  stock = await seller.get('/api/stock');
   ck('sale deducts three bottles from one consolidated line', stock.data.find((x) => x.id === product.stock_item_id).qty === 2);
+  const measuredSale = (await seller.post('/api/orders', {})).data;
+  r = await seller.post(`/api/orders/${measuredSale.id}/items`, { items: [{ menu_item_id: product.id, qty: 1, measure_ml: 375 }] });
+  ck('half-bottle sale has proportional name, price and stock factor', r.status === 200 && r.data.items[0].stock_factor === 0.5 &&
+    r.data.items[0].price === 50000 && /375ml/.test(r.data.items[0].name), JSON.stringify(r.data.items));
+  r = await seller.post(`/api/orders/${measuredSale.id}/pay`, { method: 'card', amount: 500 });
+  ck('half-bottle payment closes normally', r.status === 200 && r.data.order.status === 'closed');
+  stock = await seller.get('/api/stock');
+  ck('half-bottle sale deducts only 0.5 bottle', stock.data.find((x) => x.id === product.stock_item_id).qty === 1.5);
 
   const supplier = (await admin.post('/api/suppliers', { name: 'Audit Distributor', kra_pin: 'P000000000A', phone: '0700000000' })).data;
   r = await seller.post('/api/goods-receipts', { supplier_id: supplier.id, payment_method: 'other',
@@ -75,7 +103,7 @@ const mk = () => {
   ck('delivery reference is optional and configured product cost is preserved',
     r.status === 200 && /^DEL-/.test(r.data.invoice_no) && r.data.total_cost === 420000 && r.data.payment_status === 'paid', JSON.stringify(r.data));
   stock = await seller.get('/api/stock');
-  ck('delivery increases stock to eight', stock.data.find((x) => x.id === product.stock_item_id).qty === 8);
+  ck('delivery increases stock to 7.5 bottle equivalents', stock.data.find((x) => x.id === product.stock_item_id).qty === 7.5);
   r = await seller.post('/api/goods-receipts', { payment_method: 'pay_later',
     items: [{ stock_item_id: boot.menu[0].stock_item_id, qty: 1 }] });
   ck('pay-later delivery is recorded unpaid with an automatic reference', r.status === 200 && r.data.payment_status === 'unpaid' && /^DEL-/.test(r.data.invoice_no));
@@ -86,8 +114,8 @@ const mk = () => {
   ck('delivery cannot be paid twice', r.status === 400 && /already marked paid/i.test(r.data.error));
 
   const sale2 = (await seller.post('/api/orders', {})).data;
-  r = await seller.post(`/api/orders/${sale2.id}/items`, { items: [{ menu_item_id: product.id, qty: 9 }] });
-  ck('negative stock is blocked', r.status === 400 && /only 8 sale unit/i.test(r.data.error), JSON.stringify(r.data));
+  r = await seller.post(`/api/orders/${sale2.id}/items`, { items: [{ menu_item_id: product.id, qty: 8 }] });
+  ck('negative stock is blocked', r.status === 400 && /only 7 measured sale unit/i.test(r.data.error), JSON.stringify(r.data));
 
   const sale3 = (await seller.post('/api/orders', {})).data;
   r = await seller.post(`/api/orders/${sale3.id}/items`, { items: [{ menu_item_id: product.id, qty: 1 }] });
@@ -108,11 +136,11 @@ const mk = () => {
   ck('seller starts end-of-day stocktake', r.status === 200, JSON.stringify(r.data));
   const count = (await seller.get('/api/stock-counts/' + r.data.id)).data;
   const counted = count.items.map((x) => ({ stock_item_id: x.stock_item_id,
-    counted: x.stock_item_id === product.stock_item_id ? 6 : x.expected, added_qty: 0 }));
+    counted: x.stock_item_id === product.stock_item_id ? 5.5 : x.expected, added_qty: 0 }));
   r = await seller.post(`/api/stock-counts/${count.id}/complete`, { items: counted });
   ck('stocktake posts one variance', r.status === 200 && r.data.variances === 1, JSON.stringify(r.data));
   stock = await seller.get('/api/stock');
-  ck('stocktake sets physical quantity', stock.data.find((x) => x.id === product.stock_item_id).qty === 6);
+  ck('stocktake sets physical quantity', stock.data.find((x) => x.id === product.stock_item_id).qty === 5.5);
 
   const current = (await seller.get('/api/shifts/current')).data;
   r = await seller.post(`/api/shifts/${current.shift.id}/payout`, { amount: 100, method: 'cash', reason: 'Transport receipt' });

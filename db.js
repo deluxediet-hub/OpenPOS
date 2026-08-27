@@ -107,7 +107,8 @@ CREATE TABLE IF NOT EXISTS order_items (
   added_by    INTEGER REFERENCES users(id),
   added_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   sent_at     TEXT,
-  void_reason TEXT
+  void_reason TEXT,
+  stock_factor REAL NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS ix_oi_order ON order_items(order_id);
 
@@ -129,7 +130,8 @@ CREATE TABLE IF NOT EXISTS stock_items (
   unit     TEXT NOT NULL DEFAULT 'pcs',
   qty      REAL NOT NULL DEFAULT 0,
   min_qty  REAL NOT NULL DEFAULT 0,
-  cost     INTEGER NOT NULL DEFAULT 0           -- cents per unit
+  cost     INTEGER NOT NULL DEFAULT 0,          -- cents per unit
+  deduction_mode TEXT NOT NULL DEFAULT 'auto'   -- auto|count (weighed at stocktake)
 );
 
 CREATE TABLE IF NOT EXISTS stock_moves (
@@ -356,6 +358,7 @@ function migrate() {
   };
 
   add('order_items', 'modifiers', 'modifiers TEXT');
+  add('order_items', 'stock_factor', 'stock_factor REAL NOT NULL DEFAULT 1');
   add('orders', 'channel', "channel TEXT NOT NULL DEFAULT 'dine_in'");
   add('orders', 'commission', 'commission INTEGER NOT NULL DEFAULT 0');
   add('orders', 'location_id', 'location_id INTEGER REFERENCES locations(id)');
@@ -366,6 +369,7 @@ function migrate() {
   add('tables', 'qr_token', 'qr_token TEXT');
   add('users', 'hourly_rate', 'hourly_rate INTEGER NOT NULL DEFAULT 0');
   add('stock_items', 'location_id', 'location_id INTEGER REFERENCES locations(id)');
+  add('stock_items', 'deduction_mode', "deduction_mode TEXT NOT NULL DEFAULT 'auto'");
   add('payments', 'shift_id', 'shift_id INTEGER REFERENCES shifts(id)');
   add('menu_items', 'sku', 'sku TEXT');
   add('menu_items', 'barcode', 'barcode TEXT');
@@ -428,15 +432,15 @@ function migrate() {
   }
 
   /* Consolidate duplicate pending retail lines created by earlier builds. */
-  const duplicateLines = isRetailDatabase ? db.prepare(`SELECT MIN(id) keep_id,order_id,menu_item_id,price,
+  const duplicateLines = isRetailDatabase ? db.prepare(`SELECT MIN(id) keep_id,order_id,menu_item_id,name,price,stock_factor,
       COALESCE(note,'') note_key,COALESCE(modifiers,'') modifiers_key,SUM(qty) total_qty,COUNT(*) n
-    FROM order_items WHERE status='pending' GROUP BY order_id,menu_item_id,price,COALESCE(note,''),COALESCE(modifiers,'') HAVING COUNT(*)>1`).all() : [];
+    FROM order_items WHERE status='pending' GROUP BY order_id,menu_item_id,name,price,stock_factor,COALESCE(note,''),COALESCE(modifiers,'') HAVING COUNT(*)>1`).all() : [];
   const mergeLines = db.transaction(() => {
     for (const row of duplicateLines) {
       db.prepare('UPDATE order_items SET qty=? WHERE id=?').run(row.total_qty, row.keep_id);
-      db.prepare(`DELETE FROM order_items WHERE order_id=? AND menu_item_id=? AND price=? AND id!=?
+      db.prepare(`DELETE FROM order_items WHERE order_id=? AND menu_item_id=? AND name=? AND price=? AND stock_factor=? AND id!=?
         AND COALESCE(note,'')=? AND COALESCE(modifiers,'')=? AND status='pending'`)
-        .run(row.order_id, row.menu_item_id, row.price, row.keep_id, row.note_key, row.modifiers_key);
+        .run(row.order_id, row.menu_item_id, row.name, row.price, row.stock_factor, row.keep_id, row.note_key, row.modifiers_key);
     }
   });
   mergeLines();
@@ -593,6 +597,95 @@ const setupStatus = () => ({
   business_name: getSetting('business_name')
 });
 
+
+/** RFC-4180-style CSV parser used by onboarding and owner bulk import. */
+function parseCsv(text) {
+  const rows = []; let row = [], cell = '', quoted = false;
+  const src = String(text || '').replace(/^\uFEFF/, '');
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"' && src[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') { row.push(cell.trim()); cell = ''; }
+    else if (ch === '\n') { row.push(cell.trim()); if (row.some(Boolean)) rows.push(row); row = []; cell = ''; }
+    else if (ch !== '\r') cell += ch;
+  }
+  row.push(cell.trim()); if (row.some(Boolean)) rows.push(row);
+  if (quoted) throw new Error('CSV has an unclosed quoted field');
+  return rows;
+}
+
+function importRetailCsv(text, userId = null) {
+  if (!String(text || '').trim()) throw new Error('CSV file is empty');
+  if (String(text).length > 2_000_000) throw new Error('CSV is too large (maximum 2 MB)');
+  const matrix = parseCsv(text);
+  if (matrix.length < 2) throw new Error('CSV needs a header and at least one product');
+  const headers = matrix[0].map((h) => h.toLowerCase().trim().replace(/[\s-]+/g, '_'));
+  const required = ['name', 'category', 'size_ml', 'price'];
+  for (const key of required) if (!headers.includes(key)) throw new Error(`CSV is missing required column: ${key}`);
+  const rows = matrix.slice(1).map((values, i) => ({ line: i + 2,
+    ...Object.fromEntries(headers.map((h, n) => [h, values[n] == null ? '' : values[n]])) }));
+  if (rows.length > 2000) throw new Error('CSV supports up to 2,000 products per import');
+  const skuSeen = new Set(), barcodeSeen = new Set();
+  for (const r of rows) {
+    if (!r.name || !r.category) throw new Error(`Line ${r.line}: name and category are required`);
+    if (!(Number(r.size_ml) > 0) || !(Number(r.price) >= 0)) throw new Error(`Line ${r.line}: size_ml and price must be valid numbers`);
+    if (r.sku && (skuSeen.has(r.sku.toLowerCase()) || db.prepare('SELECT id FROM menu_items WHERE lower(sku)=lower(?)').get(r.sku)))
+      throw new Error(`Line ${r.line}: duplicate SKU ${r.sku}`);
+    if (r.barcode && (barcodeSeen.has(r.barcode) || db.prepare('SELECT id FROM menu_items WHERE barcode=?').get(r.barcode)))
+      throw new Error(`Line ${r.line}: duplicate barcode ${r.barcode}`);
+    if (r.sku) skuSeen.add(r.sku.toLowerCase()); if (r.barcode) barcodeSeen.add(r.barcode);
+  }
+  const tx = db.transaction(() => {
+    const categories = new Map(db.prepare('SELECT id,name FROM categories').all().map((c) => [c.name.toLowerCase(), c.id]));
+    const categoryId = (name) => {
+      const key = name.toLowerCase(); if (categories.has(key)) return categories.get(key);
+      const id = db.prepare("INSERT INTO categories(name,station,sort_order) VALUES(?,'retail',(SELECT COALESCE(MAX(sort_order),0)+1 FROM categories))").run(name).lastInsertRowid;
+      categories.set(key, id); return id;
+    };
+    const created = new Map(); let imported = 0;
+    const ordered = [...rows.filter((r) => (r.stock_mode || 'unit').toLowerCase() !== 'pour'),
+      ...rows.filter((r) => (r.stock_mode || '').toLowerCase() === 'pour')];
+    for (const r of ordered) {
+      const mode = ['pour', 'weighed'].includes(String(r.stock_mode).toLowerCase()) ? String(r.stock_mode).toLowerCase() : 'unit';
+      const size = Number(r.size_ml), saleUnit = r.selling_unit || (mode === 'pour' ? 'shot' : mode === 'weighed' ? 'kg' : 'bottle');
+      const name = /\d+(?:\.\d+)?\s*(?:ml|l)$/i.test(r.name) ? r.name : `${r.name} ${size >= 1000 ? size / 1000 + 'L' : size + 'ml'}`;
+      let source = null, recipeQty = 1, cost = Math.round(Number(r.cost || 0) * 100);
+      if (mode === 'pour') {
+        if (!r.source_sku) throw new Error(`Line ${r.line}: pour product needs source_sku`);
+        source = created.get(r.source_sku.toLowerCase()) || db.prepare(`SELECT m.id menu_id,si.* FROM menu_items m JOIN recipes x ON x.menu_item_id=m.id JOIN stock_items si ON si.id=x.stock_item_id WHERE lower(m.sku)=lower(?) LIMIT 1`).get(r.source_sku);
+        if (!source) throw new Error(`Line ${r.line}: source_sku ${r.source_sku} was not found`);
+        const sourceSize = Number(r.source_size_ml);
+        if (!(sourceSize >= size)) throw new Error(`Line ${r.line}: source_size_ml must be at least the serving size`);
+        recipeQty = source.deduction_mode === 'count' ? size / 1000 : size / sourceSize;
+        if (!cost) cost = Math.round(source.cost * recipeQty);
+      }
+      const available = r.available === '' || r.available == null ? (mode === 'weighed' ? 0 : 1)
+        : (!['0', 'false', 'no'].includes(String(r.available).toLowerCase()) ? 1 : 0);
+      const itemId = db.prepare(`INSERT INTO menu_items(category_id,name,price,cost,station,available,sort_order,sku,barcode,volume_ml,stock_mode,serving_ml,sale_unit,kra_item_code,tax_type)
+        VALUES(?,?,?,?, 'retail',?,999,?,?,?,?,?,?,?,?)`).run(categoryId(r.category), name,
+        Math.round(Number(r.price) * 100), cost, available, r.sku || null, r.barcode || null, size, mode,
+        mode === 'pour' ? size : null, saleUnit, r.kra_item_code || null, r.tax_type || 'B').lastInsertRowid;
+      let stockId;
+      if (mode === 'pour') stockId = source.id;
+      else {
+        stockId = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost,deduction_mode) VALUES(?,?,?,?,?,?)')
+          .run(name, mode === 'weighed' ? 'kg' : saleUnit, Number(r.opening_stock || 0), Number(r.reorder_level || 0), cost, mode === 'weighed' ? 'count' : 'auto').lastInsertRowid;
+        if (Number(r.opening_stock || 0)) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
+          .run(stockId, Number(r.opening_stock), 'CSV opening stock', userId);
+      }
+      db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,?)').run(itemId, stockId, recipeQty);
+      if (r.sku) created.set(r.sku.toLowerCase(), db.prepare('SELECT * FROM stock_items WHERE id=?').get(stockId));
+      imported++;
+    }
+    return imported;
+  });
+  try { return { imported: tx() }; } catch (e) { throw new Error(`CSV import failed: ${e.message}`); }
+}
+
 /**
  * First-run onboarding. Only allowed while no users exist, so an installed
  * system can never be silently re-onboarded.
@@ -621,8 +714,10 @@ function runSetup(p = {}) {
     if (b.service_charge_enabled !== undefined) setSetting('service_charge_enabled', b.service_charge_enabled ? '1' : '0');
 
     /* the owner / admin account */
-    db.prepare('INSERT INTO users(name,pin,role) VALUES(?,?,?)').run(ownerName, hashPin(ownerPin), 'admin');
+    const ownerId = db.prepare('INSERT INTO users(name,pin,role) VALUES(?,?,?)').run(ownerName, hashPin(ownerPin), 'admin').lastInsertRowid;
 
+    if (p.sample && String(p.product_csv || '').trim()) throw new Error('Choose either starter products or CSV import, not both');
+    if (String(p.product_csv || '').trim()) importRetailCsv(p.product_csv, ownerId);
     if (p.sample) {
       if (b.business_type === 'wines_spirits') loadSampleData();
       else {
@@ -634,8 +729,8 @@ function runSetup(p = {}) {
       }
     }
   });
-  tx();
-  audit(null, 'setup.complete', `business="${getSetting('business_name')}" sample=${p.sample ? 'yes' : 'no'}`);
+  try { tx(); } catch (e) { return { ok: false, error: e.message }; }
+  audit(null, 'setup.complete', `business="${getSetting('business_name')}" sample=${p.sample ? 'yes' : 'no'} csv=${String(p.product_csv || '').trim() ? 'yes' : 'no'}`);
   return { ok: true, needs_setup: false };
 }
 
@@ -909,4 +1004,4 @@ const audit = (user, action, detail) =>
   db.prepare('INSERT INTO audit_log(user_id,user_name,action,detail) VALUES(?,?,?,?)')
     .run(user ? user.id : null, user ? user.name : 'system', action, detail || null);
 
-module.exports = { db, seed, loadSampleData, setupStatus, runSetup, hashPin, verifyPin, findUserByPin, pinTaken, getSettings, setSetting, getSetting, computeTotals, nextOrderNumber, audit, money, toCents, round, nowLocal, todayLocal, DB_PATH, DATA_DIR };
+module.exports = { db, seed, loadSampleData, importRetailCsv, parseCsv, setupStatus, runSetup, hashPin, verifyPin, findUserByPin, pinTaken, getSettings, setSetting, getSetting, computeTotals, nextOrderNumber, audit, money, toCents, round, nowLocal, todayLocal, DB_PATH, DATA_DIR };

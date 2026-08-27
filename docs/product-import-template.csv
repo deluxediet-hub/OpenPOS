@@ -1,0 +1,5 @@
+name,category,size_ml,selling_unit,price,cost,opening_stock,reorder_level,sku,barcode,stock_mode,source_sku,source_size_ml,kra_item_code,tax_type,available
+Chrome Vodka,Spirits,250,bottle,450,320,24,6,CHR-250,616000000001,unit,,,,B,1
+Chrome Vodka,Spirits,750,bottle,1200,900,12,4,CHR-750,616000000002,unit,,,,B,1
+House Wine Keg,Wine,20000,kg,0,900,20,5,KEG-WINE-20L,,weighed,,,,B,0
+House Wine Glass,Wine,150,glass,350,0,0,0,WINE-GLASS-150,,pour,KEG-WINE-20L,20000,,B,1

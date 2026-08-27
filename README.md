@@ -44,7 +44,9 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 ## Retail controls included
 
 - Owner-controlled USB/Bluetooth barcode scanner mode; when enabled, scanning from any normal page opens the current sale and adds the matching barcode/SKU
-- Guided product setup with size, category and selling-unit dropdowns; restaurant preparation fields never appear in retail mode
+- Guided product setup with size, category and selling-unit dropdowns, plus owner-only CSV import during onboarding or later for up to 2,000 products ([template](docs/product-import-template.csv) · [format guide](docs/PRODUCT_IMPORT.md))
+- One-tap **Sell measured amount** mode: Full, Half, Quarter, ⅛ shot or custom ml, with proportional price and stock deduction
+- Weighed-keg stock mode records theoretical pour usage but adjusts actual kg only during end-of-shift stocktake
 - Stocktake product jumper with automatic save, previous/next navigation and input auto-selection
 - Live stock shown at the till with optional negative-stock prevention
 - Supplier directory and fast receiving: staff select product and quantity, invoice/reference is optional, configured costs remain owner-controlled, and Cash/M-Pesa/other/pay-later status is tracked

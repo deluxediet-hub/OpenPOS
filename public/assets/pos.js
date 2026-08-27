@@ -114,7 +114,7 @@ const Pos = (() => {
   }
 
   /* -------------------------- ORDER EDITOR --------------------------- */
-  let search = '', searchTimer = null;
+  let search = '', searchTimer = null, measureMode = false;
   async function openEditor(host, orderId) {
     State.openOrderId = orderId;
     /* A freshly created order is not in State.orders yet — pull it before rendering,
@@ -162,7 +162,9 @@ const Pos = (() => {
       </div>
       <div class="pos">
         <div class="menu-panel">
-          <div class="search"><input class="inp" id="search" placeholder="Search products…  ( / )" value="${esc(search)}"></div>
+          <div class="search"><div class="row"><input class="inp" id="search" placeholder="Search products…  ( / )" value="${esc(search)}">
+            ${retail ? `<label class="btn ${measureMode ? 'primary' : 'ghost'}" style="cursor:pointer"><input type="checkbox" id="measureMode" ${measureMode ? 'checked' : ''}> Sell measured amount</label>` : ''}
+          </div>${retail && measureMode ? '<div class="tiny" style="color:var(--amber);margin-top:6px">Tap a bottle to choose Full, Half, Quarter, Shot or custom ml.</div>' : ''}</div>
           <div class="cats">
             ${State.categories.map((c) => `
               <button class="cat${c.id === State.category && !search ? ' active' : ''}" data-cat="${c.id}">
@@ -229,6 +231,8 @@ const Pos = (() => {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(() => renderEditor(host), 100);
     };
+    const measureToggle = host.querySelector('#measureMode');
+    if (measureToggle) measureToggle.onchange = (e) => { measureMode = e.target.checked; renderEditor(host); };
     searchInput.onkeydown = (e) => {
       if (e.key !== 'Enter') return;
       clearTimeout(searchTimer);
@@ -302,9 +306,49 @@ const Pos = (() => {
     const m = State.menu.find((x) => x.id === mid);
     if (!m) return;
     if (!m.available) return toast(m.name + (State.settings.business_type === 'wines_spirits' ? ' is unavailable' : ' is marked 86 (unavailable)'), 'err');
+    if (measureMode && State.settings.business_type === 'wines_spirits' && m.stock_mode !== 'pour') {
+      if (!(Number(m.volume_ml) > 0)) return toast('Set this product’s size before selling a measured amount', 'err');
+      return measurePicker(host, m);
+    }
     const groups = groupsFor(mid);
     if (groups.length) return modifierPicker(host, m, groups);
     await pushLines(host, o.id, [{ menu_item_id: mid, qty: 1 }]);
+  }
+
+  function measurePicker(host, product) {
+    const full = Number(product.volume_ml), presets = [
+      ['Full', full], ['Half', full / 2], ['Quarter', full / 4], ['Shot (⅛)', full / 8]
+    ];
+    let selected = full;
+    modal({ title: 'Measured sale — ' + product.name, body: `
+      <div class="grid2" id="measureChoices">${presets.map(([label, ml]) => `<button class="btn ${ml === full ? 'primary' : 'ghost'}" data-ml="${ml}">
+        <span>${label}</span><b class="grow right">${Number(ml.toFixed(2))} ml</b></button>`).join('')}</div>
+      <div style="margin-top:14px"><label class="fld">Or custom amount (ml)</label><input class="inp mono" id="customMl" type="number" min="0.01" max="${full}" step="0.01" placeholder="e.g. 30 or 125"></div>
+      <div class="card" style="background:#101820;margin-top:14px"><div class="card-b">
+        <div class="tline"><span>Amount</span><b id="measureAmount">${full} ml</b></div>
+        <div class="tline total"><span>Price</span><b id="measurePrice">${fmt(priceOf(product))}</b></div>
+        <div class="tiny muted" id="measureStock" style="margin-top:6px">Uses one full product from stock</div>
+      </div></div>`,
+      footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Add measured sale</button>' });
+    const ov = document.querySelector('#modalRoot .ov'), custom = ov.querySelector('#customMl');
+    const draw = () => {
+      ov.querySelector('#measureAmount').textContent = Number(selected.toFixed(2)) + ' ml';
+      ov.querySelector('#measurePrice').textContent = fmt(Math.round(priceOf(product) * selected / full));
+      ov.querySelector('#measureStock').textContent = product.stock_mode === 'weighed'
+        ? `Records ${Number((selected / 1000).toFixed(4))} kg theoretical use; actual keg weight is entered at stocktake`
+        : `Deducts ${Number((selected / full).toFixed(4))} of ${product.name}`;
+      ov.querySelectorAll('[data-ml]').forEach((b) => b.classList.toggle('primary', Number(b.dataset.ml) === selected));
+    };
+    ov.querySelectorAll('[data-ml]').forEach((b) => b.onclick = () => { selected = Number(b.dataset.ml); custom.value = ''; draw(); });
+    custom.oninput = () => { const value = Number(custom.value); if (value > 0 && value <= full) { selected = value; draw(); } };
+    ov.querySelector('[data-no]').onclick = closeModal;
+    ov.querySelector('[data-yes]').onclick = async () => {
+      if (!(selected > 0) || selected > full) return toast(`Enter an amount from 0.01 to ${full} ml`, 'err');
+      closeModal();
+      await pushLines(host, activeOrder().id, [{ menu_item_id: product.id, qty: 1,
+        ...(selected === full ? {} : { measure_ml: selected }) }]);
+    };
+    draw();
   }
 
   async function pushLines(host, orderId, lines) {
