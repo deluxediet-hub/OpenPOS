@@ -61,6 +61,11 @@ function fmt(cents) {
   const v = (Number(cents) || 0) / 100;
   return sym() + ' ' + v.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+/* Product-card prices stay compact on phones; cents appear only when non-zero. */
+function fmtPrice(cents) {
+  const v = (Number(cents) || 0) / 100, hasCents = Math.abs(v - Math.round(v)) > 0.0001;
+  return sym() + ' ' + v.toLocaleString('en-KE', { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: 2 });
+}
 const fmtShort = (cents) => {
   const v = (Number(cents) || 0) / 100;
   return v >= 1000 ? sym() + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'k' : sym() + v.toFixed(0);

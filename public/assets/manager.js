@@ -313,8 +313,8 @@ const Manager = (() => {
           <button class="btn ghost" id="addCat">+ Category</button>
           <button class="btn primary" id="add">+ New product</button>` : '<span class="tag info">Read only</span>'}
       </div>
-      <div class="pos" style="grid-template-columns:230px 1fr;height:auto">
-        <div class="card" style="align-self:start">
+      <div class="pos catalogue-admin" style="grid-template-columns:230px 1fr;height:auto">
+        <div class="card category-panel" style="align-self:start">
           <div class="card-h"><h3>Categories</h3></div>
           <div style="padding:8px">
             <button class="btn sm ${menuCat === null ? 'primary' : 'ghost'}" data-c="null" style="width:100%;justify-content:flex-start;margin-bottom:4px">All (${State.menu.length})</button>

@@ -87,6 +87,7 @@ A 2025 national policy proposed raising the threshold to 21, but reporting descr
 - Empty automatically prepared sale tabs are discarded at stocktake and again immediately before the close validation, so they cannot block reconciliation.
 - Management PDFs use a dedicated A4 page profile with side margins, row-aware pagination and no forced signature footer for custom reports, preventing a blank trailing page.
 - Runtime database files are no longer committed to Git.
+- Phone layouts use compact whole-shilling product prices, fixed two-column cards, ellipsized codes/stock labels, non-overlapping basket amounts, touch-sized controls, full-screen forms, horizontally scrollable action chips and bottom navigation. Inline desktop grids are force-collapsed on narrow screens.
 
 ## 3. Compliance assessment
 

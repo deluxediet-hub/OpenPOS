@@ -58,6 +58,7 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 - Fast checkout with no buyer-age prompt; the configured 18+ notice remains on receipts
 - Duplicate M-Pesa confirmation-code rejection
 - Alcohol licence metadata and responsible-retail receipt warning
+- Phone-first app layout with compact non-overlapping product prices, two-column product cards, a fixed bottom navigation bar, scrollable sale actions and touch-sized quantity/payment controls
 - Temporary lockout after repeated invalid PIN attempts
 
 ## Kenya-specific notes

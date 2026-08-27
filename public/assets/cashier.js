@@ -10,7 +10,7 @@ const Cashier = (() => {
     const due = open.reduce((a, o) => a + Math.max(0, o.balance), 0);
 
     host.innerHTML = `
-      <div class="row" style="margin-bottom:14px">
+      <div class="row bills-summary" style="margin-bottom:14px">
         <div class="stat" style="flex:1;min-width:130px"><div class="l">Sales outstanding</div><div class="v" style="color:var(--blue)">${fmt(due)}</div></div>
         <div class="stat" style="flex:1;min-width:130px"><div class="l">Open sales</div><div class="v">${open.length}</div></div>
         <div class="stat" style="flex:1;min-width:130px"><div class="l">Part-paid</div><div class="v">${open.filter(o=>o.status==='billed').length}</div></div>
@@ -18,7 +18,7 @@ const Cashier = (() => {
         <button class="btn ghost" id="zbtn">🖨 Print Z-report</button>
       </div>
       <div class="card" style="margin-bottom:14px">
-        <div class="card-b row">
+        <div class="card-b row bills-tools">
           <button class="btn" id="reprintLast">🖨 Reprint last receipt</button>
           <button class="btn" id="shiftPdf">📄 End-of-shift totals</button>
           <input class="inp" id="payq" placeholder="Find a payment: order #, M-Pesa code, method…" style="max-width:340px">
@@ -26,7 +26,7 @@ const Cashier = (() => {
         </div>
         <div class="scroll-x" id="payres" style="display:none"></div>
       </div>
-      <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
+      <div class="grid open-sales-grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
         ${open.length ? open.map((o) => {
           const t = orderTable(o), lines = groupedSaleItems(o.items);
           return `<div class="card">
@@ -38,7 +38,7 @@ const Cashier = (() => {
             <div class="card-b" style="padding:12px 15px">
               <div class="tiny muted">#${o.number}${State.settings.business_type === 'wines_spirits' ? '' : ' · ' + o.people + ' guests'} · ${esc(waiterName(o.waiter_id))} · ${ago(o.opened_at)}</div>
               <div style="margin:10px 0;font-size:12.5px;color:var(--dim);max-height:130px;overflow:auto">
-                ${lines.slice(0, 12).map((i) => `<div class="row" style="gap:8px;justify-content:space-between">
+                ${lines.slice(0, 12).map((i) => `<div class="row sale-item-row">
                   <span>${i.qty} × ${esc(i.name)}</span><span class="mono">${fmt(i.price*i.qty)}</span></div>`).join('')}
                 ${lines.length > 12 ? `<div class="tiny muted">+ ${lines.length - 12} more products…</div>` : ''}
               </div>

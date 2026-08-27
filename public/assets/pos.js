@@ -59,7 +59,7 @@ const Pos = (() => {
   function renderRetail(host) {
     const open = State.orders.filter((o) => ['open', 'billed'].includes(o.status) && !o.table_id);
     host.innerHTML = `
-      <div class="row" style="margin-bottom:14px">
+      <div class="row retail-overview" style="margin-bottom:14px">
         <div class="stat" style="flex:1;min-width:150px"><div class="l">Open sales</div><div class="v">${open.length}</div><div class="d">parked at this till</div></div>
         <div class="stat" style="flex:1;min-width:150px"><div class="l">Products</div><div class="v">${State.menu.filter((m) => m.available).length}</div><div class="d">available for sale</div></div>
         <div class="stat" style="flex:1;min-width:150px"><div class="l">Low stock</div><div class="v" style="color:var(--amber)">${State.stock.filter((x) => x.qty <= x.min_qty).length}</div><div class="d">check Stock tab</div></div>
@@ -149,17 +149,17 @@ const Pos = (() => {
       : items;
 
     host.innerHTML = `
-      <div class="row" style="margin-bottom:12px">
-        <button class="btn ghost" id="back">← ${retail ? 'Sales' : 'Floor'}</button>
-        <h3 style="margin:0;font-size:16px">${t ? esc(t.name) + ' <span class="muted small">' + esc(t.area) + '</span>' : (retail ? 'Sale #' : 'Takeaway #') + o.number}</h3>
+      <div class="row sale-toolbar">
+        <button class="btn ghost sale-back" id="back">← ${retail ? 'Sales' : 'Floor'}</button>
+        <div class="sale-title"><h3>${t ? esc(t.name) + ' <span class="muted small">' + esc(t.area) + '</span>' : (retail ? 'Sale #' : 'Takeaway #') + o.number}</h3>
+          <span class="muted small">${retail ? esc(waiterName(o.waiter_id)) + ' · ' + ago(o.opened_at) : '#' + o.number + ' · ' + o.people + ' guests · ' + esc(waiterName(o.waiter_id))}</span></div>
         <span class="tag ${o.status === 'billed' ? 'info' : 'warn'}">${o.status}</span>
-        <span class="muted small">#${o.number}${retail ? '' : ' · ' + o.people + ' guests'} · ${esc(waiterName(o.waiter_id))} · open ${ago(o.opened_at)}</span>
         <span class="grow"></span>
-        ${retail ? '' : `<button class="btn sm" id="transfer">Move table</button>
-        <button class="btn sm" id="peopleBtn">Guests: ${o.people}</button>`}
-        ${retail ? '<button class="btn sm ghost" id="complimentaryBtn">🎁 Complimentary</button>' : ''}
-        ${retail && !['manager', 'admin'].includes(State.user.role) ? '' : `<button class="btn sm" id="discBtn">Discount</button>
-        <button class="btn sm red" id="voidBtn">Void order</button>`}
+        <div class="sale-actions">
+          ${retail ? '' : `<button class="btn sm" id="transfer">Move table</button><button class="btn sm" id="peopleBtn">Guests: ${o.people}</button>`}
+          ${retail ? '<button class="btn sm ghost" id="complimentaryBtn">🎁 Complimentary</button>' : ''}
+          ${retail && !['manager', 'admin'].includes(State.user.role) ? '' : `<button class="btn sm" id="discBtn">Discount</button><button class="btn sm red" id="voidBtn">Void order</button>`}
+        </div>
       </div>
       <div class="pos">
         <div class="menu-panel">
@@ -176,10 +176,10 @@ const Pos = (() => {
               const live = priceOf(m), rule = ruleFor(m), off = live !== m.price;
               return `<button class="item${m.available ? '' : ' out'}" data-mid="${m.id}" ${m.available ? '' : `title="${retail ? 'Out of stock / unavailable' : '86 — unavailable'}"`}>
                 <span class="n">${esc(m.name)}${groupsFor(m.id).length ? ' <span class="tiny" style="color:var(--teal)">▸</span>' : ''}</span>
-                ${retail && (m.sku || m.barcode) ? `<span class="tiny muted mono">${esc(m.sku || m.barcode)}</span>` : ''}
-                ${retail && m.stock_qty != null ? `<span class="tiny" style="color:${m.stock_qty <= 0 ? 'var(--red)' : m.stock_qty <= m.stock_min_qty ? 'var(--amber)' : 'var(--dim)'}">${m.stock_mode === 'pour' && m.stock_deduction ? `Available ${Math.floor(m.stock_qty / m.stock_deduction)} serving(s)` : `Stock ${m.stock_qty}`}</span>` : ''}
-                ${off ? `<span class="tiny" style="color:var(--dim2);text-decoration:line-through">${fmt(m.price)}</span>` : ''}
-                <span class="p" style="${off ? 'color:var(--green)' : ''}">${m.available ? fmt(live) : (retail ? 'Unavailable' : '86')}</span>
+                ${retail && (m.sku || m.barcode) ? `<span class="tiny muted mono item-code">${esc(m.sku || m.barcode)}</span>` : ''}
+                ${retail && m.stock_qty != null ? `<span class="tiny item-stock" style="color:${m.stock_qty <= 0 ? 'var(--red)' : m.stock_qty <= m.stock_min_qty ? 'var(--amber)' : 'var(--dim)'}">${m.stock_mode === 'pour' && m.stock_deduction ? `Available ${Math.floor(m.stock_qty / m.stock_deduction)} serving(s)` : `Stock ${m.stock_qty}`}</span>` : ''}
+                ${off ? `<span class="tiny item-old-price">${fmtPrice(m.price)}</span>` : ''}
+                <span class="p item-price" style="${off ? 'color:var(--green)' : ''}">${m.available ? fmtPrice(live) : (retail ? 'Unavailable' : '86')}</span>
                 ${rule ? `<span class="tiny" style="color:var(--green)">${esc(rule)}</span>` : ''}
               </button>`;
             }).join('') : '<div class="empty">No items match.</div>'}
