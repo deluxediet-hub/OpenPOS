@@ -131,7 +131,8 @@ CREATE TABLE IF NOT EXISTS stock_items (
   qty      REAL NOT NULL DEFAULT 0,
   min_qty  REAL NOT NULL DEFAULT 0,
   cost     INTEGER NOT NULL DEFAULT 0,          -- cents per unit
-  deduction_mode TEXT NOT NULL DEFAULT 'auto'   -- auto|count (weighed at stocktake)
+  deduction_mode TEXT NOT NULL DEFAULT 'auto',  -- auto|count (weighed at stocktake)
+  capacity_ml REAL                              -- ml in one bottle/can/keg unit
 );
 
 CREATE TABLE IF NOT EXISTS stock_moves (
@@ -370,6 +371,7 @@ function migrate() {
   add('users', 'hourly_rate', 'hourly_rate INTEGER NOT NULL DEFAULT 0');
   add('stock_items', 'location_id', 'location_id INTEGER REFERENCES locations(id)');
   add('stock_items', 'deduction_mode', "deduction_mode TEXT NOT NULL DEFAULT 'auto'");
+  add('stock_items', 'capacity_ml', 'capacity_ml REAL');
   add('payments', 'shift_id', 'shift_id INTEGER REFERENCES shifts(id)');
   add('menu_items', 'sku', 'sku TEXT');
   add('menu_items', 'barcode', 'barcode TEXT');
@@ -477,6 +479,13 @@ function migrate() {
       if (volume > 0) db.prepare('UPDATE menu_items SET volume_ml=? WHERE id=?').run(volume, item.id);
     }
   }
+
+  /* Attach physical container capacity to stock so every screen can show a rounded unit balance plus ml remaining. */
+  db.prepare(`UPDATE stock_items SET capacity_ml=COALESCE(capacity_ml,
+    (SELECT m.volume_ml FROM recipes r JOIN menu_items m ON m.id=r.menu_item_id
+      WHERE r.stock_item_id=stock_items.id AND r.qty=1 AND m.stock_mode IN ('unit','weighed')
+      ORDER BY m.id LIMIT 1), CASE WHEN deduction_mode='count' AND unit='kg' THEN 1000 END)
+    WHERE capacity_ml IS NULL OR capacity_ml<=0`).run();
 
   /* Repair financial values for stocktakes completed by the build that saved data then returned HTTP 500. */
   const completedCounts = db.prepare(`SELECT id FROM stock_counts c WHERE status='completed' AND cost_variance=0 AND retail_variance=0
@@ -722,8 +731,9 @@ function importRetailCsv(text, userId = null) {
       let stockId;
       if (mode === 'pour') stockId = source.id;
       else {
-        stockId = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost,deduction_mode) VALUES(?,?,?,?,?,?)')
-          .run(name, mode === 'weighed' ? 'kg' : saleUnit, Number(r.opening_stock || 0), Number(r.reorder_level || 0), cost, mode === 'weighed' ? 'count' : 'auto').lastInsertRowid;
+        stockId = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost,deduction_mode,capacity_ml) VALUES(?,?,?,?,?,?,?)')
+          .run(name, mode === 'weighed' ? 'kg' : saleUnit, Number(r.opening_stock || 0), Number(r.reorder_level || 0), cost,
+            mode === 'weighed' ? 'count' : 'auto', mode === 'weighed' ? 1000 : size).lastInsertRowid;
         if (Number(r.opening_stock || 0)) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
           .run(stockId, Number(r.opening_stock), 'CSV opening stock', userId);
       }
@@ -1011,14 +1021,14 @@ function loadSampleData() {
       ['Soda Water 300ml', 100, 65], ['Minute Maid 1L', 250, 190], ['Bottled Water 500ml', 60, 35]]
   };
   const insItem = db.prepare('INSERT INTO menu_items(category_id,name,price,cost,station,sort_order,volume_ml,sale_unit) VALUES(?,?,?,?,?,?,?,?)');
-  const insStock = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost) VALUES(?,?,?,?,?)');
+  const insStock = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost,capacity_ml) VALUES(?,?,?,?,?,?)');
   const insRecipe = db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,1)');
   for (const [category, items] of Object.entries(products)) {
     items.forEach(([name, price, cost], i) => {
       const match = name.match(/(\d+(?:\.\d+)?)\s*(ml|l)\b/i);
       const volume = match ? Math.round(Number(match[1]) * (match[2].toLowerCase() === 'l' ? 1000 : 1)) : null;
       const menuId = insItem.run(cats[category], name, price * 100, cost * 100, 'retail', i + 1, volume, 'bottle').lastInsertRowid;
-      const stockId = insStock.run(name, 'bottle', 12, 4, cost * 100).lastInsertRowid;
+      const stockId = insStock.run(name, 'bottle', 12, 4, cost * 100, volume).lastInsertRowid;
       insRecipe.run(menuId, stockId); // one retail unit sold = one unit removed
     });
   }

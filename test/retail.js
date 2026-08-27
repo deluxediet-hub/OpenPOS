@@ -89,13 +89,13 @@ const mk = () => {
   stock = await seller.get('/api/stock');
   ck('sale deducts three bottles from one consolidated line', stock.data.find((x) => x.id === product.stock_item_id).qty === 2);
   const measuredSale = (await seller.post('/api/orders', {})).data;
-  r = await seller.post(`/api/orders/${measuredSale.id}/items`, { items: [{ menu_item_id: product.id, qty: 1, measure_ml: 375 }] });
-  ck('half-bottle sale has proportional name, price and stock factor', r.status === 200 && r.data.items[0].stock_factor === 0.5 &&
-    r.data.items[0].price === 50000 && /375ml/.test(r.data.items[0].name), JSON.stringify(r.data.items));
-  r = await seller.post(`/api/orders/${measuredSale.id}/pay`, { method: 'card', amount: 500 });
-  ck('half-bottle payment closes normally', r.status === 200 && r.data.order.status === 'closed');
+  r = await seller.post(`/api/orders/${measuredSale.id}/items`, { items: [{ menu_item_id: product.id, qty: 1, measure_ml: 31.25 }] });
+  ck('31.25ml sale has proportional name, price and stock factor', r.status === 200 && Math.abs(r.data.items[0].stock_factor - 31.25/750) < 0.000001 &&
+    r.data.items[0].price === 4167 && /31.25ml/.test(r.data.items[0].name), JSON.stringify(r.data.items));
+  r = await seller.post(`/api/orders/${measuredSale.id}/pay`, { method: 'card', amount: 41.67 });
+  ck('measured payment closes normally', r.status === 200 && r.data.order.status === 'closed');
   stock = await seller.get('/api/stock');
-  ck('half-bottle sale deducts only 0.5 bottle', stock.data.find((x) => x.id === product.stock_item_id).qty === 1.5);
+  ck('31.25ml sale keeps precise stock internally', Math.abs(stock.data.find((x) => x.id === product.stock_item_id).qty - 1.958333) < 0.000001);
 
   const supplier = (await admin.post('/api/suppliers', { name: 'Audit Distributor', kra_pin: 'P000000000A', phone: '0700000000' })).data;
   r = await seller.post('/api/goods-receipts', { supplier_id: supplier.id, payment_method: 'other',
@@ -103,14 +103,14 @@ const mk = () => {
   ck('delivery reference is optional and configured product cost is preserved',
     r.status === 200 && /^DEL-/.test(r.data.invoice_no) && r.data.total_cost === 420000 && r.data.payment_status === 'paid', JSON.stringify(r.data));
   stock = await seller.get('/api/stock');
-  ck('delivery increases stock to 7.5 bottle equivalents', stock.data.find((x) => x.id === product.stock_item_id).qty === 7.5);
+  ck('delivery keeps a clean six-decimal balance', Math.abs(stock.data.find((x) => x.id === product.stock_item_id).qty - 7.958333) < 0.000001);
   const cashBeforeComp = (await admin.get('/api/shifts/current')).data.drawer.expected;
   r = await admin.post('/api/complimentaries', { menu_item_id: product.id, qty: 1, measure_ml: 125,
     reason: 'Owner consumption', recipient: 'Owner' });
   ck('owner records measured complimentary with retail and cost values', r.status === 200 && r.data.retail_value === 16667 && r.data.cost_value === 11667,
     JSON.stringify(r.data));
   stock = await seller.get('/api/stock');
-  ck('complimentary deducts only its bottle fraction', Math.abs(stock.data.find((x) => x.id === product.stock_item_id).qty - (7.5 - 125/750)) < 0.000001);
+  ck('complimentary deducts only its bottle fraction', Math.abs(stock.data.find((x) => x.id === product.stock_item_id).qty - (7.958333 - 125/750)) < 0.000001);
   const cashAfterComp = (await admin.get('/api/shifts/current')).data.drawer.expected;
   ck('complimentary does not change expected cash', cashAfterComp === cashBeforeComp);
   r = await admin.get('/api/complimentaries?from=2000-01-01&to=2099-12-31');
@@ -155,14 +155,14 @@ const mk = () => {
   const count = (await seller.get('/api/stock-counts/' + r.data.id)).data;
   const addedStockItem = count.items.find((x) => x.stock_item_id !== product.stock_item_id && x.unit === 'bottle');
   const counted = count.items.map((x) => ({ stock_item_id: x.stock_item_id,
-    counted: x.stock_item_id === product.stock_item_id ? 13/3 : x.stock_item_id === addedStockItem.stock_item_id ? x.expected + 1 : x.expected,
+    counted: x.stock_item_id === product.stock_item_id ? 115/24 : x.stock_item_id === addedStockItem.stock_item_id ? x.expected + 1 : x.expected,
     added_qty: x.stock_item_id === addedStockItem.stock_item_id ? 1 : 0 }));
   r = await seller.post(`/api/stock-counts/${count.id}/complete`, { items: counted });
   ck('stocktake completes without a 500 and records financial variance separately from cash',
     r.status === 200 && r.data.variances === 1 && r.data.cost_variance === -70000 && r.data.retail_variance === -100000,
     JSON.stringify(r.data));
   stock = await seller.get('/api/stock');
-  ck('stocktake sets physical quantity', Math.abs(stock.data.find((x) => x.id === product.stock_item_id).qty - 13/3) < 0.000001);
+  ck('stocktake sets physical quantity', Math.abs(stock.data.find((x) => x.id === product.stock_item_id).qty - 115/24) < 0.000001);
 
   const current = (await seller.get('/api/shifts/current')).data;
   ck('till reconciliation exposes stock variance without changing expected cash',

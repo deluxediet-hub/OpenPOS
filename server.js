@@ -144,7 +144,9 @@ const listMenu = () => db.prepare(`
     (SELECT si.name FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
       WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_source_name,
     (SELECT si.deduction_mode FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
-      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_deduction_mode
+      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_deduction_mode,
+    (SELECT si.capacity_ml FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
+      WHERE r.menu_item_id=m.id ORDER BY r.id LIMIT 1) AS stock_capacity_ml
   FROM menu_items m JOIN categories c ON c.id = m.category_id
   ORDER BY c.sort_order, m.sort_order, m.name`).all();
 
@@ -248,8 +250,9 @@ app.post('/api/menu-items', requireAuth, requireRole('manager', 'admin'), (req, 
       const opening = Number(opening_qty) || 0;
       const stockUnit = mode === 'weighed' ? 'kg' : (unit || 'bottle');
       const deductionMode = mode === 'weighed' ? 'count' : 'auto';
-      const stockId = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost,deduction_mode) VALUES(?,?,?,?,?,?)')
-        .run(name.trim(), stockUnit, opening, Number(min_qty) || 0, effectiveCost, deductionMode).lastInsertRowid;
+      const capacity = mode === 'weighed' ? 1000 : (Number(volume_ml) || null);
+      const stockId = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost,deduction_mode,capacity_ml) VALUES(?,?,?,?,?,?,?)')
+        .run(name.trim(), stockUnit, opening, Number(min_qty) || 0, effectiveCost, deductionMode, capacity).lastInsertRowid;
       db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,1)').run(itemId, stockId);
       if (opening) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
         .run(stockId, opening, 'Opening stock', req.user.id);
@@ -298,8 +301,9 @@ app.put('/api/menu-items/:id', requireAuth, requireRole('manager', 'admin'), (re
       db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,?)').run(cur.id, pourSource.id, pourDeduction);
     } else if (stock && retail) {
       const sourceCost = b.cost != null ? Math.round(Number(b.cost) * 100) : cur.cost;
-      db.prepare('UPDATE stock_items SET name=?,cost=?,min_qty=COALESCE(?,min_qty),unit=COALESCE(?,unit) WHERE id=?')
-        .run(b.name ?? cur.name, sourceCost, b.min_qty !== undefined ? Number(b.min_qty) : null, b.unit || null, stock.id);
+      db.prepare('UPDATE stock_items SET name=?,cost=?,min_qty=COALESCE(?,min_qty),unit=COALESCE(?,unit),capacity_ml=COALESCE(?,capacity_ml) WHERE id=?')
+        .run(b.name ?? cur.name, sourceCost, b.min_qty !== undefined ? Number(b.min_qty) : null, b.unit || null,
+          mode === 'weighed' ? 1000 : (b.volume_ml !== undefined ? Number(b.volume_ml) || null : null), stock.id);
       if (b.cost != null) db.prepare(`UPDATE menu_items SET cost=ROUND(? *
         (SELECT r.qty FROM recipes r WHERE r.menu_item_id=menu_items.id AND r.stock_item_id=?))
         WHERE stock_mode='pour' AND id IN (SELECT menu_item_id FROM recipes WHERE stock_item_id=?)`)
@@ -761,7 +765,8 @@ function closeOut(orderId, d, s, user, customerId) {
   for (const mv of domain.stockMovementsFor(stockLines, recipes)) {
     const stock = db.prepare('SELECT deduction_mode FROM stock_items WHERE id=?').get(mv.stock_item_id);
     if (stock && stock.deduction_mode === 'count') continue; // weighed keg is adjusted only at stocktake
-    db.prepare('UPDATE stock_items SET qty = qty - ? WHERE id=?').run(mv.qty, mv.stock_item_id);
+    db.prepare(`UPDATE stock_items SET qty=CASE WHEN ABS(ROUND(qty-?,6))<0.000001 THEN 0 ELSE ROUND(qty-?,6) END WHERE id=?`)
+      .run(mv.qty, mv.qty, mv.stock_item_id);
     db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
       .run(mv.stock_item_id, -mv.qty, `Recipe usage — order #${orderId}`, user ? user.id : null);
   }
@@ -841,7 +846,7 @@ app.post('/api/stock/:id/adjust', requireAuth, requireRole('manager', 'admin'), 
   const reason = String(req.body.reason || '').trim();
   if (!delta) return bad(res, 'Stock change cannot be zero');
   if (!reason) return bad(res, 'A reason or stock-count reference is required');
-  db.prepare('UPDATE stock_items SET qty = qty + ? WHERE id=?').run(delta, s.id);
+  db.prepare('UPDATE stock_items SET qty = ROUND(qty + ?, 6) WHERE id=?').run(delta, s.id);
   db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
     .run(s.id, delta, reason, req.user.id);
   audit(req.user, 'stock.adjust', `${s.name} ${delta > 0 ? '+' : ''}${delta} — ${reason}`);
@@ -892,7 +897,8 @@ app.post('/api/complimentaries', requireAuth, requireRole('seller', 'manager', '
   const tx = db.transaction(() => {
     const deducted = recipe.deduction_mode === 'count' ? 0 : 1;
     if (deducted) {
-      db.prepare('UPDATE stock_items SET qty=qty-? WHERE id=?').run(stockQty, recipe.id);
+      db.prepare(`UPDATE stock_items SET qty=CASE WHEN ABS(ROUND(qty-?,6))<0.000001 THEN 0 ELSE ROUND(qty-?,6) END WHERE id=?`)
+        .run(stockQty, stockQty, recipe.id);
       db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
         .run(recipe.id, -stockQty, `Complimentary: ${reason}${recipient ? ' · ' + recipient : ''}`, req.user.id);
     }
@@ -958,7 +964,7 @@ app.post('/api/goods-receipts', requireAuth, requireRole('seller', 'manager', 'a
       const qty = Number(line.qty);
       if (!stock || !(qty > 0)) throw new Error('Every delivery line needs a valid product and positive quantity');
       ins.run(receiptId, stock.id, qty, stock.cost, null, null);
-      db.prepare('UPDATE stock_items SET qty=qty+? WHERE id=?').run(qty, stock.id);
+      db.prepare('UPDATE stock_items SET qty=ROUND(qty+?,6) WHERE id=?').run(qty, stock.id);
       db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
         .run(stock.id, qty, `Delivery ${reference}`, req.user.id);
       total += qty * stock.cost;
@@ -1035,7 +1041,7 @@ app.post('/api/stock-counts', requireAuth, requireRole('seller', 'manager', 'adm
 app.get('/api/stock-counts/:id', requireAuth, (req, res) => {
   const count = db.prepare('SELECT * FROM stock_counts WHERE id=?').get(req.params.id);
   if (!count) return bad(res, 'Stocktake not found', 404);
-  count.items = db.prepare(`SELECT sci.*,si.name,si.unit FROM stock_count_items sci
+  count.items = db.prepare(`SELECT sci.*,si.name,si.unit,si.capacity_ml FROM stock_count_items sci
     JOIN stock_items si ON si.id=sci.stock_item_id WHERE sci.stock_count_id=? ORDER BY si.name`).all(count.id);
   res.json(count);
 });
@@ -1049,7 +1055,8 @@ app.post('/api/stock-counts/:id/save', requireAuth, requireRole('seller', 'manag
       if (line.counted === '' || line.counted == null || !Number.isFinite(Number(line.counted))) continue;
       const row = db.prepare('SELECT expected FROM stock_count_items WHERE stock_count_id=? AND stock_item_id=?').get(count.id, Number(line.stock_item_id));
       const added = Number(line.added_qty) || 0;
-      if (row) upd.run(Number(line.counted), Number(line.counted) - row.expected - added, added,
+      const counted = Math.round(Number(line.counted) * 1e6) / 1e6;
+      if (row) upd.run(counted, counted - row.expected - added, added,
         count.id, Number(line.stock_item_id));
     }
   }); tx();
@@ -1068,7 +1075,7 @@ app.post('/api/stock-counts/:id/complete', requireAuth, requireRole('seller', 'm
   let totalCostVariance = 0, totalRetailVariance = 0;
   const tx = db.transaction(() => {
     for (const row of rows) {
-      const counted = Number(valueOf(row));
+      const counted = Math.round(Number(valueOf(row)) * 1e6) / 1e6;
       const added = submitted.has(row.stock_item_id) ? Number(submitted.get(row.stock_item_id).added_qty) || 0 : row.added_qty || 0;
       const variance = counted - row.expected - added;
       const actualStockMove = counted - row.expected;
@@ -1360,7 +1367,7 @@ app.get('/api/reports/stock-usage', requireAuth, requireRole('manager', 'admin')
   const from = req.query.from || todayLocal();
   const to = req.query.to || from;
   const rows = db.prepare(`
-    SELECT s.id, s.name, s.unit, s.qty AS on_hand,
+    SELECT s.id, s.name, s.unit, s.capacity_ml, s.qty AS on_hand,
            COALESCE(SUM(r.qty * oi.qty * oi.stock_factor), 0) AS theoretical
     FROM stock_items s
     LEFT JOIN recipes r ON r.stock_item_id = s.id

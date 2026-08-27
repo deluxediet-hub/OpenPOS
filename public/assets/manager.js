@@ -123,7 +123,7 @@ const Manager = (() => {
           <div style="max-height:300px;overflow:auto">
             ${low.length ? `<table class="tbl"><tbody>${low.map((x) => `<tr>
               <td><b>${esc(x.name)}</b><div class="tiny muted">min ${x.min_qty} ${esc(x.unit)}</div></td>
-              <td class="right"><span class="tag ${x.qty <= 0 ? 'bad' : 'warn'}">${x.qty} ${esc(x.unit)}</span></td></tr>`).join('')}</tbody></table>`
+              <td class="right"><span class="tag ${x.qty <= 0 ? 'bad' : 'warn'}">${esc(stockQtyLabel(x.qty, x.unit, x.capacity_ml))}</span></td></tr>`).join('')}</tbody></table>`
               : '<div class="empty">All stock levels healthy ✓</div>'}
           </div>
         </div>
@@ -200,7 +200,7 @@ const Manager = (() => {
           if (selected.has('categories')) tables.push({ title: 'Sales by category', head: ['Category', 'Qty', 'Revenue'], right: [1, 2],
             rows: cats.map((c) => [c.category, String(c.qty), (c.revenue / 100).toFixed(2)]) });
           if (selected.has('low')) tables.push({ title: 'Low stock', head: ['Product', 'On hand', 'Reorder at', 'Unit'], right: [1, 2],
-            rows: stock.filter((x) => x.qty <= x.min_qty).map((x) => [x.name, String(x.qty), String(x.min_qty), x.unit]) });
+            rows: stock.filter((x) => x.qty <= x.min_qty).map((x) => [x.name, stockQtyLabel(x.qty, x.unit, x.capacity_ml), String(roundStock(x.min_qty)), x.unit]) });
           if (selected.has('expenses')) tables.push({ title: 'Expenses', head: ['Date', 'Paid via', 'Amount', 'Reason', 'Recorded by'], right: [2],
             rows: expenses.map((x) => [(x.created_at || '').slice(0, 16), String(x.method || 'cash').toUpperCase(),
               (x.amount / 100).toFixed(2), x.reason || '', x.user_name || '—']) });
@@ -213,12 +213,13 @@ const Manager = (() => {
             tables.push({ title: stocktake ? `Stocktake — ${stocktake.reference}` : 'Stocktake',
               head: ['Product', 'Expected (system + added)', 'Counted', 'Variance', 'Cost impact', 'Retail impact'], right: [1, 2, 3, 4, 5],
               rows: stocktake ? stocktake.items.map((x) => [x.name,
-                  `${x.expected} + ${x.added_qty || 0} = ${x.expected + (x.added_qty || 0)} ${x.unit}`, `${x.counted} ${x.unit}`,
-                  `${x.variance > 0 ? '+' : ''}${x.variance} ${x.unit}`, (x.cost_variance / 100).toFixed(2), (x.retail_variance / 100).toFixed(2)])
+                  `${roundStock(x.expected)} + ${roundStock(x.added_qty || 0)} = ${stockQtyLabel(x.expected + (x.added_qty || 0), x.unit, x.capacity_ml)}`,
+                  stockQtyLabel(x.counted, x.unit, x.capacity_ml),
+                  `${x.variance > 0 ? '+' : ''}${roundStock(x.variance, 4)} ${x.unit}`, (x.cost_variance / 100).toFixed(2), (x.retail_variance / 100).toFixed(2)])
                 : [['No completed stocktake in this period', '', '', '', '', '']] });
           }
           if (selected.has('stock')) tables.push({ title: 'Stock position', head: ['Product', 'On hand', 'Unit cost', 'Value'], right: [1, 2, 3],
-            rows: stock.map((x) => [x.name, `${x.qty} ${x.unit}`, (x.cost / 100).toFixed(2), (x.qty * x.cost / 100).toFixed(2)]) });
+            rows: stock.map((x) => [x.name, stockQtyLabel(x.qty, x.unit, x.capacity_ml), (x.cost / 100).toFixed(2), (x.qty * x.cost / 100).toFixed(2)]) });
           closeModal();
           printReport({ title: 'Custom Management Report', subtitle: `Period ${q} to ${t}`, tables, signature: false });
         } catch (e) { toast(e.message, 'err'); }
@@ -345,7 +346,7 @@ const Manager = (() => {
               return `<tr>
                 <td><b>${esc(m.name)}</b><div class="tiny muted mono">${esc(m.sku || '')}${m.sku && m.barcode ? ' · ' : ''}${esc(m.barcode || '')}</div></td>
                 <td class="muted small">${esc(m.category_name)}</td>
-                <td class="right mono"><span class="tag ${m.stock_qty <= 0 ? 'bad' : m.stock_qty <= m.stock_min_qty ? 'warn' : 'ok'}">${m.stock_mode === 'pour' && m.stock_deduction ? `${Math.floor(m.stock_qty / m.stock_deduction)} servings` : (m.stock_qty ?? '—')}</span></td>
+                <td class="right mono"><span class="tag ${m.stock_qty <= 0 ? 'bad' : m.stock_qty <= m.stock_min_qty ? 'warn' : 'ok'}">${m.stock_mode === 'pour' && m.stock_deduction ? `${Math.floor(m.stock_qty / m.stock_deduction)} servings` : stockQtyLabel(m.stock_qty, m.stock_unit || 'unit', m.stock_capacity_ml)}</span></td>
                 <td class="right mono muted">${fmt(m.cost)}</td>
                 <td class="right mono"><b>${fmt(m.price)}</b></td>
                 <td class="right"><span class="tag ${marg >= 60 ? 'ok' : marg >= 40 ? 'warn' : 'bad'}">${marg}%</span></td>
@@ -440,7 +441,7 @@ const Manager = (() => {
     const stockMode = m.stock_mode || 'unit';
     const sourceContainerMl = stockMode === 'pour' && m.stock_deduction
       ? Math.round((m.serving_ml || m.volume_ml || 1) / m.stock_deduction) : 750;
-    const sourceOptions = State.stock.map((x) => `<option value="${x.id}" ${x.id === m.stock_item_id ? 'selected' : ''}>${esc(x.name)} · ${x.qty} ${esc(x.unit)}</option>`).join('');
+    const sourceOptions = State.stock.map((x) => `<option value="${x.id}" ${x.id === m.stock_item_id ? 'selected' : ''}>${esc(x.name)} · ${esc(stockQtyLabel(x.qty, x.unit, x.capacity_ml))}</option>`).join('');
     const retailIdentity = `<div class="grid3" style="margin-top:12px">
       <div><label class="fld">Size</label><select class="inp" id="ivol">${sizeOptions}</select></div>
       <div><label class="fld">Category</label><select class="inp" id="icat">${State.categories.map((c) =>
@@ -562,7 +563,7 @@ const Manager = (() => {
           <th class="right">Unit cost</th><th class="right">Value</th><th>Status</th><th></th></tr></thead>
           <tbody>${st.map((x) => `<tr>
             <td><b>${esc(x.name)}</b></td><td class="muted small">${esc(x.unit)}</td>
-            <td class="right mono"><b>${x.qty}</b></td><td class="right mono muted">${x.min_qty}</td>
+            <td class="right"><b class="mono">${roundStock(x.qty)}</b><div class="tiny muted">${x.capacity_ml && x.unit !== 'kg' ? stockQtyLabel(x.qty, x.unit, x.capacity_ml).split(' · ')[1] || '' : x.unit}</div></td><td class="right mono muted">${roundStock(x.min_qty)}</td>
             <td class="right mono muted">${fmt(x.cost)}</td>
             <td class="right mono">${fmt(x.qty * x.cost)}</td>
             <td>${x.qty <= 0 ? '<span class="tag bad">Out</span>' : x.qty <= x.min_qty ? '<span class="tag warn">Low</span>' : '<span class="tag ok">OK</span>'}</td>
@@ -574,7 +575,7 @@ const Manager = (() => {
       <div class="card" style="margin-top:14px"><div class="card-h"><h3>Recent stock movement</h3><span class="grow"></span><span class="tiny muted">Sales, deliveries and counts</span></div>
         <div class="scroll-x" style="max-height:300px"><table class="tbl"><thead><tr><th>When</th><th>Product</th><th class="right">Change</th><th>Reason</th><th>By</th></tr></thead>
         <tbody>${moves.map((m) => `<tr><td class="nowrap muted small">${esc(m.created_at)}</td><td><b>${esc(m.name)}</b></td>
-          <td class="right mono"><span class="tag ${m.delta < 0 ? 'warn' : 'ok'}">${m.delta > 0 ? '+' : ''}${m.delta} ${esc(m.unit)}</span></td>
+          <td class="right mono"><span class="tag ${m.delta < 0 ? 'warn' : 'ok'}">${m.delta > 0 ? '+' : ''}${roundStock(m.delta, 4)} ${esc(m.unit)}</span></td>
           <td class="small">${esc(m.reason || '—')}</td><td>${esc(m.user_name || 'system')}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">No stock movement yet.</td></tr>'}</tbody></table></div></div>`;
 
     if (!canManage()) return;
@@ -589,7 +590,7 @@ const Manager = (() => {
   function adjust(x, body, mode) {
     modal({
       title: (mode === 'receive' ? 'Stock received — ' : 'Stock count — ') + x.name,
-      body: `<p class="muted" style="margin-top:0">Current level: <b>${x.qty} ${esc(x.unit)}</b></p>
+      body: `<p class="muted" style="margin-top:0">Current level: <b>${esc(stockQtyLabel(x.qty, x.unit, x.capacity_ml))}</b></p>
         <label class="fld">${mode === 'receive' ? 'Quantity received' : 'Actual quantity counted'}</label>
         <input class="inp" id="aq" type="number" step="0.5" value="${mode === 'receive' ? '' : x.qty}" placeholder="${mode === 'receive' ? 'e.g. 25' : 'e.g. 9'}">
         <div style="margin-top:12px"><label class="fld">Reason</label>

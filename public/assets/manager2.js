@@ -599,7 +599,7 @@ const Manager2 = (() => {
             <thead><tr><th>Ingredient</th><th class="right">Used</th><th class="right">On hand</th></tr></thead>
             <tbody>${usage.filter((u) => u.theoretical > 0).map((u) => `<tr>
               <td><b>${esc(u.name)}</b></td><td class="right mono">${Math.round(u.theoretical * 100) / 100} ${esc(u.unit)}</td>
-              <td class="right mono">${Math.round(u.on_hand * 100) / 100} ${esc(u.unit)}</td></tr>`).join('')
+              <td class="right mono">${esc(stockQtyLabel(u.on_hand, u.unit, u.capacity_ml))}</td></tr>`).join('')
               || '<tr><td colspan="3" class="empty">Nothing sold against a recipe today.</td></tr>'}</tbody></table></div>
         </div>
       </div>`;
@@ -612,7 +612,7 @@ const Manager2 = (() => {
         { title: 'Staff on the clock', head: ['Name', 'Hours', 'Cost'], right: [1, 2],
           rows: lab.by_user.map((u) => [u.name, String(u.hours), fmt(u.cost)]) },
         { title: 'Theoretical stock usage', head: ['Ingredient', 'Used', 'On hand'], right: [1, 2],
-          rows: usage.filter((u) => u.theoretical > 0).map((u) => [u.name, (Math.round(u.theoretical * 100) / 100) + ' ' + u.unit, (Math.round(u.on_hand * 100) / 100) + ' ' + u.unit]) }
+          rows: usage.filter((u) => u.theoretical > 0).map((u) => [u.name, (Math.round(u.theoretical * 100) / 100) + ' ' + u.unit, stockQtyLabel(u.on_hand, u.unit, u.capacity_ml)]) }
       ]
     });
   }

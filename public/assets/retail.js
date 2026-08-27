@@ -73,7 +73,7 @@ const Retail = (() => {
 
   async function deliveryForm(body) {
     const [suppliers, stock] = await Promise.all([api('/api/suppliers'), api('/api/stock')]);
-    const optionHtml = stock.map((x) => `<option value="${x.id}">${esc(x.name)} · ${x.qty} ${esc(x.unit)}</option>`).join('');
+    const optionHtml = stock.map((x) => `<option value="${x.id}">${esc(x.name)} · ${esc(stockQtyLabel(x.qty, x.unit, x.capacity_ml))}</option>`).join('');
     modal({ title: 'Receive supplier delivery', wide: true, body: `
       <div class="grid3"><div><label class="fld">Supplier</label><select class="inp" id="grSupplier"><option value="">Not listed / walk-in supplier</option>
         ${suppliers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>
@@ -158,16 +158,20 @@ const Retail = (() => {
         <div class="card" style="background:#101820"><div class="card-b" style="padding:24px">
           <div class="tiny muted" style="text-transform:uppercase;letter-spacing:.08em">Count this product</div>
           <h2 style="margin:6px 0 4px;font-size:24px">${esc(item.name)}</h2>
-          <div class="muted">System quantity before count: <b class="mono">${item.expected} ${esc(item.unit)}</b></div>
+          <div class="muted">System quantity before count: <b class="mono">${esc(stockQtyLabel(item.expected, item.unit, item.capacity_ml))}</b></div>
           <div class="grid2" style="margin-top:22px">
             <div><label class="fld">Stock added but not yet received in POS</label>
               <input class="inp mono" id="countAdded" type="number" min="0" step="0.01" value="${item.added_qty || 0}" style="font-size:21px;padding:12px">
               <div class="tiny muted" style="margin-top:5px">Leave zero if all deliveries were already entered.</div></div>
-            <div><label class="fld">Physical stock at hand</label>
-              <input class="inp mono" id="countAtHand" type="number" min="0" step="0.01" value="${item.counted ?? ''}" placeholder="Enter actual count" style="font-size:21px;padding:12px"></div>
+            ${item.capacity_ml && item.unit !== 'kg' ? `<div><label class="fld">Physical stock at hand</label>
+              <div class="grid2"><div><label class="tiny muted">Full sealed ${esc(item.unit)}s</label><input class="inp mono" id="countFullUnits" type="number" min="0" step="1" value="${item.counted == null ? '' : Math.floor(item.counted + 0.000001)}" placeholder="0"></div>
+                <div><label class="tiny muted">Open container ml</label><input class="inp mono" id="countOpenMl" type="number" min="0" max="${item.capacity_ml}" step="0.01" value="${item.counted == null ? '' : roundStock((item.counted - Math.floor(item.counted + 0.000001)) * item.capacity_ml)}" placeholder="0"></div></div>
+              <input type="hidden" id="countAtHand" value="${item.counted ?? ''}"><div class="tiny muted" id="countPhysicalLabel" style="margin-top:6px"></div></div>`
+              : `<div><label class="fld">Physical stock at hand (${esc(item.unit)})</label>
+              <input class="inp mono" id="countAtHand" type="number" min="0" step="0.01" value="${item.counted == null ? '' : roundStock(item.counted, 4)}" placeholder="Enter actual count" style="font-size:21px;padding:12px"></div>`}
           </div>
           <div class="card" style="margin-top:16px"><div class="card-b">
-            <div class="tline"><span>Expected after added stock</span><b id="countAdjustedExpected">${item.expected + (item.added_qty || 0)} ${esc(item.unit)}</b></div>
+            <div class="tline"><span>Expected after added stock</span><b id="countAdjustedExpected">${esc(stockQtyLabel(item.expected + (item.added_qty || 0), item.unit, item.capacity_ml))}</b></div>
             <div class="tline"><span>Unexplained variance</span><b id="countDifference">—</b></div>
           </div></div>
         </div></div>
@@ -177,15 +181,26 @@ const Retail = (() => {
           <button class="btn primary" id="countNext">${index === count.items.length - 1 ? 'Save item' : 'Save & next →'}</button>
         </div>`;
       const hand = wizard.querySelector('#countAtHand'), added = wizard.querySelector('#countAdded'), diff = wizard.querySelector('#countDifference');
+      const fullInput = wizard.querySelector('#countFullUnits'), openMlInput = wizard.querySelector('#countOpenMl');
+      const syncPhysicalUnits = () => {
+        if (!fullInput) return;
+        const hasValue = fullInput.value !== '' || openMlInput.value !== '';
+        hand.value = hasValue ? (Math.max(0, Number(fullInput.value) || 0) + Math.max(0, Number(openMlInput.value) || 0) / item.capacity_ml) : '';
+        const label = wizard.querySelector('#countPhysicalLabel');
+        if (label) label.textContent = hand.value === '' ? '' : stockQtyLabel(Number(hand.value), item.unit, item.capacity_ml);
+      };
       const update = () => {
+        syncPhysicalUnits();
         const adjusted = item.expected + (Number(added.value) || 0);
-        wizard.querySelector('#countAdjustedExpected').textContent = adjusted + ' ' + item.unit;
+        wizard.querySelector('#countAdjustedExpected').textContent = stockQtyLabel(adjusted, item.unit, item.capacity_ml);
         if (hand.value === '') { diff.textContent = '—'; return; }
         const v = Number(hand.value) - adjusted;
         diff.textContent = (v > 0 ? '+' : '') + Number(v.toFixed(4)) + ' ' + item.unit;
         diff.style.color = v === 0 ? 'var(--green)' : 'var(--amber)';
       };
-      hand.oninput = update; added.oninput = update; update(); setTimeout(() => hand.select(), 20);
+      hand.oninput = update; added.oninput = update;
+      if (fullInput) { fullInput.oninput = update; openMlInput.oninput = update; }
+      update(); setTimeout(() => (fullInput || hand).select(), 20);
       wizard.querySelector('#countJump').onchange = async (e) => {
         const target = Number(e.target.value);
         try {

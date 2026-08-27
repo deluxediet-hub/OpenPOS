@@ -54,6 +54,7 @@ Use **Shop management** for the sales dashboard, barcode/SKU products, pricing a
 - Focused Top 5 dashboard plus a custom PDF builder where the owner selects summary, payments, Top 5 products, sellers, categories, low stock, expenses or full stock; A4 margins and pagination are print-safe
 - Repeated taps, scans and + actions consolidate into one product line with a single quantity across the basket, sales view and receipt
 - Complimentary stock for owner consumption, staff, friends or promotions—including measured pours—with no cash impact and full retail-value/cost reporting; sellers simply confirm owner authorization and reports show both recorder and owner
+- Bottle balances retain six-decimal accuracy internally but display at two decimals with open-container ml (for example `0.96 bottle · 718.75ml open`); stocktake accepts sealed units plus open ml
 - Full stocktakes with expected, counted and audited quantity, inventory-cost and potential-retail variance; financial stock variance is shown separately and never used to hide a cash discrepancy
 - Fast checkout with no buyer-age prompt; the configured 18+ notice remains on receipts
 - Duplicate M-Pesa confirmation-code rejection

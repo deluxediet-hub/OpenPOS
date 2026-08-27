@@ -70,6 +70,19 @@ const fmtShort = (cents) => {
   const v = (Number(cents) || 0) / 100;
   return v >= 1000 ? sym() + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'k' : sym() + v.toFixed(0);
 };
+const roundStock = (qty, places = 2) => {
+  const p = 10 ** places;
+  return Math.round((Number(qty) + Number.EPSILON) * p) / p;
+};
+function stockQtyLabel(qty, unit = 'unit', capacityMl = 0) {
+  const value = Number(qty) || 0, rounded = roundStock(value), base = `${rounded} ${unit}`;
+  if (!(Number(capacityMl) > 0) || unit === 'kg') return base;
+  const whole = Math.max(0, Math.floor(value + 0.000001));
+  const fraction = Math.max(0, value - whole);
+  if (fraction < 0.000001) return base;
+  const ml = roundStock(fraction * Number(capacityMl));
+  return `${base} · ${whole ? whole + ' full + ' : ''}${ml}ml open`;
+}
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 /* Local date, not UTC — toISOString() would roll back a day after midnight EAT. */
