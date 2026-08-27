@@ -76,7 +76,7 @@ Do not treat this software alone as legal, tax or liquor-licensing compliance. T
 
 ## Run
 
-- **Windows:** double-click `start-pos.bat`
+- **Windows:** double-click `start-pos.bat`. It hands off to `start-pos-hidden.vbs`, closes the command window and opens the browser. Startup diagnostics go to `logs/start-pos.log`.
 - **macOS/Linux:** run `./start-pos.sh`
 
 Or use:

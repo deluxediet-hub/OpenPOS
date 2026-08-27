@@ -20,6 +20,11 @@ const ck = (n, c, e = '') => {
 console.log('\n=== packaging invariants ===\n');
 
 const vbs = P('assets/start-hidden.vbs');
+const portableBat = fs.readFileSync(path.join(__dirname, '..', 'start-pos.bat'), 'utf8');
+const portableVbs = fs.readFileSync(path.join(__dirname, '..', 'start-pos-hidden.vbs'), 'utf8');
+ck('portable BAT delegates to hidden VBS and exits', /wscript\.exe/i.test(portableBat) && /start-pos-hidden\.vbs/i.test(portableBat) && /exit \/b 0/i.test(portableBat));
+ck('portable hidden launcher uses window style 0', /shell\.Run [^\n]*,\s*0,\s*False/i.test(portableVbs));
+ck('portable launcher keeps a startup log', /logs\\start-pos\.log/i.test(portableBat));
 ck('launcher writes DB outside the app dir (ProgramData)', /%ProgramData%\\OpenPOS|ProgramData.*OpenPOS/i.test(vbs) && /POS_DATA_DIR/.test(vbs));
 ck('launcher never points POS_DATA_DIR at the app folder', !/POS_DATA_DIR"\)\s*=\s*(appdir|base)\b/.test(vbs));
 ck('launcher is headless (hidden window flag 0)', /sh\.Run [^\n]*,\s*0,\s*False/.test(vbs));

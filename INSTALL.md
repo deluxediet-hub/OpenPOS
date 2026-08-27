@@ -14,7 +14,9 @@ The application is local-first. Do not expose port 3000 directly to the public i
 
 ### Windows
 
-Double-click `start-pos.bat`. The launcher installs dependencies on first use, starts OpenPOS and opens the browser.
+Double-click `start-pos.bat`. It immediately delegates to `start-pos-hidden.vbs`, so the command window disappears while OpenPOS continues running in the background. On first use it installs dependencies and then opens the browser. You may also double-click `start-pos-hidden.vbs` directly.
+
+Startup and server output is stored in `logs\start-pos.log`. If installation fails, OpenPOS displays a Windows message instead of leaving an invisible paused terminal.
 
 ### macOS/Linux
 
