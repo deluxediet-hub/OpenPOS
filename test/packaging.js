@@ -78,6 +78,11 @@ ck('build bundles the Windows native better-sqlite3 via npm once', /install --om
 ck('build bundles the private node runtime', /node\.exe/.test(build) && /win-x64/.test(build));
 ck('build copies the app byte-for-byte (no transformation)', /'server\.js'/.test(build) && /Copy-Item/.test(build) && !/transform/i.test(build));
 ck('build includes modular routes and services', /'routes'/.test(build) && /'services'/.test(build));
+const installedSmoke=fs.readFileSync(path.join(__dirname,'..','packaging','test-installed.ps1'),'utf8');
+ck('installed smoke exercises sale stock printing and backup',/api\/orders/.test(installedSmoke)&&/api\/stock/.test(installedSmoke)&&/print\/receipt/.test(installedSmoke)&&/backup\.js/.test(installedSmoke)&&/verify-backup\.js/.test(installedSmoke));
+const ci=fs.readFileSync(path.join(__dirname,'..','ci','openpos-ci.yml'),'utf8');
+ck('CI includes real Chromium responsive job',/visual-retail/.test(ci)&&/test:visual/.test(ci)&&/CHROME_BIN/.test(ci));
+ck('CI silently installs and exercises compiled installer',/Install silently on a clean path/.test(ci)&&/test-installed\.ps1/.test(ci));
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===\n`);
 process.exit(fail ? 1 : 0);

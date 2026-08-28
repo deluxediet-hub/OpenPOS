@@ -11,7 +11,10 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const browserPath = process.env.CHROME_BIN || [
+  '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'
+].find((file) => fs.existsSync(file));
 
 const PORT = Number(process.env.RPORT || 3990);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -127,6 +130,7 @@ async function clickNav(page, key) {
 }
 
 (async () => {
+  if (!browserPath) throw new Error('No Chrome/Chromium executable found. Set CHROME_BIN for the visual suite.');
   /* isolated server + throwaway DB */
   const db = path.join(os.tmpdir(), `pos-responsive-${process.pid}.db`);
   for (const f of [db, db + '-wal', db + '-shm']) { try { fs.unlinkSync(f); } catch {} }
@@ -149,7 +153,8 @@ async function clickNav(page, key) {
   });
 
   const browser = await puppeteer.launch({
-    headless: 'new', args: ['--no-sandbox', '--disable-dev-shm-usage'], protocolTimeout: 120000
+    executablePath: browserPath, headless: 'new',
+    args: ['--no-sandbox', '--disable-dev-shm-usage'], protocolTimeout: 120000
   });
   browser.on('targetcreated', async (t) => {
     try { (await t.page()).on('dialog', (d) => d.dismiss().catch(() => {})); } catch {}
@@ -363,6 +368,35 @@ async function clickNav(page, key) {
   fresh.kill('SIGTERM');
   await sleep(200);
   for (const f of [freshDb, freshDb + '-wal', freshDb + '-shm']) { try { fs.unlinkSync(f); } catch {} }
+
+  /* Primary retail experience on the supported phone/tablet widths. */
+  console.log('\n--- wines & spirits retail experience ---');
+  const retailDb=path.join(os.tmpdir(),`pos-retail-responsive-${process.pid}.db`),retailPort=PORT+2;
+  for(const f of [retailDb,retailDb+'-wal',retailDb+'-shm']){try{fs.unlinkSync(f);}catch{}}
+  const retailServer=spawn(process.execPath,[path.join(__dirname,'..','server.js')],{
+    env:{...process.env,PORT:String(retailPort),POS_DB:retailDb,TZ:'Africa/Nairobi'},stdio:['ignore','pipe','pipe']});
+  const RB=`http://127.0.0.1:${retailPort}`;
+  for(let i=0;i<60;i++){try{if((await fetch(RB+'/healthz')).ok)break;}catch{}await sleep(200);}
+  await fetch(RB+'/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    business:{business_name:'Responsive Wines',business_type:'wines_spirits'},owner_name:'Owner',owner_pin:'0000',sample:true})});
+  let retailTillOpened=false;
+  for(const vp of VIEWPORTS.filter((x)=>x.cls!=='desktop'||x.w===1440)){
+    const rp=await freshPage(browser,vp);await rp.goto(RB+'/',{waitUntil:'networkidle2'});await login(rp,'1234');
+    if(!retailTillOpened){await rp.evaluate(async()=>{await api('/api/shifts',{body:{opening_float:0,opening_mpesa:0,opening_card:0}});await loadBootstrap();await navigate('tables');});retailTillOpened=true;await sleep(700);}
+    else{await rp.evaluate(async()=>{await loadBootstrap();await navigate('tables');});await sleep(700);}
+    let rg=await rp.evaluate(probe);
+    ck(`retail ${vp.name}: sale screen has no horizontal overflow`,rg.docW<=rg.winW+1,`doc=${rg.docW} win=${rg.winW} ${rg.overflowers.join(',')}`);
+    ck(`retail ${vp.name}: product and cart panels render`,rg.menuVisible&&rg.billVisible);
+    if(vp.cls==='phone')ck(`retail ${vp.name}: navigation is at bottom`,rg.railBottom,'railH='+rg.railH);
+    await rp.evaluate(()=>document.querySelector('.item:not(.out)').click());await sleep(500);
+    await rp.evaluate(()=>document.querySelector('#toBill').click());await rp.waitForSelector('#payForm');
+    const retailPayment=await rp.evaluate(()=>({tips:document.querySelectorAll('[data-tip],#tipInp').length,methods:document.querySelectorAll('.mbtn').length,overflow:document.documentElement.scrollWidth<=innerWidth+1}));
+    ck(`retail ${vp.name}: payment remains Cash/Card/M-Pesa only`,retailPayment.methods===3&&retailPayment.tips===0);
+    ck(`retail ${vp.name}: payment modal fits viewport`,retailPayment.overflow);
+    await rp.screenshot({path:path.join(SHOTS,`retail-${vp.name}.png`)});await rp.close();
+  }
+  retailServer.kill('SIGTERM');await sleep(200);
+  for(const f of [retailDb,retailDb+'-wal',retailDb+'-shm']){try{fs.unlinkSync(f);}catch{}}
 
   await browser.close();
   server.kill('SIGTERM');
