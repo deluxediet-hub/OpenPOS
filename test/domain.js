@@ -86,6 +86,33 @@ ck('expected with nothing but float', D.expectedCash({ openingFloat: 5000 }) ===
 ck('over counts positive', D.drawerVariance(41000, 40000) === 1000);
 ck('short counts negative', D.drawerVariance(39000, 40000) === -1000);
 ck('exact counts zero', D.drawerVariance(40000, 40000) === 0);
+ck('generic tender expectation includes opening, sales, refunds and expenses',
+  D.expectedTender({ opening: 1000, sales: 5000, refunds: 500, expenses: 250 }) === 5250);
+
+console.log('\nRECONCILIATION');
+const rc = (x) => D.reconcile({ tolerance: 2000, critical: 50000, ...x });
+let rr = rc({ cashVariance: 0, mpesaVariance: 0, cardVariance: 0, stockVariance: 0, stockCoverage: 'full' });
+ck('full exact match is fully balanced', rr.status === 'FULLY BALANCED' && rr.overall_variance === 0 && !rr.requires_note);
+rr = rc({ cashVariance: 150000, stockVariance: -150000, stockCoverage: 'full' });
+ck('cash over offsets stock shortage without false shortage', rr.status === 'RECONCILED — POSSIBLE UNRECORDED SALES' && rr.overall_variance === 0 && rr.requires_note);
+rr = rc({ cashVariance: -10000, stockVariance: 0, stockCoverage: 'full' });
+ck('cash shortage remains independently visible', rr.cash_variance === -10000 && /SHORTAGE/.test(rr.status));
+rr = rc({ cashVariance: 10000, stockVariance: 0, stockCoverage: 'full' });
+ck('cash surplus remains independently visible', rr.cash_variance === 10000 && /OVERAGE/.test(rr.status));
+rr = rc({ stockVariance: -10000, stockCoverage: 'full' });
+ck('stock shortage is classified', rr.stock_retail_variance === -10000 && /SHORTAGE/.test(rr.status));
+rr = rc({ stockVariance: 10000, stockCoverage: 'full' });
+ck('stock surplus is classified', rr.stock_retail_variance === 10000 && /OVERAGE/.test(rr.status));
+rr = rc({ cashVariance: 0, stockVariance: null, stockCoverage: 'none' });
+ck('no count never pretends stock variance is zero', rr.status === 'TENDERS BALANCED — STOCK NOT COUNTED' && rr.stock_retail_variance === null && rr.overall_variance === null && !rr.requires_note);
+rr = rc({ cashVariance: 0, stockVariance: 0, stockCoverage: 'partial' });
+ck('partial count is explicitly scoped', rr.status === 'TENDERS BALANCED — PARTIAL STOCK COUNT' && rr.stock_coverage === 'partial');
+rr = rc({ cashVariance: 150000, stockVariance: -150000, stockCoverage: 'partial' });
+ck('partial offset is explicitly scoped', rr.status === 'SCOPED RECONCILED — POSSIBLE UNRECORDED SALES' && rr.overall_variance === 0);
+rr = rc({ cashVariance: -60000, stockVariance: null, stockCoverage: 'none' });
+ck('critical tender shortage without count is explicit', rr.status === 'CRITICAL TENDER SHORTAGE — STOCK NOT COUNTED' && rr.requires_note);
+rr = rc({ mpesaVariance: 2500, cardVariance: -2500, stockVariance: 0, stockCoverage: 'full' });
+ck('offsetting tender methods are reconciled but not fully balanced', rr.status === 'RECONCILED — OFFSETTING VARIANCES' && rr.tender_variance === 0);
 
 /* ------------------------- recipes ------------------------- */
 console.log('\nRECIPES / BOM');

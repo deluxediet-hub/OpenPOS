@@ -121,7 +121,10 @@ module.exports = function register(app, {
 
   app.get('/api/settings', requireAuth, requireRole('manager', 'admin'), (req, res) => res.json(getSettings()));
   app.put('/api/settings', requireAuth, requireRole('manager', 'admin'), (req, res) => {
-    for (const [k, v] of Object.entries(req.body || {})) {
+    const body=req.body||{};
+    if(body.stock_count_close_policy!==undefined&&!['none','any','full'].includes(String(body.stock_count_close_policy)))
+      return res.status(400).json({error:'Stock count close policy must be none, any or full'});
+    for (const [k, v] of Object.entries(body)) {
       if (typeof v === 'boolean') setSetting(k, v ? '1' : '0');
       else if (v !== undefined) setSetting(k, v);
     }

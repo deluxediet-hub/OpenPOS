@@ -25,8 +25,8 @@ The sequence is practical for a very small shop and the application enforces sev
 - Retail sales cannot start without an open till.
 - Sellers cannot continue selling once stocktake changes the till to reconciliation mode.
 - Till close is blocked while sales remain open or billed.
-- Till close is blocked until a full stocktake has been completed after that till opened.
-- Every stock item must be counted or deliberately skipped/no-change before stocktake completion.
+- Till close enforces the owner-configured stock-count policy: no count, any closing count or a full count.
+- Every product selected in a full/category/selected/cycle/spot count must be counted or deliberately skipped/no-change before completion.
 - Non-zero reconciliation requires an explanation.
 - Cash, M-Pesa, Card and stock variance are shown separately and together.
 - The final status distinguishes genuine balance from offsetting discrepancies.
@@ -277,7 +277,7 @@ Before starting stocktake:
 
 ### Important behavior
 
-Starting a retail stocktake changes the till to **reconciling**. New sales and payments are then blocked until close is completed. Do not start stocktake early or for a casual mid-day count.
+Starting a stock count marked **Use this count for the current till close** changes the till to **reconciling** and blocks new sales until close. A non-closing cycle/spot count leaves the till open, but completion is rejected if stock moved after its snapshot.
 
 OpenPOS auto-voids empty retail sale tabs during close, but non-empty open or billed sales block closure.
 
@@ -431,7 +431,7 @@ The PDF builder is suitable for a daily owner pack, but fixed API limits can tru
 | Complimentary | Stock/cost/audit plus simple owner declaration | Owner reviews daily | Pilot-ready under review |
 | Return | Owner role, limits, stock option, receipt | Avoid known duplicate/multi-line discount edge cases | Needs fix |
 | Stop sales | Stocktake puts till in reconciling mode | Announce cutoff and resolve customers first | Strong |
-| Full stocktake | Required, complete item list, frozen expected | Recount large/high-value differences | Strong pilot |
+| Physical stock count | Configurable full/scoped count with frozen expected | Recount large/high-value differences; never treat uncounted stock as zero variance | Strong pilot |
 | Tender entry | Cash/M-Pesa/Card actuals mandatory | Count independently and enter carefully | Strong pilot |
 | Variance decision | Separate and combined statuses | Investigate; status is not proof | Strong pilot |
 | Shift close | Blocks open sales and missing stocktake | Review before irreversible close | Strong pilot |

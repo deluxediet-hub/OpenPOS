@@ -20,7 +20,7 @@ const declarations = (allRouteSource.match(/app\.(?:get|post|put|patch|delete)\(
 const countEndpoint = (fragment) => (allRouteSource.match(new RegExp(fragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
 
 ck('server.js is a compact composition root', server.split('\n').length < 400, `${server.split('\n').length} lines`);
-ck('route declaration count matches the retail package API expansion', declarations === 129, String(declarations));
+ck('route declaration count matches the retail package/reconciliation API expansion', declarations === 130, String(declarations));
 ck('authentication route module exists', routes.includes('routes/auth.js'));
 ck('payment and return route modules exist', routes.includes('routes/payments.js') && routes.includes('routes/returns.js'));
 ck('inventory/purchase/stocktake modules exist', routes.includes('routes/inventory.js') && routes.includes('routes/purchases.js') && routes.includes('routes/stocktakes.js'));

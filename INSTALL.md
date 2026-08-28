@@ -168,7 +168,7 @@ Database migrations run automatically, but a backup is still mandatory.
 - [ ] Till cannot close before stocktake or with open sales.
 - [ ] Closing Cash, M-Pesa and Card/EDC variances are correct and stored.
 - [ ] Extra tender that offsets missing stock at retail value produces `RECONCILED — POSSIBLE UNRECORDED SALES` and requires a note.
-- [ ] A day with no POS entries can still reconcile from actual tenders and the mandatory stocktake.
+- [ ] A day with no POS entries can still reconcile from actual tenders; if the configured close policy requires a stock count, complete the required full or scoped count.
 - [ ] PDF builder opens with every section unselected and refuses to print until at least one is chosen.
 - [ ] Owner can print sales, inventory, stocktake, reconciliation, products, deliveries, suppliers, stock movements, loyalty, gift cards, staff and audit sections independently.
 - [ ] Stock, low-stock, expenses, deliveries, payment, sales, gift-card and other aggregatable tables show totals.

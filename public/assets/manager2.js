@@ -297,7 +297,7 @@ const Manager2 = (() => {
               <div class="stat"><div class="l">Expected Card/EDC</div><div class="v">${fmt(d.expected_card || 0)}</div></div>
             </div>
             ${cur.stocktake ? `<div class="card" style="margin-top:12px;background:#101820"><div class="card-b">
-              <div class="row"><b>Stocktake financial variance</b><span class="grow"></span><span class="tag ${cur.stocktake.cost_variance < 0 ? 'bad' : cur.stocktake.cost_variance > 0 ? 'warn' : 'ok'}">${esc(cur.stocktake.reference)}</span></div>
+              <div class="row"><b>Stock count variance · ${esc(cur.stock_coverage||'partial')}</b><span class="grow"></span><span class="tag ${cur.stocktake.cost_variance < 0 ? 'bad' : cur.stocktake.cost_variance > 0 ? 'warn' : 'ok'}">${esc(cur.stocktake.reference)}</span></div>
               <div class="grid2" style="margin-top:9px"><div class="tline"><span>At inventory cost</span><b>${fmt(cur.stocktake.cost_variance)}</b></div>
                 <div class="tline"><span>At potential retail</span><b>${fmt(cur.stocktake.retail_variance)}</b></div></div>
               <div class="tiny muted" style="margin-top:7px">Recorded separately from expected cash. Changing expected cash would hide whether the difference came from an unrecorded sale, breakage, theft or a counting error.</div>
@@ -338,7 +338,7 @@ const Manager2 = (() => {
             <td class="right mono">${s.expected_card == null ? '—' : fmt(s.expected_card)}</td><td class="right mono">${s.counted_card == null ? '—' : fmt(s.counted_card)}</td>
             <td class="right mono">${s.card_variance == null ? '—' : fmt(s.card_variance)}</td><td class="right mono">${s.stock_retail_variance == null ? '—' : fmt(s.stock_retail_variance)}</td>
             <td class="right mono"><b>${s.overall_variance == null ? '—' : fmt(s.overall_variance)}</b></td>
-            <td><span class="tag ${s.reconciliation_status === 'FULLY BALANCED' ? 'ok' : s.reconciliation_status && s.reconciliation_status.startsWith('RECONCILED') ? 'warn' : 'bad'}">${esc(s.reconciliation_status || (s.status === 'open' ? 'OPEN' : '—'))}</span></td>
+            <td><span class="tag ${s.reconciliation_status === 'FULLY BALANCED' || (s.reconciliation_status||'').startsWith('TENDERS BALANCED') ? 'ok' : (s.reconciliation_status||'').includes('RECONCILED') ? 'warn' : 'bad'}">${esc(s.reconciliation_status || (s.status === 'open' ? 'OPEN' : '—'))}</span></td>
           </tr>`).join('') || '<tr><td colspan="16" class="empty">No shifts recorded.</td></tr>'}</tbody></table></div>
       </div>`;
 
@@ -363,9 +363,9 @@ const Manager2 = (() => {
       if (continueStocktake) continueStocktake.onclick = () => Retail.stocktakes(body);
       const closeShift = body.querySelector('#closeShift');
       if (closeShift) closeShift.onclick = () => {
-        const d = cur.drawer, stockRetail = (cur.stocktake || {}).retail_variance || 0;
+        const d=cur.drawer,stockRetail=cur.stocktake?cur.stocktake.retail_variance:null;
+        const stockCoverage=cur.stock_coverage||'none';
         const tolerance = Math.max(0, Number(State.settings.reconciliation_tolerance || 20) * 100);
-        const critical = Math.max(tolerance, Number(State.settings.reconciliation_critical_threshold || 500) * 100);
         modal({
           title: 'Close shift / till — reconcile operations', wide: true,
           body: `<div class="grid3">
@@ -381,8 +381,8 @@ const Manager2 = (() => {
                 <div class="tline"><span>M-Pesa variance</span><b id="vrMpesa">—</b></div>
                 <div class="tline"><span>Card variance</span><b id="vrCard">—</b></div></div>
               <div class="tline" style="margin-top:8px"><span>Total tender variance</span><b id="vrTender">—</b></div>
-              <div class="tline"><span>Stock variance at retail</span><b id="vrStock">${fmt(stockRetail)}</b></div>
-              <div class="tline total"><span>Overall operational variance</span><b id="vrOverall">—</b></div>
+              <div class="tline"><span>Stock variance at retail (${esc(stockCoverage)})</span><b id="vrStock">${stockRetail==null?'NOT COUNTED':fmt(stockRetail)}</b></div>
+              <div class="tline total"><span>${stockCoverage==='full'?'Overall operational variance':'Scoped overall variance'}</span><b id="vrOverall">—</b></div>
               <div class="center" style="margin-top:10px"><span class="tag" id="vrStatus">—</span></div>
               <p class="tiny muted" style="margin:9px 0 0">Overall = Cash + M-Pesa + Card variance + stock variance at retail. Offsetting differences can reveal sales that were made but not entered.</p>
             </div></div>
@@ -393,45 +393,39 @@ const Manager2 = (() => {
         const ov = document.querySelector('#modalRoot .ov');
         const cnt = ov.querySelector('#cnt'), cntMpesa = ov.querySelector('#cntMpesa'), cntCard = ov.querySelector('#cntCard');
         let current = null;
-        const paintVariance = (el, value) => {
-          el.textContent = (value > 0 ? '+' : value < 0 ? '−' : '') + fmt(Math.abs(value));
-          el.style.color = Math.abs(value) <= tolerance ? 'var(--green)' : 'var(--red)';
+        const paintVariance=(el,value)=>{
+          if(value==null){el.textContent='NOT AVAILABLE';el.style.color='var(--dim)';return;}
+          el.textContent=(value>0?'+':value<0?'−':'')+fmt(Math.abs(value));
+          el.style.color=Math.abs(value)<=tolerance?'var(--green)':'var(--red)';
         };
-        const classify = (cash, mpesa, card) => {
-          const tender = cash + mpesa + card, overall = tender + stockRetail;
-          const components = [cash, mpesa, card, stockRetail];
-          let status;
-          if (components.every((v) => Math.abs(v) <= tolerance)) status = 'FULLY BALANCED';
-          else if (Math.abs(overall) <= tolerance && tender > tolerance && stockRetail < -tolerance) status = 'RECONCILED — POSSIBLE UNRECORDED SALES';
-          else if (Math.abs(overall) <= tolerance) status = 'RECONCILED — OFFSETTING VARIANCES';
-          else if (overall < -critical) status = 'CRITICAL SHORTAGE';
-          else if (overall > critical) status = 'CRITICAL OVERAGE';
-          else status = overall < 0 ? 'SHORTAGE — INVESTIGATE' : 'OVERAGE — INVESTIGATE';
-          return { cash, mpesa, card, tender, overall, status };
+        let previewSequence=0;
+        const upd=async()=>{
+          const sequence=++previewSequence;
+          try{const result=await api(`/api/shifts/${cur.shift.id}/reconciliation-preview`,{body:{
+            counted_cash:Number(cnt.value)||0,counted_mpesa:Number(cntMpesa.value)||0,counted_card:Number(cntCard.value)||0}});
+            if(sequence!==previewSequence)return;current=result;
+            paintVariance(ov.querySelector('#vr'),current.cash_variance);paintVariance(ov.querySelector('#vrMpesa'),current.mpesa_variance);
+            paintVariance(ov.querySelector('#vrCard'),current.card_variance);paintVariance(ov.querySelector('#vrTender'),current.tender_variance);
+            paintVariance(ov.querySelector('#vrStock'),current.stock_retail_variance);paintVariance(ov.querySelector('#vrOverall'),current.overall_variance);
+            const status=ov.querySelector('#vrStatus');status.textContent=current.status;
+            status.className='tag '+(current.status==='FULLY BALANCED'||current.status.startsWith('TENDERS BALANCED')?'ok':current.status.includes('RECONCILED')?'warn':'bad');
+            ov.querySelector('#noteRequired').textContent=current.requires_note?'* required':'(optional)';
+          }catch(e){toast(e.message,'err');}
         };
-        const upd = () => {
-          current = classify(Math.round((Number(cnt.value) || 0) * 100) - d.expected,
-            Math.round((Number(cntMpesa.value) || 0) * 100) - (d.expected_mpesa || 0),
-            Math.round((Number(cntCard.value) || 0) * 100) - (d.expected_card || 0));
-          paintVariance(ov.querySelector('#vr'), current.cash); paintVariance(ov.querySelector('#vrMpesa'), current.mpesa);
-          paintVariance(ov.querySelector('#vrCard'), current.card); paintVariance(ov.querySelector('#vrTender'), current.tender);
-          paintVariance(ov.querySelector('#vrStock'), stockRetail); paintVariance(ov.querySelector('#vrOverall'), current.overall);
-          const status = ov.querySelector('#vrStatus'); status.textContent = current.status;
-          status.className = 'tag ' + (current.status === 'FULLY BALANCED' ? 'ok' : current.status.startsWith('RECONCILED') ? 'warn' : 'bad');
-          ov.querySelector('#noteRequired').textContent = current.status === 'FULLY BALANCED' ? '(optional)' : '* required';
-        };
-        cnt.oninput = upd; cntMpesa.oninput = upd; cntCard.oninput = upd; upd();
+        cnt.oninput=upd;cntMpesa.oninput=upd;cntCard.oninput=upd;upd();
         ov.querySelector('[data-no]').onclick = closeModal;
         ov.querySelector('[data-yes]').onclick = async () => {
           const note = ov.querySelector('#sn').value.trim();
-          if (current.status !== 'FULLY BALANCED' && !note) return toast('Add a reconciliation note for the variance', 'err');
+          if(!current)await upd();
+          if(!current)return toast('Could not calculate reconciliation','err');
+          if (current.requires_note && !note) return toast('Add a reconciliation note for the variance', 'err');
           try {
             const res = await api(`/api/shifts/${cur.shift.id}/close`, { body: {
               counted_cash: Number(cnt.value), counted_mpesa: Number(cntMpesa.value), counted_card: Number(cntCard.value),
               reconciliation_note: note, notes: note } });
             closeModal(); await loadBootstrap(); drawer(body);
-            toast(`Till closed · ${res.reconciliation.status} · overall ${fmt(res.reconciliation.overall_variance)}`,
-              res.reconciliation.status === 'FULLY BALANCED' ? 'ok' : 'err');
+            toast(`Till closed · ${res.reconciliation.status} · ${res.reconciliation.overall_variance==null?'stock overall not available':'overall '+fmt(res.reconciliation.overall_variance)}`,
+              res.reconciliation.requires_note ? 'err' : 'ok');
           } catch (e) { toast(e.message, 'err'); }
         };
       };

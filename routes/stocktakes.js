@@ -13,31 +13,53 @@ module.exports = function register(app, {
 
   app.post('/api/stock-counts', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
     if (db.prepare("SELECT id FROM stock_counts WHERE status='open'").get()) return bad(res, 'Complete the open stocktake first');
-    const retailShift = getSetting('business_type') === 'wines_spirits'
-      ? db.prepare("SELECT * FROM shifts WHERE status='open' ORDER BY id DESC LIMIT 1").get() : null;
-    if (getSetting('business_type') === 'wines_spirits' && !retailShift) return bad(res, 'Open the till before starting an end-of-day stocktake');
-    if (getSetting('business_type') === 'wines_spirits') {
-      const empty = db.prepare(`SELECT o.id,o.number FROM orders o WHERE o.status='open'
+    const retail = getSetting('business_type') === 'wines_spirits';
+    const countType=String(req.body.count_type||'full').toLowerCase();
+    if(!['full','category','selected','cycle','spot','correction'].includes(countType))return bad(res,'Unknown stock count type');
+    const forClose=req.body.for_close!==false;
+    const retailShift=retail?db.prepare("SELECT * FROM shifts WHERE status IN ('open','reconciling') ORDER BY id DESC LIMIT 1").get():null;
+    if(retail&&forClose&&!retailShift)return bad(res,'Open the till before starting a closing stock count');
+    if(retail&&forClose){
+      const empty=db.prepare(`SELECT o.id,o.number FROM orders o WHERE o.status='open'
         AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id=o.id AND oi.status!='void')`).all();
-      for (const order of empty) {
-        db.prepare("UPDATE orders SET status='void',closed_at=datetime('now','localtime'),closed_by=? WHERE id=?").run(req.user.id, order.id);
-        audit(req.user, 'order.auto_void_empty', `#${order.number} before stocktake`);
+      for(const order of empty){
+        db.prepare("UPDATE orders SET status='void',closed_at=datetime('now','localtime'),closed_by=? WHERE id=?").run(req.user.id,order.id);
+        audit(req.user,'order.auto_void_empty',`#${order.number} before stocktake`);
       }
+      const openSales=db.prepare("SELECT COUNT(*) c FROM orders WHERE status IN ('open','billed')").get().c;
+      if(openSales)return bad(res,`Close or void ${openSales} non-empty sale(s) before stocktake`);
     }
-    const openSales = db.prepare("SELECT COUNT(*) c FROM orders WHERE status IN ('open','billed')").get().c;
-    if (getSetting('business_type') === 'wines_spirits' && openSales) return bad(res, `Close or void ${openSales} non-empty sale(s) before stocktake`);
-    const reference = String(req.body.reference || `COUNT-${todayLocal()}`).trim();
+
+    const allStock=db.prepare('SELECT id,qty,name FROM stock_items ORDER BY name').all();
+    let selected=allStock,categoryId=null,scopeLabel='All stock';
+    if(countType==='category'){
+      categoryId=Number(req.body.category_id)||null;
+      const category=categoryId?db.prepare('SELECT id,name FROM categories WHERE id=?').get(categoryId):null;
+      if(!category)return bad(res,'Choose a valid category for this count');
+      const ids=new Set(db.prepare(`SELECT DISTINCT r.stock_item_id id FROM recipes r JOIN menu_items m ON m.id=r.menu_item_id
+        WHERE m.category_id=?`).all(categoryId).map((x)=>x.id));
+      selected=allStock.filter((x)=>ids.has(x.id));scopeLabel=category.name;
+    }else if(countType!=='full'){
+      const ids=new Set((Array.isArray(req.body.stock_item_ids)?req.body.stock_item_ids:[]).map(Number).filter(Number.isInteger));
+      selected=allStock.filter((x)=>ids.has(x.id));scopeLabel=String(req.body.scope_label||countType).trim()||countType;
+    }
+    if(!selected.length)return bad(res,'Choose at least one stock product to count');
+    const coverage=allStock.length?selected.length/allStock.length:1;
+    const reference=String(req.body.reference||`COUNT-${todayLocal()}`).trim();
     let id;
-    const tx = db.transaction(() => {
-      id = db.prepare('INSERT INTO stock_counts(reference,notes,started_by) VALUES(?,?,?)')
-        .run(reference, req.body.notes || null, req.user.id).lastInsertRowid;
-      const ins = db.prepare('INSERT INTO stock_count_items(stock_count_id,stock_item_id,expected) VALUES(?,?,?)');
-      for (const stock of db.prepare('SELECT id,qty FROM stock_items ORDER BY name').all()) ins.run(id, stock.id, stock.qty);
-      if (retailShift) db.prepare("UPDATE shifts SET status='reconciling' WHERE id=?").run(retailShift.id);
-    }); tx();
-    audit(req.user, 'stocktake.start', reference);
-    broadcast('orders'); broadcast('sales');
-    res.json({ id, reference, ok: true });
+    const tx=db.transaction(()=>{
+      id=db.prepare(`INSERT INTO stock_counts(reference,notes,started_by,count_type,scope_label,category_id,for_close,shift_id,
+        total_stock_items,coverage_count,coverage_ratio) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(reference,req.body.notes||null,req.user.id,countType,scopeLabel,categoryId,forClose?1:0,
+          retailShift?retailShift.id:null,allStock.length,selected.length,coverage).lastInsertRowid;
+      const ins=db.prepare('INSERT INTO stock_count_items(stock_count_id,stock_item_id,expected) VALUES(?,?,?)');
+      for(const stock of selected)ins.run(id,stock.id,stock.qty);
+      if(retailShift&&forClose)db.prepare("UPDATE shifts SET status='reconciling' WHERE id=?").run(retailShift.id);
+    });tx();
+    audit(req.user,'stocktake.start',`${reference} · ${countType} · ${selected.length}/${allStock.length} products${forClose?' · closing count':''}`);
+    broadcast('orders');broadcast('sales');
+    res.json({id,reference,count_type:countType,scope_label:scopeLabel,for_close:forClose?1:0,
+      coverage_count:selected.length,total_stock_items:allStock.length,coverage_ratio:coverage,ok:true});
   });
 
   app.get('/api/stock-counts/:id', requireAuth, (req, res) => {
@@ -74,6 +96,10 @@ module.exports = function register(app, {
     const valueOf = (row) => submitted.has(row.stock_item_id) ? Number(submitted.get(row.stock_item_id).counted) : row.counted;
     if (rows.some((r) => valueOf(r) == null || !Number.isFinite(Number(valueOf(r)))))
       return bad(res, 'Enter or skip every product before completing the stocktake');
+    if(!count.for_close&&rows.some((r)=>{
+      const current=db.prepare('SELECT qty FROM stock_items WHERE id=?').get(r.stock_item_id);
+      return !current||Math.abs(Number(current.qty)-Number(r.expected))>0.000001;
+    }))return bad(res,'Stock changed while this spot/cycle count was open. Restart the count from a fresh snapshot',409);
     let totalCostVariance = 0, totalRetailVariance = 0;
     const tx = db.transaction(() => {
       for (const row of rows) {
@@ -102,8 +128,10 @@ module.exports = function register(app, {
     }); tx();
     const completedRows = db.prepare('SELECT * FROM stock_count_items WHERE stock_count_id=?').all(count.id);
     const variances = completedRows.filter((r) => Math.abs(Number(r.variance) || 0) > 0.000001).length;
-    audit(req.user, 'stocktake.complete', `${count.reference} · ${variances} variances · cost KSh${(totalCostVariance / 100).toFixed(2)} · retail KSh${(totalRetailVariance / 100).toFixed(2)}`);
+    audit(req.user, 'stocktake.complete', `${count.reference} · ${count.count_type} · ${count.coverage_count}/${count.total_stock_items} products · ${variances} variances · cost KSh${(totalCostVariance / 100).toFixed(2)} · retail KSh${(totalRetailVariance / 100).toFixed(2)}`);
     broadcast('stock');
-    res.json({ ok: true, variances, cost_variance: totalCostVariance, retail_variance: totalRetailVariance });
+    res.json({ ok: true, variances, cost_variance: totalCostVariance, retail_variance: totalRetailVariance,
+      count_type:count.count_type,scope_label:count.scope_label,for_close:count.for_close,
+      coverage_count:count.coverage_count,total_stock_items:count.total_stock_items,coverage_ratio:count.coverage_ratio });
   });
 };

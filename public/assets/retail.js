@@ -1,4 +1,4 @@
-/* retail.js — supplier deliveries and full stocktakes for bottle shops */
+/* retail.js — supplier deliveries and configurable physical stock counts */
 'use strict';
 
 const Retail = (() => {
@@ -124,27 +124,44 @@ const Retail = (() => {
 
   async function stocktakes(body) {
     const rows = await api('/api/stock-counts'), open = rows.find((r) => r.status === 'open');
-    body.innerHTML = `<div class="row" style="margin-bottom:14px"><div><h3 style="margin:0">Full stocktakes</h3>
-      <div class="tiny muted">Freeze an expected snapshot, count every product, then post all variances together</div></div><span class="grow"></span>
+    body.innerHTML = `<div class="row" style="margin-bottom:14px"><div><h3 style="margin:0">Physical stock counts</h3>
+      <div class="tiny muted">Full, category, selected-product, cycle or spot counts using a frozen expected snapshot</div></div><span class="grow"></span>
       ${open ? `<button class="btn primary" id="continueCount">Continue ${esc(open.reference)}</button>` : '<button class="btn primary" id="startCount">+ Start stocktake</button>'}</div>
-      <div class="card"><div class="scroll-x"><table class="tbl"><thead><tr><th>Reference</th><th>Status</th><th>Started</th><th>Completed</th><th class="right">Products</th><th class="right">Variances</th><th class="right">Cost impact</th><th class="right">Retail impact</th><th>By</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr><td><b>${esc(r.reference)}</b></td><td><span class="tag ${r.status === 'open' ? 'warn' : 'ok'}">${r.status}</span></td>
-        <td class="muted nowrap">${esc(r.started_at)}</td><td class="muted nowrap">${esc(r.completed_at || '—')}</td><td class="right">${r.lines}</td>
+      <div class="card"><div class="scroll-x"><table class="tbl"><thead><tr><th>Reference</th><th>Type / scope</th><th>Status</th><th>Started</th><th>Completed</th><th class="right">Coverage</th><th class="right">Variances</th><th class="right">Cost impact</th><th class="right">Retail impact</th><th>By</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><td><b>${esc(r.reference)}</b></td><td><span class="tag info">${esc(r.count_type||'full')}</span><div class="tiny muted">${esc(r.scope_label||'All stock')}${r.for_close?' · closing':''}</div></td><td><span class="tag ${r.status === 'open' ? 'warn' : 'ok'}">${r.status}</span></td>
+        <td class="muted nowrap">${esc(r.started_at)}</td><td class="muted nowrap">${esc(r.completed_at || '—')}</td><td class="right">${r.coverage_count||r.lines}/${r.total_stock_items||r.lines}</td>
         <td class="right">${r.variances || 0}</td><td class="right mono">${fmt(r.cost_variance || 0)}</td><td class="right mono">${fmt(r.retail_variance || 0)}</td>
         <td>${esc(r.completed_by_name || r.started_by_name || '—')}</td></tr>`).join('') ||
-        '<tr><td colspan="9" class="empty">No stocktakes yet.</td></tr>'}</tbody></table></div></div>`;
+        '<tr><td colspan="10" class="empty">No stock counts yet.</td></tr>'}</tbody></table></div></div>`;
     body.querySelector('#continueCount')?.addEventListener('click', () => countForm(open.id, body));
     body.querySelector('#startCount')?.addEventListener('click', () => startCount(body));
   }
 
   function startCount(body) {
-    modal({ title: 'Start full stocktake', body: `<label class="fld">Reference</label><input class="inp mono" id="countRef" value="COUNT-${today()}">
-      <div style="margin-top:12px"><label class="fld">Notes</label><input class="inp" id="countNotes" placeholder="End of month / shift handover…"></div>
-      <p class="tiny muted" style="margin-top:12px">This begins end-of-day reconciliation: sales stop, expected quantities are frozen, and the till can only close after every item is counted or skipped.</p>`,
+    modal({ title: 'Start physical stock count', wide:true, body: `<div class="grid3">
+      <div><label class="fld">Count type</label><select class="inp" id="countType">
+        <option value="full">Full stock count</option><option value="category">Category count</option>
+        <option value="selected">Selected products</option><option value="cycle">Cycle count</option>
+        <option value="spot">Spot count</option><option value="correction">Correction / recount</option></select></div>
+      <div><label class="fld">Reference</label><input class="inp mono" id="countRef" value="COUNT-${today()}"></div>
+      <div><label class="fld">Notes</label><input class="inp" id="countNotes" placeholder="Shift handover / weekly cycle / recount…"></div></div>
+      <div id="countCategoryWrap" class="hidden" style="margin-top:12px"><label class="fld">Category</label><select class="inp" id="countCategory">${State.categories.map((c)=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+      <div id="countProductsWrap" class="hidden" style="margin-top:12px"><label class="fld">Products to count</label>
+        <select class="inp" id="countProducts" multiple size="8">${State.stock.map((x)=>`<option value="${x.id}">${esc(x.name)} · ${esc(stockQtyLabel(x.qty,x.unit,x.capacity_ml))}</option>`).join('')}</select>
+        <div class="tiny muted" style="margin-top:5px">Use Ctrl/Command to select several products.</div></div>
+      <label class="row" style="margin-top:12px;gap:8px"><input type="checkbox" id="countForClose" checked> Use this count for the current till close</label>
+      <p class="tiny muted" style="margin-top:12px">A closing count stops sales while quantities are counted. A non-closing spot/cycle count leaves the till open but safely rejects completion if stock moved after its snapshot.</p>`,
       footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Start counting</button>' });
-    const ov = document.querySelector('#modalRoot .ov'); ov.querySelector('[data-no]').onclick = closeModal;
+    const ov = document.querySelector('#modalRoot .ov'),type=ov.querySelector('#countType');
+    const paintScope=()=>{const v=type.value;ov.querySelector('#countCategoryWrap').classList.toggle('hidden',v!=='category');
+      ov.querySelector('#countProductsWrap').classList.toggle('hidden',!['selected','cycle','spot','correction'].includes(v));
+      if(['cycle','spot'].includes(v))ov.querySelector('#countForClose').checked=false;};
+    type.onchange=paintScope;paintScope();ov.querySelector('[data-no]').onclick = closeModal;
     ov.querySelector('[data-yes]').onclick = async () => {
-      try { const r = await api('/api/stock-counts', { body: { reference: ov.querySelector('#countRef').value, notes: ov.querySelector('#countNotes').value } });
+      const selected=[...ov.querySelector('#countProducts').selectedOptions].map((x)=>Number(x.value));
+      try { const r = await api('/api/stock-counts', { body: { reference: ov.querySelector('#countRef').value,
+        notes: ov.querySelector('#countNotes').value,count_type:type.value,category_id:Number(ov.querySelector('#countCategory').value)||null,
+        stock_item_ids:selected,scope_label:type.options[type.selectedIndex].text,for_close:ov.querySelector('#countForClose').checked } });
         closeModal(); await loadBootstrap(); countForm(r.id, body); } catch (e) { toast(e.message, 'err'); }
     };
   }
@@ -252,9 +269,10 @@ const Retail = (() => {
         const r = await api(`/api/stock-counts/${id}/complete`, { body: { items: count.items.map((x) => ({
           stock_item_id: x.stock_item_id, counted: x.counted, added_qty: x.added_qty || 0 })) } });
         closeModal(); await loadBootstrap();
-        Manager.tab = 'money'; Manager.render(document.getElementById('view'));
+        if(r.for_close){Manager.tab='money';Manager.render(document.getElementById('view'));}
+        else stocktakes(body);
         const financial = r.variances ? ` · cost ${fmt(r.cost_variance)} · retail ${fmt(r.retail_variance)}` : '';
-        toast(`Stocktake posted · ${r.variances} variance(s)${financial}. Now reconcile Cash and M-Pesa.`, r.variances ? 'err' : 'ok');
+        toast(`Stock count posted · ${r.variances} variance(s)${financial}${r.for_close?'. Now reconcile the till.':''}`, r.variances ? 'err' : 'ok');
       } catch (e) { toast(e.message, 'err'); }
     };
     draw();

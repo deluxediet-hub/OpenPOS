@@ -85,7 +85,7 @@ const Manager = (() => {
         ${stat('Discounts & voids', fmt(s.discounts), s.orders_void + (retail ? ' voided sales' : ' voided checks'), 'warn')}
         ${retail ? stat('Complimentary', fmt(s.complimentary_value), `${s.complimentary_count} issue(s) · cost ${fmt(s.complimentary_cost)}`, s.complimentary_cost ? 'warn' : '') : ''}
         ${retail && latestReconciliation ? stat('Latest reconciliation', fmt(latestReconciliation.overall_variance), latestReconciliation.reconciliation_status || 'Closed',
-          latestReconciliation.reconciliation_status === 'FULLY BALANCED' ? '' : 'warn') : ''}
+          latestReconciliation.reconciliation_status === 'FULLY BALANCED' || (latestReconciliation.reconciliation_status||'').startsWith('TENDERS BALANCED') ? '' : 'warn') : ''}
       </div>
       <div class="grid" style="grid-template-columns:1.25fr 1fr">
         <div class="card"><div class="card-h"><h3>Sales by hour — ${range.from}</h3></div>
@@ -271,8 +271,9 @@ const Manager = (() => {
             rows: latestReconciliation ? [
               ['Cash variance', fmt(latestReconciliation.variance)], ['M-Pesa variance', fmt(latestReconciliation.mpesa_variance)],
               ['Card/EDC variance', fmt(latestReconciliation.card_variance)], ['Total tender variance', fmt(latestReconciliation.tender_variance)],
-              ['Stock variance at retail', fmt(latestReconciliation.stock_retail_variance)],
-              ['Overall operational variance', fmt(latestReconciliation.overall_variance)],
+              ['Stock count coverage', latestReconciliation.stock_coverage || 'legacy'],
+              ['Stock variance at retail', latestReconciliation.stock_retail_variance==null?'NOT COUNTED':fmt(latestReconciliation.stock_retail_variance)],
+              ['Overall operational variance', latestReconciliation.overall_variance==null?'NOT AVAILABLE':fmt(latestReconciliation.overall_variance)],
               ['Status', latestReconciliation.reconciliation_status || '—'], ['Note', latestReconciliation.reconciliation_note || '—']
             ] : [['No closed reconciliation in this period', '']] });
           if (selected.has('stock')) tables.push({ title: 'Stock position', head: ['Product', 'On hand', 'Unit cost', 'Value'], right: [1, 2, 3],
@@ -303,7 +304,8 @@ const Manager = (() => {
             head: ['Closed', 'By', 'Cash var.', 'M-Pesa var.', 'Card var.', 'Stock retail var.', 'Overall', 'Status'], right: [2,3,4,5,6],
             rows: periodShifts.map((x) => [(x.closed_at || x.opened_at || '').slice(0,16), x.closed_by_name || x.opened_by_name || '—',
               ((x.variance || 0)/100).toFixed(2), ((x.mpesa_variance || 0)/100).toFixed(2), ((x.card_variance || 0)/100).toFixed(2),
-              ((x.stock_retail_variance || 0)/100).toFixed(2), ((x.overall_variance || 0)/100).toFixed(2), x.reconciliation_status || x.status]),
+              x.stock_retail_variance==null?'NOT COUNTED':(x.stock_retail_variance/100).toFixed(2),
+              x.overall_variance==null?'NOT AVAILABLE':(x.overall_variance/100).toFixed(2), x.reconciliation_status || x.status]),
             footer: [`TOTAL · ${periodShifts.length} TILL(S)`, '', '', '', '', '', (periodShifts.reduce((n,x) => n + (x.overall_variance || 0),0)/100).toFixed(2), ''] });
           if (selected.has('loyalty')) { const redeem = Number(State.settings.loyalty_redeem_per) || 1; tables.push({ title: 'Customer loyalty',
             head: ['Customer', 'Phone', 'Points', 'Points value', 'Visits', 'Total spend'], right: [2,3,4,5],
@@ -906,9 +908,14 @@ const Manager = (() => {
         <div><label class="fld">Barcode scanner</label><select class="inp" id="s_scan"><option value="0" ${s.barcode_scanner_enabled !== '1' ? 'selected' : ''}>Disabled</option><option value="1" ${s.barcode_scanner_enabled === '1' ? 'selected' : ''}>Enabled everywhere</option></select>
           <div class="tiny muted" style="margin-top:5px">Use a USB/Bluetooth scanner in keyboard mode with Enter suffix. Scanning from any normal page opens the sale and adds the product.</div></div>
       </div></div>
-      <div class="card" style="margin-top:14px"><div class="card-h"><h3>Reconciliation controls</h3></div><div class="card-b grid2">
-        <div><label class="fld">Balanced tolerance (${sym()})</label><input class="inp" id="s_tol" type="number" min="0" step="1" value="${esc(s.reconciliation_tolerance || 20)}"><div class="tiny muted" style="margin-top:5px">Overall differences within this amount can be classified as reconciled.</div></div>
+      <div class="card" style="margin-top:14px"><div class="card-h"><h3>Reconciliation controls</h3></div><div class="card-b grid3">
+        <div><label class="fld">Balanced tolerance (${sym()})</label><input class="inp" id="s_tol" type="number" min="0" step="1" value="${esc(s.reconciliation_tolerance || 20)}"><div class="tiny muted" style="margin-top:5px">Differences within this amount can be classified as reconciled.</div></div>
         <div><label class="fld">Critical variance (${sym()})</label><input class="inp" id="s_crit" type="number" min="0" step="1" value="${esc(s.reconciliation_critical_threshold || 500)}"><div class="tiny muted" style="margin-top:5px">Larger unexplained shortages or overages are marked critical.</div></div>
+        <div><label class="fld">Stock count required to close</label><select class="inp" id="s_count_policy">
+          <option value="none" ${s.stock_count_close_policy==='none'?'selected':''}>No — reconcile tenders daily</option>
+          <option value="any" ${s.stock_count_close_policy==='any'?'selected':''}>Any completed closing count</option>
+          <option value="full" ${s.stock_count_close_policy==='full'?'selected':''}>Full physical count</option></select>
+          <div class="tiny muted" style="margin-top:5px">Partial counts report scoped variance and never pretend uncounted stock is balanced.</div></div>
       </div></div>` : ''}
       <div class="card" style="margin-top:14px"><div class="card-h"><h3>Receipt</h3></div><div class="card-b">
         <label class="fld">Footer message</label><input class="inp" id="s_ft" value="${esc(s.receipt_footer)}">
@@ -956,7 +963,8 @@ const Manager = (() => {
           prevent_negative_stock: body.querySelector('#s_neg')?.value || s.prevent_negative_stock || '1',
           barcode_scanner_enabled: body.querySelector('#s_scan')?.value || '0',
           reconciliation_tolerance: body.querySelector('#s_tol')?.value || '20',
-          reconciliation_critical_threshold: body.querySelector('#s_crit')?.value || '500'
+          reconciliation_critical_threshold: body.querySelector('#s_crit')?.value || '500',
+          stock_count_close_policy: body.querySelector('#s_count_policy')?.value || s.stock_count_close_policy || 'none'
         } });
         toast('Settings saved', 'ok');
         if (typeof updateScannerState === 'function') updateScannerState();

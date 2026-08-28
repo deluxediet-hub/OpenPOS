@@ -22,13 +22,13 @@ module.exports = function createReconciliationService({ db, domain, nowLocal }) 
       WHERE shift_id=? AND method='cash' AND created_at BETWEEN ? AND ?`, shift.id, from, to);
     const mpesaExpenses = value(`SELECT COALESCE(SUM(amount),0) v FROM cash_payouts
       WHERE shift_id=? AND method='mpesa' AND created_at BETWEEN ? AND ?`, shift.id, from, to);
-    const expected = domain.expectedCash({ openingFloat: shift.opening_float, cashSales, cashRefunds, payouts: cashExpenses });
+    const expected = domain.expectedTender({ opening:shift.opening_float, sales:cashSales, refunds:cashRefunds, expenses:cashExpenses });
     const mpesaRefunds = -value(`SELECT COALESCE(SUM(amount),0) v FROM payments
       WHERE method='mpesa' AND kind='refund' AND shift_id=?`, shift.id);
     const cardRefunds = -value(`SELECT COALESCE(SUM(amount),0) v FROM payments
       WHERE method='card' AND kind='refund' AND shift_id=?`, shift.id);
-    const expectedMpesa = (shift.opening_mpesa || 0) + mpesaSales - mpesaRefunds - mpesaExpenses;
-    const expectedCard = (shift.opening_card || 0) + cardSales - cardRefunds;
+    const expectedMpesa = domain.expectedTender({opening:shift.opening_mpesa,sales:mpesaSales,refunds:mpesaRefunds,expenses:mpesaExpenses});
+    const expectedCard = domain.expectedTender({opening:shift.opening_card,sales:cardSales,refunds:cardRefunds});
     return {
       cash_sales: cashSales, mpesa_sales: mpesaSales, card_sales: cardSales,
       cash_refunds: cashRefunds, mpesa_refunds: mpesaRefunds, card_refunds: cardRefunds,

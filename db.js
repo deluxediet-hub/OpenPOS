@@ -273,6 +273,9 @@ CREATE TABLE IF NOT EXISTS shifts (
   overall_variance INTEGER,
   reconciliation_status TEXT,
   reconciliation_note TEXT,
+  stock_count_id INTEGER REFERENCES stock_counts(id),
+  stock_count_type TEXT,
+  stock_coverage TEXT,
   notes          TEXT,
   status         TEXT NOT NULL DEFAULT 'open'   -- open|reconciling|closed
 );
@@ -484,6 +487,9 @@ function migrate() {
   add('shifts', 'overall_variance', 'overall_variance INTEGER');
   add('shifts', 'reconciliation_status', 'reconciliation_status TEXT');
   add('shifts', 'reconciliation_note', 'reconciliation_note TEXT');
+  add('shifts', 'stock_count_id', 'stock_count_id INTEGER REFERENCES stock_counts(id)');
+  add('shifts', 'stock_count_type', 'stock_count_type TEXT');
+  add('shifts', 'stock_coverage', 'stock_coverage TEXT');
   add('cash_payouts', 'method', "method TEXT NOT NULL DEFAULT 'cash'");
   db.exec(`
     CREATE TABLE IF NOT EXISTS gift_card_funding (
@@ -540,7 +546,11 @@ function migrate() {
       id INTEGER PRIMARY KEY AUTOINCREMENT, reference TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
       notes TEXT, started_by INTEGER REFERENCES users(id), completed_by INTEGER REFERENCES users(id),
       started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), completed_at TEXT,
-      cost_variance INTEGER NOT NULL DEFAULT 0, retail_variance INTEGER NOT NULL DEFAULT 0
+      cost_variance INTEGER NOT NULL DEFAULT 0, retail_variance INTEGER NOT NULL DEFAULT 0,
+      count_type TEXT NOT NULL DEFAULT 'full', scope_label TEXT, category_id INTEGER REFERENCES categories(id),
+      for_close INTEGER NOT NULL DEFAULT 1, shift_id INTEGER REFERENCES shifts(id),
+      total_stock_items INTEGER NOT NULL DEFAULT 0, coverage_count INTEGER NOT NULL DEFAULT 0,
+      coverage_ratio REAL NOT NULL DEFAULT 1
     );
     CREATE TABLE IF NOT EXISTS stock_count_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT, stock_count_id INTEGER NOT NULL REFERENCES stock_counts(id) ON DELETE CASCADE,
@@ -567,6 +577,18 @@ function migrate() {
   add('stock_count_items', 'retail_variance', 'retail_variance INTEGER NOT NULL DEFAULT 0');
   add('stock_counts', 'cost_variance', 'cost_variance INTEGER NOT NULL DEFAULT 0');
   add('stock_counts', 'retail_variance', 'retail_variance INTEGER NOT NULL DEFAULT 0');
+  add('stock_counts', 'count_type', "count_type TEXT NOT NULL DEFAULT 'full'");
+  add('stock_counts', 'scope_label', 'scope_label TEXT');
+  add('stock_counts', 'category_id', 'category_id INTEGER REFERENCES categories(id)');
+  add('stock_counts', 'for_close', 'for_close INTEGER NOT NULL DEFAULT 1');
+  add('stock_counts', 'shift_id', 'shift_id INTEGER REFERENCES shifts(id)');
+  add('stock_counts', 'total_stock_items', 'total_stock_items INTEGER NOT NULL DEFAULT 0');
+  add('stock_counts', 'coverage_count', 'coverage_count INTEGER NOT NULL DEFAULT 0');
+  add('stock_counts', 'coverage_ratio', 'coverage_ratio REAL NOT NULL DEFAULT 1');
+  db.prepare(`UPDATE stock_counts SET total_stock_items=CASE WHEN total_stock_items=0 THEN
+    (SELECT COUNT(*) FROM stock_items) ELSE total_stock_items END,
+    coverage_count=CASE WHEN coverage_count=0 THEN (SELECT COUNT(*) FROM stock_count_items i WHERE i.stock_count_id=stock_counts.id) ELSE coverage_count END,
+    coverage_ratio=CASE WHEN total_stock_items>0 THEN 1.0*(SELECT COUNT(*) FROM stock_count_items i WHERE i.stock_count_id=stock_counts.id)/total_stock_items ELSE 1 END`).run();
   add('goods_receipts', 'payment_method', "payment_method TEXT NOT NULL DEFAULT 'pay_later'");
   add('goods_receipts', 'payment_status', "payment_status TEXT NOT NULL DEFAULT 'unpaid'");
   add('goods_receipts', 'idempotency_key', 'idempotency_key TEXT');
@@ -694,6 +716,7 @@ const DEFAULT_SETTINGS = {
   barcode_scanner_enabled: '0',
   reconciliation_tolerance: '20',
   reconciliation_critical_threshold: '500',
+  stock_count_close_policy: 'none',       // none|any|full; tender close remains required daily
   licence_number: '',
   licence_expiry: '',
   sales_hours_enforced: '0',

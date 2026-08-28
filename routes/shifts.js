@@ -5,6 +5,23 @@ module.exports = function registerShifts(app, {
   db, domain, requireAuth, requireRole, getSetting, getSettings, todayLocal,
   drawerFigures, audit, broadcast, bad
 }) {
+  const completedCountFor=(shift)=>db.prepare(`SELECT * FROM stock_counts WHERE status='completed' AND for_close=1
+    AND (shift_id=? OR (shift_id IS NULL AND completed_at>=?)) ORDER BY id DESC LIMIT 1`).get(shift.id,shift.opened_at)||null;
+  const coverageOf=(count)=>!count?'none':(count.count_type==='full'&&Number(count.coverage_ratio)>=0.999999?'full':'partial');
+  const reconciliationFor=(shift,body,stocktake=null)=>{
+    const figures=drawerFigures(shift),settings=getSettings();
+    const counted=Math.round(Number(body.counted_cash||0)*100);
+    const countedMpesa=Math.round(Number(body.counted_mpesa||0)*100);
+    const countedCard=Math.round(Number(body.counted_card||0)*100);
+    return {figures,counted,countedMpesa,countedCard,result:domain.reconcile({
+      cashVariance:domain.drawerVariance(counted,figures.expected),
+      mpesaVariance:countedMpesa-figures.expected_mpesa,cardVariance:countedCard-figures.expected_card,
+      stockVariance:stocktake?stocktake.retail_variance:null,stockCoverage:coverageOf(stocktake),
+      tolerance:Math.max(0,Math.round(Number(settings.reconciliation_tolerance||20)*100)),
+      critical:Math.max(0,Math.round(Number(settings.reconciliation_critical_threshold||500)*100))
+    })};
+  };
+
   /* ================= CASH DRAWER RECONCILIATION (2.6) ==================== */
   app.get('/api/shifts', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
     res.json(db.prepare(`SELECT s.*, uo.name AS opened_by_name, uc.name AS closed_by_name
@@ -14,8 +31,9 @@ module.exports = function registerShifts(app, {
   app.get('/api/shifts/current', requireAuth, (req, res) => {
     const s = db.prepare("SELECT * FROM shifts WHERE status IN ('open','reconciling') ORDER BY id DESC LIMIT 1").get();
     if (!s) return res.json({ shift: null, drawer: null, stocktake: null });
-    const stocktake = db.prepare("SELECT * FROM stock_counts WHERE status='completed' AND completed_at>=? ORDER BY id DESC LIMIT 1").get(s.opened_at) || null;
-    res.json({ shift: s, drawer: drawerFigures(s), stocktake });
+    const stocktake=completedCountFor(s);
+    res.json({ shift: s, drawer: drawerFigures(s), stocktake,
+      stock_coverage:coverageOf(stocktake),stock_count_policy:getSetting('stock_count_close_policy')||'none' });
   });
   app.post('/api/shifts', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
     const open = db.prepare("SELECT * FROM shifts WHERE status IN ('open','reconciling')").get();
@@ -29,6 +47,17 @@ module.exports = function registerShifts(app, {
     broadcast('sales');
     res.json(db.prepare('SELECT * FROM shifts WHERE id=?').get(r.lastInsertRowid));
   });
+  app.post('/api/shifts/:id/reconciliation-preview', requireAuth, requireRole('seller','cashier','manager','admin'), (req,res)=>{
+    const shift=db.prepare('SELECT * FROM shifts WHERE id=?').get(req.params.id);
+    if(!shift)return bad(res,'Shift not found',404);
+    if(shift.status==='closed')return bad(res,'Shift already closed');
+    const stocktake=completedCountFor(shift);
+    const effectiveCount=getSetting('business_type')==='wines_spirits'?stocktake:{retail_variance:0,count_type:'full',coverage_ratio:1};
+    const calc=reconciliationFor(shift,req.body||{},effectiveCount);
+    res.json({...calc.result,expected_cash:calc.figures.expected,expected_mpesa:calc.figures.expected_mpesa,
+      expected_card:calc.figures.expected_card,stocktake});
+  });
+
   app.post('/api/shifts/:id/close', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
     const s = db.prepare('SELECT * FROM shifts WHERE id=?').get(req.params.id);
     if (!s) return bad(res, 'Shift not found', 404);
@@ -47,51 +76,34 @@ module.exports = function registerShifts(app, {
     }
     const openSales = db.prepare("SELECT COUNT(*) c FROM orders WHERE status IN ('open','billed')").get().c;
     if (openSales) return bad(res, `Close or void ${openSales} open sale(s) before closing the till`);
-    const stocktake = retailMode ? db.prepare("SELECT * FROM stock_counts WHERE status='completed' AND completed_at>=? ORDER BY id DESC LIMIT 1").get(s.opened_at) : null;
-    if (retailMode && !stocktake) return bad(res, 'Complete the end-of-day stocktake before closing the till');
+    const stocktake=retailMode?completedCountFor(s):null;
+    const policy=retailMode?String(getSetting('stock_count_close_policy')||'none').toLowerCase():'none';
+    if(retailMode&&policy==='any'&&!stocktake)return bad(res,'Complete a closing stock count before closing the till');
+    if(retailMode&&policy==='full'&&coverageOf(stocktake)!=='full')return bad(res,'Complete a full closing stock count before closing the till');
 
-    const counted = Math.round(Number(req.body.counted_cash) * 100);
-    const countedMpesa = Math.round(Number(req.body.counted_mpesa || 0) * 100);
-    const countedCard = Math.round(Number(req.body.counted_card || 0) * 100);
-    const fig = drawerFigures(s);
-    const variance = domain.drawerVariance(counted, fig.expected);
-    const mpesaVariance = countedMpesa - fig.expected_mpesa;
-    const cardVariance = countedCard - fig.expected_card;
-    const tenderVariance = variance + mpesaVariance + cardVariance;
-    const stockRetailVariance = stocktake ? stocktake.retail_variance : 0;
-    const overallVariance = tenderVariance + stockRetailVariance;
-    const settings = getSettings();
-    const tolerance = Math.max(0, Math.round(Number(settings.reconciliation_tolerance || 20) * 100));
-    const critical = Math.max(tolerance, Math.round(Number(settings.reconciliation_critical_threshold || 500) * 100));
-    const components = [variance, mpesaVariance, cardVariance, stockRetailVariance];
-    let reconciliationStatus;
-    if (components.every((v) => Math.abs(v) <= tolerance)) reconciliationStatus = 'FULLY BALANCED';
-    else if (Math.abs(overallVariance) <= tolerance && tenderVariance > tolerance && stockRetailVariance < -tolerance)
-      reconciliationStatus = 'RECONCILED — POSSIBLE UNRECORDED SALES';
-    else if (Math.abs(overallVariance) <= tolerance) reconciliationStatus = 'RECONCILED — OFFSETTING VARIANCES';
-    else if (overallVariance < -critical) reconciliationStatus = 'CRITICAL SHORTAGE';
-    else if (overallVariance > critical) reconciliationStatus = 'CRITICAL OVERAGE';
-    else reconciliationStatus = overallVariance < 0 ? 'SHORTAGE — INVESTIGATE' : 'OVERAGE — INVESTIGATE';
-    const reconciliationNote = String(req.body.reconciliation_note || req.body.notes || '').trim();
-    if (reconciliationStatus !== 'FULLY BALANCED' && !reconciliationNote)
-      return bad(res, 'Add a reconciliation note explaining the variance or possible missed sales');
+    const calc=reconciliationFor(s,req.body,retailMode?stocktake:{retail_variance:0,count_type:'full',coverage_ratio:1});
+    const {figures:fig,counted,countedMpesa,countedCard,result:reconciliation}=calc;
+    const reconciliationNote=String(req.body.reconciliation_note||req.body.notes||'').trim();
+    if(reconciliation.requires_note&&!reconciliationNote)
+      return bad(res,'Add a reconciliation note explaining the variance or possible missed sales');
 
     db.prepare(`UPDATE shifts SET closed_at=datetime('now','localtime'),closed_by=?,counted_cash=?,expected_cash=?,variance=?,
       counted_mpesa=?,expected_mpesa=?,mpesa_variance=?,counted_card=?,expected_card=?,card_variance=?,tender_variance=?,
-      stock_retail_variance=?,overall_variance=?,reconciliation_status=?,reconciliation_note=?,status='closed',notes=? WHERE id=?`)
-      .run(req.user.id, counted, fig.expected, variance, countedMpesa, fig.expected_mpesa, mpesaVariance,
-        countedCard, fig.expected_card, cardVariance, tenderVariance, stockRetailVariance, overallVariance,
-        reconciliationStatus, reconciliationNote || null, req.body.notes || s.notes, s.id);
-    audit(req.user, 'shift.close', `Cash ${variance / 100}, M-Pesa ${mpesaVariance / 100}, Card ${cardVariance / 100}, tender ${tenderVariance / 100}, stock retail ${stockRetailVariance / 100}, overall ${overallVariance / 100} — ${reconciliationStatus}${reconciliationNote ? ' — ' + reconciliationNote : ''}`);
-    if (variance) audit(req.user, 'drawer.variance', `Cash KSh${(variance / 100).toFixed(2)} ${variance > 0 ? 'over' : 'short'}`);
-    if (mpesaVariance) audit(req.user, 'mpesa.variance', `KSh${(mpesaVariance / 100).toFixed(2)} ${mpesaVariance > 0 ? 'over' : 'short'}`);
-    if (cardVariance) audit(req.user, 'card.variance', `KSh${(cardVariance / 100).toFixed(2)} ${cardVariance > 0 ? 'over' : 'short'}`);
-    if (stockRetailVariance) audit(req.user, 'stock.retail_variance', `KSh${(stockRetailVariance / 100).toFixed(2)}`);
+      stock_retail_variance=?,overall_variance=?,reconciliation_status=?,reconciliation_note=?,stock_count_id=?,
+      stock_count_type=?,stock_coverage=?,status='closed',notes=? WHERE id=?`)
+      .run(req.user.id,counted,fig.expected,reconciliation.cash_variance,countedMpesa,fig.expected_mpesa,reconciliation.mpesa_variance,
+        countedCard,fig.expected_card,reconciliation.card_variance,reconciliation.tender_variance,
+        reconciliation.stock_retail_variance,reconciliation.overall_variance,reconciliation.status,reconciliationNote||null,
+        stocktake?stocktake.id:null,stocktake?stocktake.count_type:null,reconciliation.stock_coverage,req.body.notes||s.notes,s.id);
+    const stockText=reconciliation.stock_retail_variance==null?'not counted':String(reconciliation.stock_retail_variance/100);
+    const overallText=reconciliation.overall_variance==null?'not available':String(reconciliation.overall_variance/100);
+    audit(req.user,'shift.close',`Cash ${reconciliation.cash_variance/100}, M-Pesa ${reconciliation.mpesa_variance/100}, Card ${reconciliation.card_variance/100}, tender ${reconciliation.tender_variance/100}, stock retail ${stockText}, overall ${overallText} — ${reconciliation.status}${reconciliationNote?' — '+reconciliationNote:''}`);
+    if(reconciliation.cash_variance)audit(req.user,'drawer.variance',`Cash KSh${(reconciliation.cash_variance/100).toFixed(2)} ${reconciliation.cash_variance>0?'over':'short'}`);
+    if(reconciliation.mpesa_variance)audit(req.user,'mpesa.variance',`KSh${(reconciliation.mpesa_variance/100).toFixed(2)} ${reconciliation.mpesa_variance>0?'over':'short'}`);
+    if(reconciliation.card_variance)audit(req.user,'card.variance',`KSh${(reconciliation.card_variance/100).toFixed(2)} ${reconciliation.card_variance>0?'over':'short'}`);
+    if(reconciliation.stock_retail_variance)audit(req.user,'stock.retail_variance',`KSh${(reconciliation.stock_retail_variance/100).toFixed(2)} · ${reconciliation.stock_coverage}`);
     broadcast('sales');
-    res.json({ ...db.prepare('SELECT * FROM shifts WHERE id=?').get(s.id), drawer: fig, stocktake,
-      reconciliation: { cash_variance: variance, mpesa_variance: mpesaVariance, card_variance: cardVariance,
-        tender_variance: tenderVariance, stock_retail_variance: stockRetailVariance, overall_variance: overallVariance,
-        status: reconciliationStatus, tolerance } });
+    res.json({...db.prepare('SELECT * FROM shifts WHERE id=?').get(s.id),drawer:fig,stocktake,reconciliation});
   });
   app.post('/api/shifts/:id/payout', requireAuth, requireRole('seller', 'cashier', 'manager', 'admin'), (req, res) => {
     const s = db.prepare('SELECT * FROM shifts WHERE id=?').get(req.params.id);
@@ -135,7 +147,7 @@ module.exports = function registerShifts(app, {
     const complimentary = s ? db.prepare(`SELECT ci.*,u.name created_by_name,a.name authorized_by_name FROM complimentary_issues ci
       LEFT JOIN users u ON u.id=ci.created_by LEFT JOIN users a ON a.id=ci.authorized_by
       WHERE ci.shift_id=? ORDER BY ci.id`).all(s.id) : [];
-    const stocktake = s ? db.prepare("SELECT * FROM stock_counts WHERE status='completed' AND completed_at>=? ORDER BY id DESC LIMIT 1").get(s.opened_at) || null : null;
+    const stocktake=s?completedCountFor(s):null;
     let drawer = null;
     if (s) drawer = s.status !== 'closed' ? drawerFigures(s)
       : { expected: s.expected_cash, counted: s.counted_cash, variance: s.variance,
@@ -143,7 +155,8 @@ module.exports = function registerShifts(app, {
         expected_card: s.expected_card, counted_card: s.counted_card, card_variance: s.card_variance,
         tender_variance: s.tender_variance, stock_retail_variance: s.stock_retail_variance,
         overall_variance: s.overall_variance, reconciliation_status: s.reconciliation_status,
-        reconciliation_note: s.reconciliation_note, payouts };
+        reconciliation_note: s.reconciliation_note, stock_coverage:s.stock_coverage,
+        stock_count_type:s.stock_count_type,payouts };
     res.json({ shift: s || null, by_method: byMethod, by_station: byStation, by_category: byCategory,
       tips, payouts, covers, units: byCategory.reduce((n, x) => n + Number(x.units || 0), 0), orders: ordersN,
       complimentary, complimentary_value: complimentary.reduce((n, x) => n + x.retail_value, 0),
