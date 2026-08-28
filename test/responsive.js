@@ -229,7 +229,7 @@ async function clickNav(page, key) {
     await login(mp, '1111');
     const TOP_SUBS = {
       'Dashboard': [], 'Reports': ['Sales', 'Labour', 'Audit log'],
-      'Menu & Pricing': ['Items', 'Options', 'Recipes', 'Happy Hour'], 'Stock': [],
+      'Products & Pricing': ['Items', 'Options', 'Recipes', 'Happy Hour'], 'Stock': [],
       'Cash & Loyalty': ['Cash Drawer', 'Loyalty'], 'Bookings': [], 'Team': ['Staff'],
       'Settings': ['Business', 'Printer', 'eTIMS / M-Pesa'] };
     for (const [topLabel, subs] of Object.entries(TOP_SUBS)) {
@@ -274,7 +274,7 @@ async function clickNav(page, key) {
         ck(`${vp.name}: Settings grid uses 2 columns`, settingsCols === 2, 'cols=' + settingsCols);
         const daypartCols = await (async () => {
           await mp.evaluate(() => {
-            const t = [...document.querySelectorAll('[data-top]')].find((x) => x.textContent === 'Menu & Pricing'); if (t) t.click();
+            const t = [...document.querySelectorAll('[data-top]')].find((x) => x.textContent === 'Products & Pricing'); if (t) t.click();
           });
           await sleep(600);
           await mp.evaluate(() => {

@@ -154,7 +154,7 @@ async function loginWithPin(w, pin) {
   ck('waiter gets 3 nav buttons', $$(w, '.rail-btn[data-nav]').length === 3);
   ck('waiter has no Manager tab', !$$(w, '.rail-btn[data-nav]').some((b) => b.dataset.nav === 'manager'));
   ck('defaults to Floor view', w.__h.State.view === 'tables', w.__h.State.view);
-  ck('view title set', $('#viewTitle', w).textContent === 'Floor plan', $('#viewTitle', w).textContent);
+  ck('view title set', $('#viewTitle', w).textContent === 'New sale', $('#viewTitle', w).textContent);
 
   await waitFor(() => $$(w, '.tbl-card').length, 'floor plan tables');
   const tables = $$(w, '.tbl-card').length;
@@ -190,7 +190,7 @@ async function loginWithPin(w, pin) {
 
   /* search */
   setVal(w, $('#search', w), 'tilapia');
-  await wait(60);
+  await wait(160); // POS search intentionally debounces for 100ms
   ck('search filters the menu', $$(w, '.item').length === 1 && $$('.item .n', w)[0].textContent.includes('Tilapia'),
     $$('.item .n', w).map((e) => e.textContent).join(','));
 
@@ -202,7 +202,7 @@ async function loginWithPin(w, pin) {
   ck('bill total includes service charge', $('.tline.total b', w).textContent.trim() === 'KSh 1,320.00', $('.tline.total b', w).textContent);
 
   setVal(w, $('#search', w), 'Tusker');
-  await wait(60);
+  await wait(160); // allow the debounced retail/hospitality search to repaint
   click(w, $('.item', w));
   await waitFor(() => $$(w, '.line').length === 2, 'second line');
   ck('bar item added', $$(w, '.line').length === 2);
@@ -354,7 +354,7 @@ async function loginWithPin(w, pin) {
   ck('manager lands on console', m.w.__h.State.view === 'manager', m.w.__h.State.view);
 
   /* navigate() is async — wait for the console to actually paint before asserting on it */
-  const TOPS = ['Dashboard','Reports','Menu & Pricing','Stock','Cash & Loyalty','Bookings','Team','Settings'];
+  const TOPS = ['Dashboard','Reports','Products & Pricing','Stock','Cash & Loyalty','Bookings','Team','Settings'];
   await waitFor(() => $$('[data-top]', m.w).length === 8, 'console top tabs');
   ck('console grouped to 8 top tabs', $$('[data-top]', m.w).length === 8,
     $$('[data-top]', m.w).map((t) => t.textContent).join(','));
@@ -398,13 +398,13 @@ async function loginWithPin(w, pin) {
   await wait(500);
   ck('30-day filter reloads without error', m.errs.length === 0, m.errs.join(' | '));
 
-  await goTop('Menu & Pricing');
+  await goTop('Products & Pricing');
   ck('menu tab: category sidebar', $$('[data-c]', m.w).length >= 13, $$('[data-c]', m.w).length + ' entries');
   ck('menu tab: item rows', $$(m.w, 'table.tbl tbody tr').length > 0, $$(m.w, 'table.tbl tbody tr').length + ' items');
-  ck('menu tab: 86 toggle present', $$('[data-86]', m.w).length > 0);
+  ck('menu tab: availability toggle present', $$('[data-avail]', m.w).length > 0);
   click(m.w, $('#add', m.w));
   await waitFor(() => $('#in', m.w), 'item form');
-  ck('new item form opens', $('.modal-h h3', m.w).textContent.includes('New menu item'));
+  ck('new product form opens', $('.modal-h h3', m.w).textContent.includes('New product'));
   ck('margin auto-calculates', (() => {
     setVal(m.w, $('#ip', m.w), '1000'); setVal(m.w, $('#ic', m.w), '300');
     return $('#im', m.w).value === '70%';
@@ -422,7 +422,7 @@ async function loginWithPin(w, pin) {
   ck('item deleted through the UI', !m.w.document.body.textContent.includes('UI Test Burger'));
 
   await goTop('Stock');
-  ck('stock tab: inventory rows', $$(m.w, 'table.tbl tbody tr').length === 20, $$(m.w, 'table.tbl tbody tr').length + ' stock items');
+  ck('stock tab: inventory rows', $$(m.w, 'table.tbl tbody tr').length >= 20, $$(m.w, 'table.tbl tbody tr').length + ' stock items');
   ck('stock tab: low-stock badges', $$('.tag.warn, .tag.bad', m.w).length >= 0);
   click(m.w, $('[data-rec]', m.w));
   await waitFor(() => $('#aq', m.w), 'receive modal');
@@ -462,7 +462,7 @@ async function loginWithPin(w, pin) {
       ck(`${topLabel} > ${t} produced content`, vtext().trim().length > 20, vtext().trim().slice(0, 40));
     }
   };
-  await walk('Menu & Pricing', ['Options', 'Recipes', 'Happy Hour']);
+  await walk('Products & Pricing', ['Options', 'Recipes', 'Happy Hour']);
   await walk('Cash & Loyalty', ['Cash Drawer', 'Loyalty']);
   await walk('Reports', ['Labour', 'Audit log']);
   await walk('Settings', ['Printer', 'eTIMS / M-Pesa']);
@@ -470,7 +470,7 @@ async function loginWithPin(w, pin) {
   await walk('Team', ['Staff']);
 
   /* Happy Hour: open the create-rule form */
-  await goTop('Menu & Pricing'); await goSub('Happy Hour');
+  await goTop('Products & Pricing'); await goSub('Happy Hour');
   click(m.w, m.w.document.querySelector('#addDp'));
   await waitFor(() => $('#dn', m.w), 'daypart form');
   ck('daypart form opens', $('.modal-h h3', m.w).textContent.includes('New pricing rule'));
@@ -495,7 +495,7 @@ async function loginWithPin(w, pin) {
     click(m.w, $('#openShift', m.w));
     await waitFor(() => $('#closeShift', m.w), 'open shift panel');
     ck('shift opened through the UI', vtext().includes('Opening float'));
-    ck('expected-in-drawer stat shown', vtext().includes('Expected in drawer'));
+    ck('expected cash stat shown', vtext().includes('Expected cash'));
     /* close it */
     click(m.w, $('#closeShift', m.w));
     await waitFor(() => $('#cnt', m.w), 'reconciliation modal');

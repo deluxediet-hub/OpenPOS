@@ -2,6 +2,7 @@
 data/*.db
 data/*.db-shm
 data/*.db-wal
+spool/*.prn
 
 # Dependencies and local test/build output.
 node_modules/

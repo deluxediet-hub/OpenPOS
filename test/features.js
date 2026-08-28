@@ -216,7 +216,17 @@ const loadToday = async () => { TODAY = (await (await fetch(BASE + '/api/today')
   ck('expected = float + sales - payouts',
     expected === 5000 + drDue.grand_total - 2000, `expected=${expected}`);
 
-  r = await cashier.post(`/api/shifts/${shift.id}/close`, { counted_cash: expected / 100 + 10 });
+  /* Hardened close refuses to ignore any earlier test orders that are still open.
+     Resolve them explicitly, just as an operator must do before cash-up. */
+  const outstanding = (await mgr.get('/api/orders')).data;
+  for (const open of outstanding) {
+    const closed = await mgr.post(`/api/orders/${open.id}/void`, { reason: 'Feature-test cleanup before shift close' });
+    if (closed.status !== 200) throw new Error(`Could not resolve open test order #${open.number}`);
+  }
+  r = await cashier.post(`/api/shifts/${shift.id}/close`, {
+    counted_cash: expected / 100 + 10,
+    reconciliation_note: 'Expected KSh 10 test overage'
+  });
   ck('close shift computes variance', r.status === 200 && r.data.variance === 1000,
     'variance=' + r.data.variance + ' expected=' + r.data.expected_cash + ' counted=' + r.data.counted_cash);
   ck('closed shift is marked closed', r.data.status === 'closed');
@@ -366,7 +376,8 @@ const loadToday = async () => { TODAY = (await (await fetch(BASE + '/api/today')
   });
   ck('configure printer', r.status === 200 && r.data.printer_enabled === '1', 'printer_enabled=' + (r.data||{}).printer_enabled);
 
-  r = await cashier.post('/api/print/receipt/' + bomOrder.id + '?paid=1');
+  /* Drawer kick is deliberately explicit: ordinary reprints must never open it. */
+  r = await cashier.post('/api/print/receipt/' + bomOrder.id + '?paid=1&kick=1');
   ck('receipt print accepted', r.status === 200 && r.data.sent === true, JSON.stringify(r.data));
   await new Promise((res) => setTimeout(res, 300));
   const bytes = Buffer.concat(received);
@@ -378,7 +389,13 @@ const loadToday = async () => { TODAY = (await (await fetch(BASE + '/api/today')
   ck('receipt contains the item sold', bytes.includes(Buffer.from('Nyama Choma')));
   ck('receipt contains modifier chosen', bytes.includes(Buffer.from('Medium')));
 
-  r = await chef.post('/api/print/kitchen/' + dpOrder.id, { station: 'bar' });
+  /* Earlier open orders were correctly resolved before shift close; create a fresh
+     sent line for the independent kitchen-printer contract test. */
+  const printTable = await freeTable();
+  const printOrder = (await waiter.post('/api/orders', { table_id: printTable.id, people: 1 })).data;
+  await waiter.post(`/api/orders/${printOrder.id}/items`, { items: [{ menu_item_id: tusker.id, qty: 1 }] });
+  await waiter.post(`/api/orders/${printOrder.id}/send`);
+  r = await chef.post('/api/print/kitchen/' + printOrder.id, { station: 'bar' });
   ck('kitchen ticket print accepted', r.status === 200 && r.data.sent === true, JSON.stringify(r.data));
   await new Promise((res) => setTimeout(res, 300));
   const all = Buffer.concat(received);
