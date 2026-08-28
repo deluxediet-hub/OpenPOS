@@ -124,11 +124,6 @@ async function login(page, pin) {
   await sleep(700);
 }
 
-async function clickNav(page, key) {
-  await page.evaluate((k) => document.querySelector(`[data-nav="${k}"]`).click(), key);
-  await sleep(900);
-}
-
 (async () => {
   if (!browserPath) throw new Error('No Chrome/Chromium executable found. Set CHROME_BIN for the visual suite.');
   /* isolated server + throwaway DB */

@@ -1,99 +1,181 @@
 # OpenPOS — Kenyan Wines & Spirits Retail POS
 
-A local, browser-based point of sale adapted for a small Kenyan wines and spirits shop. It is designed around one owner/administrator and about two shop sellers—not restaurant tables, waiters or a kitchen.
+OpenPOS is a local-first point of sale for a small wines and spirits shop with one owner and a few sellers. It runs on one shop computer and is accessed from that computer or trusted phones/tablets on the same LAN.
 
-Node.js + Express + SQLite, with no frontend build step. Prices are in KES, VAT defaults to 16% inclusive, M-Pesa is supported as a recorded tender, and receipts include the shop's KRA PIN and an 18+ responsible-drinking notice.
+- Node.js + Express
+- SQLite + `better-sqlite3`
+- Plain JavaScript frontend; no build step
+- KES / KSh
+- VAT-inclusive prices by default
+- Direct ESC/POS receipt printing with browser fallback
+- Offline operation after installation
+- Windows installer/portable launch support
 
-## Shop roles
+## Roles
 
 | Role | Access |
 |---|---|
-| **Owner / Admin** | Unlimited access: sales, payments, receipts, stock, products and prices, reports, refunds, discounts, staff, settings, integrations and audit history |
-| **Seller** | Open/close the till, make sales, accept Cash/Card/M-Pesa, print/reprint receipts, receive documented deliveries, report Cash/M-Pesa expenses and perform guided stocktakes; no direct stock editing |
+| **Owner/Admin** | Sales, products, packages, costs, stock controls, reports, returns, discounts, staff, settings, printer, backup and audit |
+| **Seller** | Open/close the shared till, sell, take Cash/Card/M-Pesa, reprint receipts, receive deliveries, record expenses, conduct stock counts and declare owner-authorized complementaries |
 
-Sellers cannot change business settings, product prices, staff permissions, reports, refunds or the audit log. For a discount, void or refund, the seller signs out and the owner/admin performs the action. Legacy restaurant roles remain understood by the API so an existing OpenPOS database can still be migrated, but new shops only need `admin` and `seller`.
+Every person should use a separate 4–6 digit PIN. Protected seller actions use a one-time owner approval without changing the seller's signed-in identity.
+
+## Retail capabilities
+
+### Sales and payments
+
+- Barcode/SKU search and keyboard-wedge scanner mode
+- Compact phone-first product grid and cart
+- Repeated taps/scans consolidate into one line
+- Cash, Card and manually confirmed M-Pesa
+- Split/partial payments with truthful balance-due receipts
+- Server-validated Cash tender and change
+- Idempotent checkout and close-once stock posting
+- Duplicate M-Pesa reference rejection
+- Item-linked, tender-limited returns
+- Return, paid, partial-payment and labelled reprint receipts
+
+### Wines and spirits stock
+
+- Whole bottles, cans, pieces and kegs
+- Half, quarter, eighth/shot and custom-ml bottle sales
+- Named shot/glass products linked to a source bottle
+- Weighed keg sources reconciled by physical count
+- Package conversions such as case of 12 or crate of 24
+- Package-specific SKU, barcode, purchase cost and sale price
+- One canonical stock balance for package, bottle and portion sales
+- Six-decimal internal precision with readable open-container ml
+- Negative-stock prevention
+- Reorder levels and low-stock reporting
+
+### Purchases and movements
+
+- Suppliers and goods receipts
+- Base-unit or package receiving
+- Cash/M-Pesa/other/pay-later purchase state
+- Idempotent browser delivery submission
+- Structured stock ledger with movement type, before/change/after, cost, actor and reference
+- Opening stock, purchase, sale, return, stocktake, adjustment, breakage, spoilage, complimentary and supplier-return movement types
+
+### Counts and reconciliation
+
+Physical count types:
+
+- Full
+- Category
+- Selected products
+- Cycle
+- Spot
+- Correction/recount
+
+Owner-configurable close policy:
+
+- `none` — daily tender close without requiring stock count
+- `any` — require any closing count
+- `full` — require complete stock count
+
+Cash, M-Pesa and Card variances remain separate. Full/scoped stock variance is shown independently. No-count close reports stock as **NOT COUNTED**, never as zero.
+
+```text
+Tender variance  = Cash variance + M-Pesa variance + Card variance
+Overall variance = Tender variance + counted-scope stock variance
+```
+
+Offsetting tender overage and stock shortage is identified as possible unrecorded sales rather than falsely called fully balanced.
+
+### Seller-controlled records
+
+The existing simple shop policy is preserved:
+
+- Sellers receive deliveries.
+- Sellers record Cash/M-Pesa expenses.
+- Sellers enter added stock during a count.
+- Sellers declare a complimentary by ticking **I confirm the owner authorized this complimentary issue**, with an optional phone/message note.
+
+All remain owner-visible in reports and audit history.
 
 ## First run
 
-1. Start the app and enter the shop name, address, phone and KRA PIN.
-2. Create the owner/admin account with a unique 4–6 digit PIN.
-3. Optionally load the wines and spirits starter catalogue.
-4. Sign in as owner and verify every selling price, cost and opening stock count before trading.
-5. Under **Team**, add or edit the two seller accounts and give each person a private PIN.
+1. Start OpenPOS.
+2. Enter shop identity and receipt details.
+3. Create the owner/admin PIN.
+4. Optionally import a CSV or load starter products.
+5. Sign in as owner and verify prices, costs and opening stock.
+6. Change/remove starter seller PINs before trading.
+7. Configure products, package conversions, suppliers, count policy, printer and backup procedure.
 
-The optional starter catalogue includes common Kenyan whisky, vodka, gin, rum/brandy, wine, beer/cider, liqueurs and mixers. Each product has matching bottle stock, so one unit sold automatically removes one unit from stock. Starter seller accounts are included only as an initial convenience (`Seller 1`: PIN `1234`; `Seller 2`: PIN `2345`) and their PINs should be changed before the shop goes live.
+CSV resources:
 
-A blank setup is also supported. Creating a retail product automatically creates its matching stock record and one-unit sale deduction.
+- [Import guide](docs/PRODUCT_IMPORT.md)
+- [Template](docs/product-import-template.csv)
 
 ## Daily workflow
 
-### Seller
+```text
+Start PC → sign in → enter opening Cash/M-Pesa/Card → open till
+→ sell / receive / record expenses and complementaries
+→ resolve open sales → perform configured stock count if required
+→ enter actual tenders → reconcile and close
+→ owner reviews exceptions → create/verify backup
+```
 
-1. Sign in with an individual PIN and open the morning till with opening Cash and M-Pesa balances.
-2. The app opens directly into a ready **New sale** basket. Scan/search products and take Cash, Card or M-Pesa payment.
-3. Print the receipt; a completed sale automatically deducts bottle/unit stock.
-4. Receive supplier deliveries using an invoice/delivery-note number. Sellers cannot directly edit or quick-adjust stock.
-5. Record business expenses against Cash or M-Pesa so they reduce the correct expected balance.
-6. At day end, close every sale and start stocktake. Count one product at a time, entering unrecorded added stock and physical stock at hand, or choose **No change / Skip**.
-7. After stocktake, enter actual Cash and M-Pesa balances, review both variances and close the till. Any automatically prepared sale with no products is discarded rather than blocking reconciliation.
+See [INSTALL.md](INSTALL.md) for deployment and [SHOP_PILOT_ACCEPTANCE.md](SHOP_PILOT_ACCEPTANCE.md) for the real-shop acceptance run.
 
-### Owner
-
-Use **Shop management** for the sales dashboard, barcode/SKU products, pricing and costs, suppliers, delivery history, full stocktakes, stock alerts, staff, cash reconciliation, reports, KRA/eTIMS configuration and full audit history. The owner/admin account has all rights. The owner may sell through an already-open seller till; the sale and receipt identify the owner as the seller. If no till is open, starting an owner sale opens a zero-balance owner till automatically instead of interrupting checkout.
-
-## Retail controls included
-
-- Owner-controlled USB/Bluetooth barcode scanner mode; when enabled, scanning from any normal page opens the current sale and adds the matching barcode/SKU
-- Guided product setup with size, category and selling-unit dropdowns, plus owner-only CSV import during onboarding or later for up to 2,000 products ([template](docs/product-import-template.csv) · [format guide](docs/PRODUCT_IMPORT.md))
-- Compact **Sell amount** dropdown directly on the sales tab: Whole, Half, Quarter, ⅛ shot or an inline custom-ml field; each product tile previews the selected ml and equivalent price before proportional stock deduction
-- Weighed-keg stock mode records theoretical pour usage but adjusts actual kg only during end-of-shift stocktake
-- Stocktake product jumper with automatic save, previous/next navigation and input auto-selection
-- Live stock shown at the till with optional negative-stock prevention
-- Supplier directory and fast receiving: staff select product and quantity, invoice/reference is optional, configured costs remain owner-controlled, and Cash/M-Pesa/other/pay-later status is tracked
-- Whole-keg sales plus shot/glass products that show available servings and deduct the correct fraction from a tracked bottle or keg
-- Comprehensive PDF builder starts fully unselected and lets the owner include only needed sections: sales summary, payments, Top 5 or all product sales, sellers, categories, low/full stock, stocktake, expenses, complementaries, reconciliation/till history, products, deliveries, suppliers, stock movements, loyalty, gift cards, staff or audit; financial reports include explicit totals
-- Repeated taps, scans and + actions consolidate into one product line with a single quantity across the basket, sales view and receipt
-- Complimentary stock for owner consumption, staff, friends or promotions—including measured pours—with no cash impact and full retail-value/cost reporting; sellers simply confirm owner authorization and reports show both recorder and owner
-- Bottle balances retain six-decimal accuracy internally but display at two decimals with open-container ml (for example `0.96 bottle · 718.75ml open`); stocktake accepts sealed units plus open ml
-- Full stocktakes retain quantity, inventory-cost and potential-retail variance separately from tender records
-- Final operational reconciliation combines Cash + M-Pesa + Card/EDC tender variance with stock variance at retail; matching cash overage and stock shortage is flagged as possible unrecorded sales instead of being silently hidden
-- Fast checkout with no buyer-age prompt; the configured 18+ notice remains on receipts
-- Duplicate M-Pesa confirmation-code rejection
-- Alcohol licence metadata and responsible-retail receipt warning
-- Phone-first app layout with compact non-overlapping product prices, two-column product cards, a fixed bottom navigation bar, scrollable sale actions and touch-sized quantity/payment controls
-- Temporary lockout after repeated invalid PIN attempts
-
-## Kenya-specific notes
-
-- Currency: KES / KSh
-- VAT: 16% inclusive by default; a KSh 200 selling price remains KSh 200 and VAT is extracted for reporting
-- Payments: Cash, Card and manually confirmed M-Pesa
-- Business name, KRA PIN, address and phone print on receipts
-- Receipts display **18+ ONLY · PLEASE DRINK RESPONSIBLY**
-- eTIMS and Daraja screens currently shape and test configuration payloads only; they do not transmit live requests. See [AUDIT.md](AUDIT.md) before production use.
-
-Do not treat this software alone as legal, tax or liquor-licensing compliance. The shop remains responsible for its county liquor licence, age-verification procedure, KRA/eTIMS setup, receipt obligations, backups and access controls.
-
-## Run
-
-- **Windows:** double-click `start-pos.bat`. It hands off to `start-pos-hidden.vbs`, closes the command window and opens the browser. Startup diagnostics go to `logs/start-pos.log`.
-- **macOS/Linux:** run `./start-pos.sh`
-
-Or use:
+## Run from source
 
 ```bash
-npm install
+npm ci
 npm start
 ```
 
 Open `http://localhost:3000`.
 
-| Environment variable | Default | Purpose |
-|---|---:|---|
-| `PORT` | `3000` | HTTP port |
-| `POS_DB` | `data/pos.db` | SQLite database path |
+Portable launchers:
 
-Data persists in `data/pos.db`. Back it up daily with `npm run backup` and test restoring backups regularly.
+- Windows: `start-pos.bat`
+- macOS/Linux: `./start-pos.sh`
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `3000` | Server port |
+| `POS_DB` | `data/pos.db` | Explicit SQLite file |
+| `POS_DATA_DIR` | `data/` | SQLite directory when `POS_DB` is unset |
+| `POS_BACKUP_DIR` | `backups/` | Backup destination |
+| `POS_BACKUP_KEEP` | `14` | Local rotating copies; `0` keeps all |
+| `POS_BACKUP_WEBHOOK` | empty | Optional off-device HTTPS PUT destination |
+
+Do not expose port 3000 directly to the public internet. Use a trusted private shop network; use VPN/HTTPS controls for remote access.
+
+## Windows installer
+
+The installer bundles a private Node runtime and production dependencies. Business data, backups and print spool live under `%ProgramData%\OpenPOS`, outside Program Files.
+
+Build on Windows with Inno Setup 6:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\packaging\build-installer.ps1
+```
+
+Output:
+
+```text
+packaging\output\OpenPOS-Setup.exe
+```
+
+See [packaging/README-PACKAGING.md](packaging/README-PACKAGING.md).
+
+## Backup and recovery
+
+Installed systems provide an owner-facing **Backup & Recovery** screen and Start-menu verification shortcut.
+
+From source:
+
+```bash
+npm run backup
+npm run backup:verify
+```
+
+Backups run SQLite integrity checks. Keep a separate off-device copy and prove restoration before live use.
 
 ## Tests
 
@@ -101,38 +183,38 @@ Data persists in `data/pos.db`. Back it up daily with `npm run backup` and test 
 npm test
 ```
 
-The suites create throwaway databases and do not modify the shop database.
+Current standard baseline:
+
+```text
+665 passed, 0 failed
+```
+
+Real-browser responsive suite:
+
+```bash
+CHROME_BIN=/path/to/chrome npm run test:visual
+```
+
+Tests use throwaway databases and backup directories. The visual suite regenerates screenshots under `shots/`; generated screenshots and print jobs are not versioned.
 
 ## Project layout
 
 ```text
-server.js                 Express API, permissions, sales, payments and SSE
-db.js                     SQLite schema, shop defaults and starter catalogue
-public/index.html         App shell and first-run setup
-public/assets/app.js      Login and role-based navigation
-public/assets/pos.js      Retail sales screen and basket
-public/assets/cashier.js  Payments, cash drawer and receipt lookup
-public/assets/manager.js  Products, stock, staff, settings and reports
-public/assets/print.js    Thermal/browser receipt output
-lib/                      Domain, ESC/POS and integration helpers
-test/                     Domain, API and UI tests
+server.js                 Express composition/startup
+routes/                   Focused API route modules
+services/                 Sale close-out, inventory, reconciliation, backup services
+db.js                     SQLite schema, migrations and starter data
+lib/domain.js             Pure calculations
+lib/escpos.js             ESC/POS generation and network send
+lib/integrations.js       Configuration/payload architecture
+public/assets/            Plain JavaScript retail and reusable hospitality UI
+scripts/                  Backup and verification commands
+packaging/                Windows installer, launch and installed smoke test
+test/                     Unit, API, UI, packaging and responsive suites
 ```
 
-## Transaction and recovery safeguards
+Retail mode hides reservations, floor/table workflow, KDS, labour, loyalty and tips. Reusable hospitality behavior remains available in restaurant mode.
 
-- Browser checkout sends an idempotency key; retries return the original result instead of adding another payment.
-- Closed/void sales reject new payments, Cash cannot exceed the remaining bill, and stock/loyalty close-out is guarded to run once.
-- Closed sales snapshot subtotal, discount allocation, VAT, totals and line cost so later price/cost edits do not rewrite history.
-- Returns are item-linked, tender-specific, shift-linked and optionally restock resellable goods; a dedicated return receipt is printed.
-- Gift cards activate only after an owner/manager records Cash, Card or M-Pesa funding against an open till.
-- Configured network thermal printing is used directly after checkout, with browser fallback; drawer kick occurs only for the original Cash checkout, never a reprint.
-- Installed backups now write to `%ProgramData%\\OpenPOS\\backups`, run `integrity_check`, and can be tested with `npm run backup:verify`.
-- `ci/openpos-ci.yml` is a ready-to-activate Windows/Linux Node 20 workflow that runs the complete suite and compiles the actual Inno Setup installer. Copy it to `.github/workflows/ci.yml` using a GitHub credential with Workflow permission.
+## Release status
 
-## Security basics
-
-- Every employee should use a separate PIN; do not share the owner PIN.
-- PINs are stored as salted scrypt hashes and shown only when created/reset.
-- Change starter PINs before live use.
-- The app is intended for a trusted shop network. Put authentication/TLS in front of it before exposing it to the public internet.
-- Review the audit log for voids, discounts, refunds, price changes and stock adjustments.
+Read [RELEASE_READINESS.md](RELEASE_READINESS.md). The standard Linux suite is green. Final Windows/physical-shop approval still requires an active CI workflow, compiled installer run, physical printer/drawer test, separate-machine restore and controlled shop pilot.

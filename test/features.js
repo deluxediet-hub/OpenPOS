@@ -285,8 +285,6 @@ const loadToday = async () => { TODAY = (await (await fetch(BASE + '/api/today')
   console.log('\nLOYALTY & GIFT CARDS');
   r = await waiter.get('/api/customers?q=Wanjiru');
   ck('search customer', r.status === 200 && r.data.length === 1 && r.data[0].points === 250, 'points=' + (r.data[0] || {}).points);
-  const cust = r.data[0];
-
   r = await waiter.post('/api/customers', { name: 'New Guest', phone: '0799888777' });
   ck('create customer', r.status === 200 && r.data.points === 0);
   const newCust = r.data;

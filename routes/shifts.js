@@ -2,7 +2,7 @@
 
 /** Shared till, expenses, clearing sheet and close reconciliation routes. */
 module.exports = function registerShifts(app, {
-  db, domain, requireAuth, requireRole, getSetting, getSettings, todayLocal,
+  db, domain, requireAuth, requireRole, getSetting, getSettings,
   drawerFigures, audit, broadcast, bad
 }) {
   const completedCountFor=(shift)=>db.prepare(`SELECT * FROM stock_counts WHERE status='completed' AND for_close=1

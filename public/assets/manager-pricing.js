@@ -6,8 +6,6 @@ const ManagerPricing = (() => {
 
   async function dayparts(body) {
     const r = await api('/api/dayparts');
-    const now = new Date();
-    const minsNow = now.getHours() * 60 + now.getMinutes();
     body.innerHTML = `
       <div class="row" style="margin-bottom:14px">
         <div class="stat" style="flex:1;min-width:150px"><div class="l">Rules</div><div class="v">${r.dayparts.length}</div></div>

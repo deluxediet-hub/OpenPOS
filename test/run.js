@@ -12,7 +12,6 @@ const os = require('os');
    behind by a previously-crashed run (which would shadow us and serve a stale DB). */
 const PORT = process.env.TEST_PORT || (4100 + (process.pid % 400));
 const BASE = `http://127.0.0.1:${PORT}`;
-const TMPDB = path.join(os.tmpdir(), `pos-test-${process.pid}.db`);
 const servers = [];
 process.on('exit', () => { for (const s of servers) { try { s.kill('SIGKILL'); } catch {} } });
 

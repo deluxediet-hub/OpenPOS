@@ -7,7 +7,6 @@
   "scripts": {
     "start": "node server.js",
     "test": "node test/run.js",
-    "reset": "rm -f data/pos.db data/pos.db-wal data/pos.db-shm && echo 'Database reset \u2014 will be re-seeded on next start'",
     "test:api": "BASE=http://127.0.0.1:3000 node test/e2e.js",
     "test:ui": "BASE=http://127.0.0.1:3000 node test/ui.js",
     "backup": "node scripts/backup.js",

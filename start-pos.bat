@@ -44,7 +44,7 @@ if errorlevel 1 (
 
 if not exist "node_modules\" (
   echo [%date% %time%] First run: installing components...>>"%LOG%"
-  call npm install --no-audit --no-fund >>"%LOG%" 2>&1
+  call npm ci --omit=dev --no-audit --no-fund >>"%LOG%" 2>&1
   if errorlevel 1 (
     echo [%date% %time%] ERROR: npm install failed.>>"%LOG%"
     powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('OpenPOS installation failed. Check the internet connection and logs\start-pos.log, then try again.','OpenPOS',[System.Windows.MessageBoxButton]::OK,[System.Windows.MessageBoxImage]::Error)" >nul 2>&1

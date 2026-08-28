@@ -14,7 +14,7 @@ fi
 
 if [ ! -d node_modules ]; then
   echo "First run - installing components, one time only..."
-  npm install --no-audit --no-fund || { echo "Install failed. Check your connection."; exit 1; }
+  npm ci --omit=dev --no-audit --no-fund || { echo "Install failed. Check your connection."; exit 1; }
   echo "Components installed."
 fi
 

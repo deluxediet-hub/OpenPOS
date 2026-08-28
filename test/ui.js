@@ -431,7 +431,6 @@ async function loginWithPin(w, pin) {
   await waitFor(() => $('#aq', m.w), 'receive modal');
   setVal(m.w, $('#aq', m.w), '25');
   setVal(m.w, $('#ar', m.w), 'UI test delivery');
-  const firstStockName = $$('table.tbl tbody tr', m.w)[0].textContent;
   click(m.w, $('[data-yes]', m.w));
   await wait(600);
   ck('stock received through the UI', m.errs.length === 0, m.errs.join(' | '));

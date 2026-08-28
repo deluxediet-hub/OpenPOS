@@ -216,7 +216,6 @@ const Cashier = (() => {
     let method = 'cash';
     let tip = 0;
     const retail=State.settings.business_type==='wines_spirits';
-    let tendered = o.balance;
     const paymentKey = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : `pay-${o.id}-${Date.now()}-${Math.random()}`;
 
     const quick = [0, 500, 1000, 2000, 5000, 10000].map((v) => v);
@@ -272,10 +271,7 @@ const Cashier = (() => {
 
     const ov = document.querySelector('#modalRoot .ov');
     const form = ov.querySelector('#payForm');
-    const bal = () => Math.max(0, o.balance + tip - paidIn());
     let partial = null; // partial amount in cents when splitting
-
-    function paidIn() { return partial == null ? 0 : 0; }
 
     function renderForm() {
       const due = partial != null ? partial : Math.max(0, o.balance + tip);

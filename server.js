@@ -46,12 +46,7 @@ app.get('/api/events', requireAuth, (req, res) => {
   req.on('close', () => { clearInterval(ping); clients.delete(res); });
 });
 
-/* --------------------------------- auth --------------------------------- */
-/* The server's own local calendar date. Date-scoped reports must compare against
-   this — NOT a client-computed date — because row timestamps are written by this
-   process via datetime('now','localtime'). On platforms where the app's clock and
-   SQLite's localtime disagree (notably Windows TZ handling), a client-supplied
-   "today" would silently select an empty range. */
+/* ----------------------- server calendar date --------------------------- */
 /* The SQLite-side local calendar date — the exact frame row timestamps are
    written in (datetime('now','localtime')). Date-scoped reports must compare
    against this, not a client/Node-computed date, because on platforms where the
@@ -220,7 +215,7 @@ require('./routes/pricing')(app, {
 /* ================= CASH DRAWER RECONCILIATION (2.6) ==================== */
 const { drawerFigures } = require('./services/reconciliation')({ db, domain, nowLocal });
 require('./routes/shifts')(app, {
-  db, domain, requireAuth, requireRole, getSetting, getSettings, todayLocal,
+  db, domain, requireAuth, requireRole, getSetting, getSettings,
   drawerFigures, audit, broadcast, bad
 });
 
@@ -278,7 +273,7 @@ if (require.main === module) {
     console.log(`${getSettings().business_name} POS listening on http://0.0.0.0:${PORT}`);
   });
   let stopping=false;
-  const shutdown=(signal)=>{
+  const shutdown=()=>{
     if(stopping)return;stopping=true;
     const force=setTimeout(()=>process.exit(1),5000);force.unref();
     listener.close(()=>{
@@ -286,7 +281,7 @@ if (require.main === module) {
       clearTimeout(force);process.exit(0);
     });
   };
-  process.on('SIGTERM',()=>shutdown('SIGTERM'));
-  process.on('SIGINT',()=>shutdown('SIGINT'));
+  process.on('SIGTERM',shutdown);
+  process.on('SIGINT',shutdown);
 }
 module.exports = app;

@@ -27,9 +27,6 @@ SolidCompression=yes
 SetupLogging=yes
 UninstallDisplayIcon={app}\runtime\node.exe
 
-[Dirs]
-Name: "{app}\app-backups"
-
 [Files]
 Source: "build\payload\runtime\node.exe";      DestDir: "{app}\runtime";     Flags: ignoreversion
 Source: "build\payload\app\*";                 DestDir: "{app}\app";         Flags: ignoreversion recursesubdirs createallsubdirs

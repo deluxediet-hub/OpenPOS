@@ -1,22 +1,57 @@
-# Installing OpenPOS for a Kenyan Wines & Spirits Shop
+# Install and Deploy OpenPOS
 
-## Supported setup
+## Supported shop setup
 
-- One Windows, macOS or Linux till computer
-- Node.js 20 LTS or newer
-- Chrome/Edge/Firefox on the till or trusted local network
-- Optional 80mm ESC/POS network receipt printer and cash drawer
-- Daily off-device backup destination
+- One Windows 10/11 64-bit till PC
+- One owner and a few sellers
+- Trusted private LAN for phones/tablets
+- Optional 58mm/80mm network ESC/POS printer and cash drawer
+- Off-device backup destination strongly recommended
 
-The application is local-first. Do not expose port 3000 directly to the public internet.
+OpenPOS is local-first. Do not forward port 3000 to the public internet.
 
-## 1. Fresh installation
+## Recommended Windows installation
+
+Build machine requirements:
+
+- Windows
+- PowerShell
+- Inno Setup 6
+- Internet access while building
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\packaging\build-installer.ps1
+```
+
+Copy `packaging\output\OpenPOS-Setup.exe` to the shop PC and run it as administrator.
+
+The installer provides:
+
+- Private Node runtime and production dependencies
+- Hidden single-instance startup
+- ProgramData database/backup/spool directories
+- Private/Domain firewall rule
+- Five-minute watchdog
+- Nightly backup and missed-backup catch-up
+- Start-menu shortcuts for opening, stopping, LAN address, backup verification, update and rollback
+
+The shop PC does not require a system Node installation or internet after installation.
+
+### Installed paths
+
+| Data | Path |
+|---|---|
+| Application/runtime | `C:\Program Files\OpenPOS\` |
+| SQLite database | `C:\ProgramData\OpenPOS\data\pos.db` |
+| Database backups | `C:\ProgramData\OpenPOS\backups\` |
+| Receipt spool | `C:\ProgramData\OpenPOS\spool\` |
+| Update rollback copies | `C:\ProgramData\OpenPOS\app-backups\` |
+
+## Portable/source installation
 
 ### Windows
 
-Double-click `start-pos.bat`. It immediately delegates to `start-pos-hidden.vbs`, so the command window disappears while OpenPOS continues running in the background. On first use it installs dependencies and then opens the browser. You may also double-click `start-pos-hidden.vbs` directly.
-
-Startup and server output is stored in `logs\start-pos.log`. If installation fails, OpenPOS displays a Windows message instead of leaving an invisible paused terminal.
+Double-click `start-pos.bat`. It delegates to the hidden VBS launcher and logs startup diagnostics to `logs\start-pos.log`.
 
 ### macOS/Linux
 
@@ -34,150 +69,145 @@ npm start
 
 Open `http://localhost:3000`.
 
-`better-sqlite3` is a native dependency. If installation must compile it, install a C/C++ build toolchain and Python, or use a Node LTS version with an available prebuilt binary.
+`better-sqlite3` is native. If no prebuilt binary is available, the development machine needs Python, a C/C++ toolchain and matching Node headers. The packaged Windows installer already bundles the matching binary.
 
-## 2. First-run setup
+## First-run shop setup
 
-A fresh installation displays setup instead of a login screen.
-
-1. Enter the shop's legal/trading name, physical address, phone and KRA PIN.
-2. Confirm KES, VAT and receipt footer. Retail service charge should remain zero.
+1. Enter business/receipt identity.
+2. Confirm KES and VAT-inclusive pricing.
 3. Create the owner/admin with a private 4–6 digit PIN.
-4. Optionally load the wines and spirits starter catalogue.
-5. Sign in as owner.
+4. Import the real product CSV or optionally load starter products.
+5. Change/remove starter seller PINs (`1234`, `2345`).
+6. Verify every price, cost, barcode and opening stock quantity.
+7. Configure suppliers and package conversions.
+8. Choose the stock-count close policy: none, any closing count or full count.
+9. Configure the receipt printer.
+10. Create and verify the first backup.
 
-If the starter catalogue is loaded, immediately change the sample seller PINs (`1234` and `2345`) or replace those accounts.
+Do not use sample prices/costs as authoritative shop data.
 
-## 3. Configure the real shop
+## Products, packages and portions
 
-Under **Management**:
+- Product creation automatically links ordinary retail products to physical stock.
+- Configure case/crate/carton conversions from **Stock → Packages**.
+- Package receiving and package sales always convert into the canonical base quantity.
+- Use Sell amount for ad-hoc half/quarter/shot/custom-ml bottle sales.
+- Use Pour mode for regular named shots/glasses linked to a source bottle.
+- Use Weighed mode only where final physical weight controls keg stock.
 
-- **Products & Pricing:** enter products individually or download/import the CSV template (also available during first-run onboarding). Required CSV fields are `name,category,size_ml,price`; optional fields cover barcode, opening stock, weighed kegs and pour products linked by `source_sku`.
-- For ad-hoc half/quarter/shot sales from a bottle, enable **Sell measured amount** on the sales screen and choose the ml amount. For regular named shots/glasses, use Pour mode and link the serving to its source bottle or keg.
-- For kegs measured by weight, create the source in **Weighed keg** mode, enter cost per kg, receive/count it in kg, and let stocktake post the actual end-of-shift reduction.
-- **Stock:** enter reorder levels and conduct an opening full stocktake.
-- **Suppliers:** add distributors and KRA/contact details.
-- **Settings:** enter the alcohol licence number/expiry, KRA details, minimum age control and receipt printer.
-- **Team:** create one private seller PIN per employee.
-- **eTIMS / M-Pesa:** configuration and dry runs are present, but live transmission is not implemented in this version.
+CSV documentation:
 
-Do not assume sample prices, costs or quantities are correct.
+- [Product import guide](docs/PRODUCT_IMPORT.md)
+- [CSV template](docs/product-import-template.csv)
 
-## 4. Barcode scanner
+## Barcode scanner
 
-Most USB/Bluetooth scanners work as a keyboard.
+1. Configure the scanner as a keyboard wedge with Enter suffix.
+2. Enable the scanner under Settings.
+3. Scan each product and package barcode before opening.
+4. Confirm package barcodes select the intended case/crate conversion.
 
-1. Configure the scanner in keyboard-wedge mode and set it to append Enter after each barcode.
-2. As owner, enable **Management → Settings → Barcode scanner → Enabled everywhere**.
-3. Scan a configured barcode from any normal app page. The POS opens/resumes the current sale and adds the matching product.
-4. When actively editing a form or modal, scanner capture pauses so scanned values can still be entered safely into fields.
+Global capture pauses while a form/modal input has focus.
 
-Test every barcode format used by the shop before opening.
+## Receipt printer
 
-## 5. Receipt printer
+1. Assign the printer a fixed private LAN IP.
+2. Open **Settings → Printer**.
+3. Enter host and port, normally 9100.
+4. Print an original Cash receipt, reprint and return receipt.
+5. Confirm cut and text width.
+6. Confirm only original completed Cash checkout opens the drawer.
+7. Disconnect the printer and confirm spool/browser fallback without duplicating the sale.
 
-Use a network ESC/POS printer where possible:
+## Phones and tablets
 
-1. Give the printer a fixed LAN IP.
-2. Open **Management → Settings → Printer**.
-3. Enter host and port (normally `9100`).
-4. Print a test receipt.
-5. Verify shop name, KRA PIN, licence number, tax, product lines, age warning, cut and drawer kick.
-
-Without a configured network printer, browser printing remains available.
-
-## 6. Other devices on the shop network
-
-The server listens on `0.0.0.0`. Find the till's LAN IP and open, for example:
+Use **Start menu → OpenPOS → Show my LAN address** and open the displayed private address on trusted devices, for example:
 
 ```text
 http://192.168.1.50:3000
 ```
 
-Only allow trusted shop devices. Use a private Wi-Fi/VLAN, firewall and strong router password. For remote owner access, use a VPN or a properly configured HTTPS reverse proxy—never direct public port forwarding.
+Use a strong router password and Private network profile. For remote access, use a properly administered VPN or HTTPS reverse proxy.
 
-## 7. Data and backups
+## Backup and restore
 
-Default database:
+### Owner UI
 
-```text
-data/pos.db
-```
+Use **Settings → Backup & Recovery** to:
 
-Manual backup:
+- See latest backup status
+- Create a backup now
+- Verify the newest backup
+
+### Command line
 
 ```bash
 npm run backup
-npm run backup:verify       # opens the newest copy read-only and runs integrity_check
+npm run backup:verify
 ```
-
-The Windows installer stores rotating copies in `%ProgramData%\\OpenPOS\\backups`, never under Program Files. Installed systems also get **Start menu → OpenPOS → Verify latest backup** for a one-click read-only restore drill.
-
-A production backup is only useful if it is copied off the till computer. Use an encrypted external disk or protected cloud-sync folder and retain multiple dated copies.
 
 ### Restore drill
 
-1. Stop OpenPOS.
-2. Copy the current `data/` directory somewhere safe.
-3. Restore a backup database to the configured data location.
-4. Start OpenPOS and confirm login, recent receipts, stock and audit history.
-5. Stop it and restore the live database if this was only a drill.
+1. Close the till and create a new backup.
+2. Stop OpenPOS.
+3. Copy the current data directory aside.
+4. Copy a backup to the configured `pos.db` path on a separate test installation where possible.
+5. Start OpenPOS.
+6. Verify login, latest receipts, stock, shifts and audit.
+7. Restore the original live directory if this was a same-machine drill.
 
-Perform a restore drill before launch and regularly thereafter.
+A local backup does not protect against theft, disk loss or ransomware. Keep protected off-device copies.
 
-## 8. Updating
+## Update and rollback
 
-1. Close the shift.
-2. Run and copy a backup off-device.
-3. Stop OpenPOS.
-4. Install the new code without replacing the data directory.
-5. Run `npm ci` if dependencies changed.
-6. Start and test login, one sale, one reprint and stock lookup.
+Before updating:
 
-Database migrations run automatically, but a backup is still mandatory.
+1. Close the till.
+2. Create and verify a backup.
+3. Copy it off-device.
+4. Stop OpenPOS.
+5. Install/copy the update.
+6. Start and test login, one sale, stock lookup, reprint and backup status.
 
-## 9. Pre-opening acceptance test
+The installed update/rollback scripts preserve ProgramData business data. Database migrations are additive, but backup remains mandatory.
 
-- [ ] Owner and each seller can log in with unique PINs.
-- [ ] Seller is prompted to open the till, then lands directly in a ready New Sale basket.
-- [ ] Opening Cash and M-Pesa balances are correct.
-- [ ] Five invalid PINs trigger temporary lockout.
-- [ ] Every product scans correctly; repeated scans and + taps keep one basket line and increase its quantity.
-- [ ] Basket, Sales view, browser receipt and ESC/POS receipt show the same consolidated quantity.
-- [ ] Out-of-stock product is blocked when negative stock protection is enabled.
-- [ ] Checkout proceeds without an age prompt and the configured 18+ notice prints on the receipt.
-- [ ] Cash payment calculates correct change.
-- [ ] Card and M-Pesa references print correctly.
-- [ ] Duplicate M-Pesa reference is rejected.
-- [ ] Paid sale reduces product stock.
-- [ ] Supplier delivery asks only for product and quantity, permits a blank invoice reference, preserves configured cost, and seller cannot directly edit/adjust stock.
-- [ ] Cash/M-Pesa paid deliveries reduce the correct expected balance; Other and Pay later do not.
-- [ ] A Pay later delivery can subsequently be marked paid exactly once.
-- [ ] Cash and M-Pesa expenses reduce the correct expected balance.
-- [ ] Owner can issue a full or measured complimentary item; stock and complimentary cost/value reports change while expected Cash/M-Pesa does not.
-- [ ] Seller can tick owner authorization and optionally record the phone/message reference.
-- [ ] Complimentary reports show the seller who recorded it and the owner account under whose authority it was issued.
-- [ ] End-of-day stocktake blocks further sales and presents products one at a time.
-- [ ] Added stock, physical stock at hand and No change / Skip all behave correctly.
-- [ ] Completing stocktake returns HTTP 200 and records quantity, cost and potential-retail variance separately from cash.
-- [ ] Owner can include Latest stocktake in the custom PDF builder.
-- [ ] Whole/Half/Quarter/Shot/Custom ml from the sales tab produces the proportional line price and bottle deduction.
-- [ ] Selling 31.25ml from 750ml displays approximately `0.96 bottle · 718.75ml open`, not a long floating-point number.
-- [ ] Stocktake accepts full sealed units and open-container ml and computes the same bottle equivalent.
-- [ ] Receipt and drawer hardware work.
-- [ ] Till cannot close before stocktake or with open sales.
-- [ ] Closing Cash, M-Pesa and Card/EDC variances are correct and stored.
-- [ ] Extra tender that offsets missing stock at retail value produces `RECONCILED — POSSIBLE UNRECORDED SALES` and requires a note.
-- [ ] A day with no POS entries can still reconcile from actual tenders; if the configured close policy requires a stock count, complete the required full or scoped count.
-- [ ] PDF builder opens with every section unselected and refuses to print until at least one is chosen.
-- [ ] Owner can print sales, inventory, stocktake, reconciliation, products, deliveries, suppliers, stock movements, loyalty, gift cards, staff and audit sections independently.
-- [ ] Stock, low-stock, expenses, deliveries, payment, sales, gift-card and other aggregatable tables show totals.
-- [ ] PDF reports have visible A4 side margins and do not add a blank trailing page.
-- [ ] KRA-approved eTIMS process is operational separately or through a completed integration.
-- [ ] Backup exists off-device and has been restored successfully.
+## Acceptance
 
-## 10. Compliance warning
+Complete [SHOP_PILOT_ACCEPTANCE.md](SHOP_PILOT_ACCEPTANCE.md) on the actual till PC.
 
-OpenPOS does not grant an alcohol licence and its ordinary receipt is not automatically an eTIMS invoice. The owner remains responsible for current national law, county permit/licence conditions, statutory signs, permitted hours, age controls, KRA/eTIMS invoicing and data protection.
+At minimum verify:
 
-Read [AUDIT.md](AUDIT.md) before deployment.
+- Installation/reboot startup
+- Owner and seller PINs
+- LAN phone access
+- Bottle/package/portion stock
+- Cash/Card/M-Pesa
+- Partial, paid, reprint and return receipts
+- Seller deliveries, expenses, stock additions and complimentary declarations
+- Configured count policy and reconciliation statuses
+- Backup creation and separate-installation restore
+- Seven days of parallel operation
+
+## Tests for developers/builders
+
+```bash
+npm test
+CHROME_BIN=/path/to/chrome npm run test:visual
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:CHROME_BIN='C:\Program Files\Google\Chrome\Application\chrome.exe'
+npm run test:visual
+```
+
+After compiling/installing:
+
+```powershell
+.\packaging\test-installed.ps1 -InstallDir 'C:\Program Files\OpenPOS'
+```
+
+Never run installed smoke tests against a live shop database; the script uses isolated temporary data by default.
+
+See [RELEASE_READINESS.md](RELEASE_READINESS.md) for current evidence and remaining external gates.
