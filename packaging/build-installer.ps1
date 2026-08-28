@@ -12,15 +12,30 @@
 #    powershell -ExecutionPolicy Bypass -File build-installer.ps1
 # =====================================================================
 $ErrorActionPreference = 'Stop'
-$NodeVersion = 'v20.19.0'              # keep the same major as the app was developed/tested on
+$NodeVersion = 'v22.22.3'              # bundled ABI 127; better-sqlite3 publishes a Windows prebuild for this LTS ABI
 $here   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo   = Split-Path -Parent $here              # the POS repo root (.. of packaging/)
 $build  = Join-Path $here 'build'
 $pay    = Join-Path $build 'payload'
 $tools  = Join-Path $build 'tools'
 
-Write-Host "==> Preparing payload" -ForegroundColor Cyan
-Remove-Item $pay -Recurse -Force -ErrorAction SilentlyContinue
+function Remove-BuildTree([string]$Path) {
+  if (-not (Test-Path $Path)) { return }
+  for ($attempt=1; $attempt -le 8; $attempt++) {
+    try {
+      Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+      return
+    } catch {
+      if ($attempt -eq 8) {
+        throw "Could not clean old build payload: $Path. Close Explorer/antivirus handles and run the build again. $($_.Exception.Message)"
+      }
+      Start-Sleep -Milliseconds (250 * $attempt)
+    }
+  }
+}
+
+Write-Host "==> Preparing clean payload" -ForegroundColor Cyan
+Remove-BuildTree $pay
 New-Item -ItemType Directory -Path "$pay\app"      -Force | Out-Null
 New-Item -ItemType Directory -Path "$pay\runtime"  -Force | Out-Null
 New-Item -ItemType Directory -Path "$pay\scripts"  -Force | Out-Null
@@ -44,8 +59,9 @@ Copy-Item (Join-Path $nodedir 'node.exe') "$pay\runtime\node.exe" -Force
 
 # 4. Windows-native dependencies (better-sqlite3 must match the bundled Node ABI).
 # Run npm THROUGH the downloaded node.exe and put that runtime first on PATH.
-# Invoking npm.cmd alone can let native lifecycle scripts find a system Node first,
-# which previously packaged a Node-22 ABI 127 binary beside Node-20 ABI 115.
+# Invoking npm.cmd alone can let native lifecycle scripts find a different system
+# Node first. The installer deliberately bundles Node 22 ABI 127, for which the
+# locked better-sqlite3 release provides a Windows prebuilt binary.
 Write-Host "==> Installing Windows dependencies for bundled $NodeVersion" -ForegroundColor Cyan
 $npmCli = Join-Path $nodedir 'node_modules\npm\bin\npm-cli.js'
 if (-not (Test-Path $npmCli)) { throw "Bundled npm CLI not found: $npmCli" }
@@ -61,7 +77,7 @@ try {
 }
 # Present node_modules as a sibling of app\ (matches the installer layout and the
 # way Node resolves require() from app\server.js), keeping code and deps separate.
-if (Test-Path "$pay\node_modules") { Remove-Item "$pay\node_modules" -Recurse -Force }
+Remove-BuildTree "$pay\node_modules"
 Move-Item "$pay\app\node_modules" "$pay\node_modules"
 
 # Refuse to compile an installer until the exact bundled runtime can load and use

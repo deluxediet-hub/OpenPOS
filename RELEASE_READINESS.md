@@ -12,7 +12,7 @@ Do not describe Windows production readiness as proven until the prepared Window
 ## Verified locally
 
 ```text
-Standard automated suite: 673 passed, 0 failed
+Standard automated suite: 675 passed, 0 failed
 JavaScript syntax:         passed
 Whitespace/diff checks:    passed
 Clean npm lock install:    passed using available local Node headers
@@ -35,7 +35,7 @@ Covered areas include:
 ## Prepared but not executed in Arena
 
 - Real Chrome responsive suite at retail phone/tablet/desktop widths
-- Windows Node 20 test matrix
+- Windows Node 20 and 22 test matrix
 - Inno Setup installer compilation
 - Silent clean installation
 - Installed-runtime sale/stock/print/backup smoke test

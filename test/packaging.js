@@ -81,6 +81,8 @@ ck('installer exposes owner-facing backup verification shortcut', /Verify latest
 ck('installer exposes startup diagnostics and server log',/Startup diagnostics/.test(iss)&&fs.existsSync(path.join(__dirname,'..','packaging','assets','show-diagnostics.ps1'))&&/server\.log/.test(P('assets/show-diagnostics.ps1')));
 
 const build = P('build-installer.ps1');
+ck('build fails rather than reusing a partially locked payload',/Remove-BuildTree/.test(build)&&/Could not clean old build payload/.test(build)&&!/Remove-Item \$pay[^\n]*SilentlyContinue/.test(build));
+ck('build pins the Node 22 ABI with an available better-sqlite3 prebuild', /NodeVersion = 'v22\.22\.3'/.test(build) && /ABI 127/.test(build));
 ck('build installs production dependencies deterministically', /npm-cli\.js/.test(build) && /ci --omit=dev/.test(build) && /node_modules/.test(build));
 ck('build runs npm through the bundled Node with bundled runtime first on PATH',
   /node\.exe'\) \$npmCli/.test(build) && /env:PATH = "\$nodedir;\$oldPath"/.test(build));

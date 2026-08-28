@@ -34,7 +34,7 @@ Output:
 packaging\output\OpenPOS-Setup.exe
 ```
 
-The build downloads the pinned private Node 20 runtime, runs `npm ci --omit=dev` through that exact runtime, and verifies that its `node.exe` can open an in-memory `better-sqlite3` database before compiling the offline-capable installer. The build stops instead of producing an installer when the native ABI does not match.
+The build first removes the previous payload with retries and stops if Windows still has it locked. It then downloads the pinned private Node 22 LTS runtime, runs `npm ci --omit=dev` through that exact runtime, and verifies that its `node.exe` can open an in-memory `better-sqlite3` database before compiling the offline-capable installer. Node 22 uses ABI 127, matching the available Windows prebuilt binary, so the build machine does not need Python or Visual Studio. The build stops instead of producing an installer when the native ABI does not match.
 
 ## Installed behavior
 
