@@ -404,9 +404,11 @@ const Cashier = (() => {
         closeModal();
         if (State.settings.business_type === 'wines_spirits') await loadBootstrap();
         else await Pos.refresh();
-        State.openOrderId = null;
-        toast(`${METHOD_LABEL[method]} ${fmt(amount)} received${r.change ? ' · change ' + fmt(r.change) : ''}`, 'ok');
-        await printReceipt(o.id, { paid: true, kick: method === 'cash' });
+        const fullyPaid = r.order.status === 'closed';
+        State.openOrderId = fullyPaid ? null : o.id;
+        toast(`${METHOD_LABEL[method]} ${fmt(amount)} received${r.change ? ' · change ' + fmt(r.change) : ''}` +
+          (fullyPaid ? '' : ` · balance ${fmt(r.order.balance)}`), 'ok');
+        await printReceipt(o.id, { paid: fullyPaid, partial: !fullyPaid, kick: fullyPaid && method === 'cash' });
         const host = document.getElementById('view');
         if (State.view === 'bills') renderBills(host);
         else if (State.view === 'tables') Pos.renderFloor(host);

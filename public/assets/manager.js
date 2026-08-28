@@ -76,10 +76,11 @@ const Manager = (() => {
         <button class="btn ghost" id="zbtn">🖨 Print Z-report</button>
       </div>
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:14px">
-        ${stat('Net sales', fmt(s.gross), `${s.orders_closed} receipts`)}
+        ${stat('Sales incl. VAT', fmt(s.gross), `${s.orders_closed} receipts`)}
         ${stat('Average ticket', fmt(s.avg_ticket), retail ? `${s.orders_closed} completed sales` : `${s.covers} covers`)}
         ${retail ? stat('Units sold', items.reduce((n, i) => n + i.qty, 0), 'products across completed sales') : stat('Per cover', fmt(s.avg_per_cover), 'guests served')}
-        ${stat('Gross profit', fmt(s.gross_profit), s.margin + '% margin · COGS ' + fmt(s.cogs))}
+        ${stat('Gross profit', fmt(s.gross_profit), s.margin + '% of sales excl. VAT · COGS ' + fmt(s.cogs))}
+        ${s.inventory_loss ? stat('Non-resellable returns', fmt(s.inventory_loss), 'inventory cost not returned to stock', 'warn') : ''}
         ${stat('VAT collected', fmt(s.vat_collected), `${State.settings.vat_rate}% (${State.settings.tax_mode})`)}
         ${stat('Discounts & voids', fmt(s.discounts), s.orders_void + (retail ? ' voided sales' : ' voided checks'), 'warn')}
         ${retail ? stat('Complimentary', fmt(s.complimentary_value), `${s.complimentary_count} issue(s) · cost ${fmt(s.complimentary_cost)}`, s.complimentary_cost ? 'warn' : '') : ''}
@@ -215,8 +216,10 @@ const Manager = (() => {
           const stocktake = latestCount ? await api('/api/stock-counts/' + latestCount.id) : null;
           const tables = [];
           if (selected.has('summary')) tables.push({ title: 'Sales summary', head: ['Metric', 'Value'], right: [1], rows: [
-            ['Net sales', fmt(sm.gross)], ['Gross takings', fmt(sm.paid)], ['Refunds', '-' + fmt(sm.refunded)],
-            ['VAT included', fmt(sm.vat_collected)], ['Discounts', fmt(sm.discounts)], ['Receipts closed', String(sm.orders_closed)],
+            ['Sales including VAT', fmt(sm.gross)], ['Sales excluding VAT', fmt(sm.net)],
+            ['Gross profit excluding VAT', fmt(sm.gross_profit)], ['Gross takings', fmt(sm.paid)], ['Refunds', '-' + fmt(sm.refunded)],
+            ['VAT included', fmt(sm.vat_collected)], ['Non-resellable return cost', fmt(sm.inventory_loss || 0)],
+            ['Discounts', fmt(sm.discounts)], ['Receipts closed', String(sm.orders_closed)],
             [retail ? 'Units sold' : 'Covers', String(retail ? items.reduce((n, i) => n + Number(i.qty || 0), 0) : sm.covers)],
             ['Average ticket', fmt(sm.avg_ticket)],
             ...(retail ? [['Complimentary retail value', fmt(sm.complimentary_value)], ['Complimentary inventory cost', fmt(sm.complimentary_cost)]] : []) ] });
@@ -335,9 +338,12 @@ const Manager = (() => {
       last = { q, t, s, items, waiters, cats, comps };
       body.querySelector('#rpt').innerHTML = `
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:14px">
-          ${stat('Net sales', fmt(s.gross), s.orders_closed + ' receipts')}
+          ${stat('Sales incl. VAT', fmt(s.gross), s.orders_closed + ' receipts')}
+          ${stat('Sales excl. VAT', fmt(s.net), 'VAT removed')}
+          ${stat('Gross profit', fmt(s.gross_profit), s.margin + '% of sales excl. VAT')}
           ${stat('Gross takings', fmt(s.paid), 'before refunds')}
           ${stat('Refunds', '−' + fmt(s.refunded), 'returned to customers', s.refunded ? 'warn' : '')}
+          ${s.inventory_loss ? stat('Non-resellable returns', fmt(s.inventory_loss), 'inventory cost not returned to stock', 'warn') : ''}
           ${stat('VAT', fmt(s.vat_collected), State.settings.vat_rate + '%')}
           ${stat('Tips', fmt(s.tips), 'staff gratuities')}
           ${stat('Discounts', fmt(s.discounts), s.orders_void + ' voids')}

@@ -501,7 +501,7 @@ const loadToday = async () => { TODAY = (await (await fetch(BASE + '/api/today')
   r = await waiter.get('/api/reports/channels');
   ck('waiter blocked from channel report', r.status === 403);
   r = await cashier.post(`/api/orders/${chOrder.id}/commission`, { commission: 100 });
-  ck('commission can be corrected after the fact', r.status === 200 && r.data.commission === 10000, 'commission=' + (r.data||{}).commission);
+  ck('closed-sale commission is immutable', r.status === 409 && /cannot change/i.test(r.data.error), r.data.error);
 
   /* =================== QR TABLE ORDERING (4.13) =================== */
   console.log('\nQR TABLE ORDERING');

@@ -604,6 +604,7 @@ app.post('/api/orders/:id/send', requireAuth, requireRole('seller', 'waiter', 'c
 app.patch('/api/orders/:id/people', requireAuth, requireRole('seller', 'waiter', 'cashier', 'manager', 'admin'), (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return bad(res, 'Order not found', 404);
+  if (!['open', 'billed'].includes(o.status) || o.closed_out) return bad(res, 'Closed or void sales cannot be changed', 409);
   const people = Math.max(1, Math.min(200, Math.round(Number(req.body.people) || 1)));
   db.prepare('UPDATE orders SET people=? WHERE id=?').run(people, o.id);
   audit(req.user, 'order.people', `#${o.number} → ${people} guests`);
@@ -614,7 +615,15 @@ app.patch('/api/orders/:id/people', requireAuth, requireRole('seller', 'waiter',
 app.post('/api/orders/:id/discount', requireAuth, requireRole('manager', 'admin'), (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return bad(res, 'Order not found', 404);
-  const amount = Math.max(0, Math.round(Number(req.body.amount) * 100));
+  if (!['open', 'billed'].includes(o.status) || o.closed_out)
+    return bad(res, 'Closed or void sales cannot be discounted; use a return instead', 409);
+  if (db.prepare("SELECT id FROM payments WHERE order_id=? AND kind='sale' LIMIT 1").get(o.id))
+    return bad(res, 'Discounts cannot change after payment has started', 409);
+  const requested = Number(req.body.amount);
+  if (!Number.isFinite(requested) || requested < 0) return bad(res, 'Discount must be a valid non-negative amount');
+  const amount = Math.round(requested * 100);
+  const subtotal = db.prepare("SELECT COALESCE(SUM(price*qty),0) v FROM order_items WHERE order_id=? AND status!='void'").get(o.id).v;
+  if (amount > subtotal) return bad(res, 'Discount cannot exceed the sale subtotal');
   db.prepare('UPDATE orders SET discount=?, discount_reason=? WHERE id=?')
     .run(amount, req.body.reason || null, o.id);
   audit(req.user, 'order.discount', `#${o.number} KSh${(amount / 100).toFixed(2)} — ${req.body.reason || ''}`);
@@ -626,6 +635,7 @@ app.post('/api/orders/:id/transfer', requireAuth, requireRole('seller', 'waiter'
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   const t = db.prepare('SELECT * FROM tables WHERE id=?').get(Number(req.body.table_id));
   if (!o || !t) return bad(res, 'Order or table not found', 404);
+  if (!['open', 'billed'].includes(o.status) || o.closed_out) return bad(res, 'Closed or void sales cannot be transferred', 409);
   const busy = db.prepare("SELECT id FROM orders WHERE table_id=? AND status IN ('open','billed') AND id != ?").get(t.id, o.id);
   if (busy) return bad(res, 'Destination table is occupied');
   db.prepare('UPDATE orders SET table_id=? WHERE id=?').run(t.id, o.id);
@@ -655,7 +665,8 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
     if (prior) {
       if (prior.order_id !== Number(req.params.id)) return bad(res, 'Payment key belongs to another sale', 409);
       const priorOrder = db.prepare('SELECT * FROM orders WHERE id=?').get(prior.order_id);
-      return res.json({ idempotent_replay: true, change: 0, paid: decorate(priorOrder).paid, order: decorate(priorOrder) });
+      return res.json({ idempotent_replay: true, change: prior.change_given || 0, tendered: prior.tendered,
+        paid: decorate(priorOrder).paid, order: decorate(priorOrder) });
     }
   }
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
@@ -733,9 +744,9 @@ app.post('/api/orders/:id/pay', requireAuth, requireRole('seller', 'cashier', 'm
   }
 
   const tx = db.transaction(() => {
-    db.prepare(`INSERT INTO payments(order_id,method,amount,reference,tip,cashier_id,shift_id,kind,idempotency_key)
-      VALUES(?,?,?,?,?,?,?,'sale',?)`).run(o.id, method, amount, reference, tip, req.user.id,
-      openShift ? openShift.id : null, idempotencyKey);
+    db.prepare(`INSERT INTO payments(order_id,method,amount,reference,tip,cashier_id,shift_id,kind,idempotency_key,tendered,change_given)
+      VALUES(?,?,?,?,?,?,?,'sale',?,?,?)`).run(o.id, method, amount, reference, tip, req.user.id,
+      openShift ? openShift.id : null, idempotencyKey, tendered, change);
 
     if (card) {
       const left = card.balance - amount;
@@ -829,9 +840,12 @@ app.post('/api/orders/:id/refund', requireAuth, requireRole('manager', 'admin'),
   if (o.status !== 'closed' || !o.closed_out) return bad(res, 'Only a closed sale can be returned');
   const idem=String(req.body.idempotency_key||'').trim().slice(0,100)||null;
   if(idem){
-    const priorPayment=db.prepare("SELECT id FROM payments WHERE idempotency_key=? AND kind='refund'").get(`return-${idem}`);
-    const prior=priorPayment?db.prepare('SELECT * FROM returns WHERE order_id=? ORDER BY id DESC LIMIT 1').get(o.id):null;
-    if(prior)return res.json({idempotent_replay:true,return_record:prior,order:decorate(o)});
+    const prior=db.prepare(`SELECT r.* FROM payments p JOIN returns r ON r.id=p.return_id
+      WHERE p.idempotency_key=? AND p.kind='refund'`).get(`return-${idem}`);
+    if(prior){
+      if(prior.order_id!==o.id)return bad(res,'Return key belongs to another sale',409);
+      return res.json({idempotent_replay:true,return_record:prior,order:decorate(o)});
+    }
   }
   const method = String(req.body.method || '').toLowerCase();
   if (!['cash','card','mpesa'].includes(method)) return bad(res, 'Refund method must be Cash, Card or M-Pesa');
@@ -851,16 +865,24 @@ app.post('/api/orders/:id/refund', requireAuth, requireRole('manager', 'admin'),
   if(amount>methodRemaining) return bad(res, `Refund exceeds the remaining ${method.toUpperCase()} amount of ${(methodRemaining/100).toFixed(2)}`);
   const requested = Array.isArray(req.body.items) ? req.body.items : [];
   if (!requested.length) return bad(res, 'Select at least one returned product');
+  const seenLineIds = new Set();
   let lines;
   try { lines=requested.map((x) => {
-    const line = db.prepare("SELECT * FROM order_items WHERE id=? AND order_id=? AND status!='void'").get(Number(x.order_item_id), o.id);
-    const qty = Number(x.qty);
-    if (!line || !(qty > 0)) throw new Error('Invalid returned product or quantity');
+    const lineId=Number(x.order_item_id),qty=Number(x.qty);
+    if(!Number.isInteger(lineId)||seenLineIds.has(lineId)) throw new Error('Each returned sale line may be selected only once');
+    seenLineIds.add(lineId);
+    const line = db.prepare("SELECT * FROM order_items WHERE id=? AND order_id=? AND status!='void'").get(lineId, o.id);
+    if (!line || !Number.isFinite(qty) || !(qty > 0)) throw new Error('Invalid returned product or quantity');
     const returned = db.prepare('SELECT COALESCE(SUM(qty),0) q FROM return_items WHERE order_item_id=?').get(line.id).q;
-    if (returned + qty > line.qty) throw new Error(`${line.name}: return exceeds sold quantity`);
-    return { line, qty };
+    if (returned + qty > line.qty + 0.000001) throw new Error(`${line.name}: return exceeds sold quantity`);
+    /* Allocate from each line's immutable net value after its share of the order
+       discount. Using gross price here can make a later return line negative. */
+    const lineNet=Math.max(0,line.price*line.qty-line.discount_allocated);
+    const netValue=Math.max(0,Math.round(lineNet*qty/Math.max(1,line.qty)));
+    return { line, qty, netValue };
   }); } catch(e){ return bad(res,e.message); }
-  const selectedValue=lines.reduce((n,x)=>n+Math.round(((x.line.price*x.line.qty-x.line.discount_allocated)/Math.max(1,x.line.qty))*x.qty),0);
+  const selectedValue=lines.reduce((n,x)=>n+x.netValue,0);
+  if (selectedValue <= 0) return bad(res, 'Selected products have no refundable value');
   if (amount > selectedValue) return bad(res, 'Refund exceeds selected product value');
   const restock = !!req.body.restock;
   const reference = String(req.body.reference || '').trim() || reason;
@@ -871,7 +893,8 @@ app.post('/api/orders/:id/refund', requireAuth, requireRole('manager', 'admin'),
     const ins = db.prepare('INSERT INTO return_items(return_id,order_item_id,menu_item_id,item_name,qty,stock_factor,amount,cost) VALUES(?,?,?,?,?,?,?,?)');
     let allocatedRefund=0;
     for (const [index,x] of lines.entries()) {
-      const lineAmount=index===lines.length-1?amount-allocatedRefund:Math.round(amount*(x.line.price*x.qty)/Math.max(1,selectedValue));
+      const lineAmount=index===lines.length-1?amount-allocatedRefund:Math.round(amount*x.netValue/selectedValue);
+      if(lineAmount<0)throw new Error('Return allocation produced a negative line amount');
       allocatedRefund+=lineAmount;
       ins.run(returnId,x.line.id,x.line.menu_item_id,x.line.name,x.qty,x.line.stock_factor||1,lineAmount,
         Math.round((x.line.cost_snapshot||0)*x.qty));
@@ -887,8 +910,9 @@ app.post('/api/orders/:id/refund', requireAuth, requireRole('manager', 'admin'),
         }
       }
     }
-    db.prepare(`INSERT INTO payments(order_id,method,amount,reference,cashier_id,shift_id,kind,idempotency_key)
-      VALUES(?,?,?,?,?,?,'refund',?)`).run(o.id,method,-amount,externalReference||reference,req.user.id,shift?shift.id:null,idem?`return-${idem}`:null);
+    db.prepare(`INSERT INTO payments(order_id,method,amount,reference,cashier_id,shift_id,kind,idempotency_key,return_id)
+      VALUES(?,?,?,?,?,?,'refund',?,?)`).run(o.id,method,-amount,externalReference||reference,req.user.id,
+        shift?shift.id:null,idem?`return-${idem}`:null,returnId);
   });
   try { tx(); } catch(e) { return bad(res,e.message); }
   audit(req.user,'return.issue',`#${o.number} ${method} KSh${(amount/100).toFixed(2)} · ${restock?'restocked':'not restocked'} · ${reason}`);
@@ -1285,19 +1309,23 @@ app.get('/api/reports/summary', requireAuth, requireRole('manager', 'admin', 'ca
     FROM orders o WHERE closed_at BETWEEN ? AND ? AND status='closed'`,[a,b]);
   const returnTax=g(`SELECT COALESCE(SUM(CASE WHEN o.total_snapshot>0 THEN r.amount*o.vat_snapshot/o.total_snapshot ELSE 0 END),0) v
     FROM returns r JOIN orders o ON o.id=r.order_id WHERE r.created_at BETWEEN ? AND ?`,[a,b]).v||0;
-  const returnedCost=g('SELECT COALESCE(SUM(ri.cost),0) v FROM return_items ri JOIN returns r ON r.id=ri.return_id WHERE r.created_at BETWEEN ? AND ?',[a,b]).v||0;
+  const returnedCost=g(`SELECT COALESCE(SUM(ri.cost),0) v FROM return_items ri JOIN returns r ON r.id=ri.return_id
+    WHERE r.restocked=1 AND r.created_at BETWEEN ? AND ?`,[a,b]).v||0;
+  const inventoryLoss=g(`SELECT COALESCE(SUM(ri.cost),0) v FROM return_items ri JOIN returns r ON r.id=ri.return_id
+    WHERE r.restocked=0 AND r.created_at BETWEEN ? AND ?`,[a,b]).v||0;
   const soldCost=g(`SELECT COALESCE(SUM(COALESCE(oi.cost_snapshot,m.cost*oi.stock_factor)*oi.qty),0) v FROM order_items oi
     JOIN orders o ON o.id=oi.order_id LEFT JOIN menu_items m ON m.id=oi.menu_item_id
     WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed' AND oi.status!='void'`,[a,b]).v||0;
   const gross=Math.round((sales.gross||0)-refunded),vatCollected=Math.max(0,Math.round((sales.vat||0)-returnTax));
-  const netSales=gross-vatCollected,cogs=Math.max(0,Math.round(soldCost-returnedCost)),grossProfit=gross-cogs;
+  const netSales=gross-vatCollected,cogs=Math.round(soldCost-returnedCost),grossProfit=netSales-cogs;
   const voids=g("SELECT COUNT(*) c FROM orders WHERE closed_at BETWEEN ? AND ? AND status='void'",[a,b]).c||0;
   const comps=g(`SELECT COUNT(*) n,COALESCE(SUM(retail_value),0) retail,COALESCE(SUM(cost_value),0) cost FROM complimentary_issues WHERE created_at BETWEEN ? AND ?`,[a,b]);
   const byMethod=db.prepare(`SELECT method,COALESCE(SUM(amount),0) total,COUNT(*) n FROM payments WHERE created_at BETWEEN ? AND ? GROUP BY method ORDER BY total DESC`).all(a,b);
   res.json({from,to,gross,refunded,paid,net:netSales,vat_collected:vatCollected,orders_closed:sales.closed||0,orders_void:voids,covers:sales.covers||0,
     avg_ticket:sales.closed?Math.round(gross/sales.closed):0,avg_per_cover:sales.covers?Math.round(gross/sales.covers):0,
     discounts:sales.discounts||0,tips:sales.tips||0,complimentary_count:comps.n||0,complimentary_value:comps.retail||0,
-    complimentary_cost:comps.cost||0,cogs,gross_profit:grossProfit,margin:gross?Math.round(grossProfit/gross*1000)/10:0,by_method:byMethod});
+    complimentary_cost:comps.cost||0,cogs,inventory_loss:inventoryLoss,gross_profit:grossProfit,
+    margin:netSales?Math.round(grossProfit/netSales*1000)/10:0,by_method:byMethod});
 });
 
 app.get('/api/reports/items', requireAuth, requireRole('manager','admin','cashier'), (req,res)=>{
@@ -1308,20 +1336,27 @@ app.get('/api/reports/items', requireAuth, requireRole('manager','admin','cashie
       FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN menu_items m ON m.id=oi.menu_item_id
       WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed' AND oi.status!='void'
       UNION ALL
-      SELECT ri.item_name,oi.station,0,-ri.qty,-ri.amount,-ri.cost FROM return_items ri JOIN returns r ON r.id=ri.return_id
+      SELECT ri.item_name,oi.station,0,-ri.qty,-ri.amount,
+        CASE WHEN r.restocked=1 THEN -ri.cost ELSE 0 END FROM return_items ri JOIN returns r ON r.id=ri.return_id
         LEFT JOIN order_items oi ON oi.id=ri.order_item_id WHERE r.created_at BETWEEN ? AND ?
-    ) GROUP BY name,station HAVING ABS(SUM(qty))>0.000001 OR SUM(revenue)!=0 ORDER BY revenue DESC LIMIT 100`).all(a,b,a,b));
+    ) GROUP BY name,station HAVING ABS(SUM(qty))>0.000001 OR SUM(revenue)!=0 OR SUM(cogs)!=0 ORDER BY revenue DESC LIMIT 100`).all(a,b,a,b));
 });
 
 app.get('/api/reports/waiters', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
   const from = req.query.from || todayLocal();
   const to = req.query.to || from;
-  res.json(db.prepare(`
-    SELECT u.name AS waiter, COUNT(DISTINCT o.id) orders, COALESCE(SUM(o.people),0) covers,
-           COALESCE(SUM((SELECT SUM(p.amount) FROM payments p WHERE p.order_id=o.id AND p.kind IN ('sale','refund'))),0) revenue
-    FROM orders o LEFT JOIN users u ON u.id = o.waiter_id
-    WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed'
-    GROUP BY u.name ORDER BY revenue DESC`).all(dayBounds(from), dayEnd(to)));
+  const a=dayBounds(from),b=dayEnd(to);
+  res.json(db.prepare(`SELECT waiter,SUM(orders) orders,SUM(covers) covers,SUM(revenue) revenue FROM (
+      SELECT u.name waiter,COUNT(DISTINCT o.id) orders,COALESCE(SUM(o.people),0) covers,
+        COALESCE(SUM(COALESCE(o.total_snapshot,
+          (SELECT SUM(p.amount-p.tip) FROM payments p WHERE p.order_id=o.id AND p.kind='sale'))),0) revenue
+      FROM orders o LEFT JOIN users u ON u.id=o.waiter_id
+      WHERE o.closed_at BETWEEN ? AND ? AND o.status='closed' GROUP BY u.name
+      UNION ALL
+      SELECT u.name waiter,0 orders,0 covers,-COALESCE(SUM(r.amount),0) revenue
+      FROM returns r JOIN orders o ON o.id=r.order_id LEFT JOIN users u ON u.id=o.waiter_id
+      WHERE r.created_at BETWEEN ? AND ? GROUP BY u.name
+    ) GROUP BY waiter ORDER BY revenue DESC`).all(a,b,a,b));
 });
 
 app.get('/api/reports/categories', requireAuth, requireRole('manager','admin','cashier'), (req,res)=>{
@@ -1914,7 +1949,10 @@ app.post('/api/print/receipt/:id', requireAuth, requireRole('seller','cashier','
     items: d.items, cashier: (c || {}).name || req.user.name,
     customer_phone: cust ? cust.phone : null
   };
-  const buf = escpos.buildReceipt(payload, { paid: req.query.paid !== '0' });
+  /* Never let a caller label an open/part-paid order as fully paid. */
+  const paid=o.status==='closed'&&req.query.paid!=='0';
+  const partial=!paid&&req.query.partial==='1'&&d.paid>0;
+  const buf = escpos.buildReceipt(payload, { paid, partial });
   await deliverPrint(buf, 'till', `receipt-${o.number}`, res, req);
 });
 
@@ -2035,6 +2073,10 @@ app.get('/api/reports/channels', requireAuth, requireRole('cashier', 'manager', 
 app.post('/api/orders/:id/commission', requireAuth, requireRole('cashier', 'manager', 'admin'), (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return bad(res, 'Order not found', 404);
+  if (!['open', 'billed'].includes(o.status) || o.closed_out)
+    return bad(res, 'Commission cannot change after a sale is closed', 409);
+  if (db.prepare("SELECT id FROM payments WHERE order_id=? AND kind='sale' LIMIT 1").get(o.id))
+    return bad(res, 'Commission cannot change after payment has started', 409);
   const commission = Math.max(0, Math.round(Number(req.body.commission || 0) * 100));
   db.prepare('UPDATE orders SET commission=? WHERE id=?').run(commission, o.id);
   audit(req.user, 'order.commission', `#${o.number} ${(commission / 100).toFixed(2)}`);

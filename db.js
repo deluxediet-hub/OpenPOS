@@ -126,7 +126,10 @@ CREATE TABLE IF NOT EXISTS payments (
   cashier_id INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   kind TEXT NOT NULL DEFAULT 'sale',
-  idempotency_key TEXT
+  idempotency_key TEXT,
+  tendered INTEGER,
+  change_given INTEGER NOT NULL DEFAULT 0,
+  return_id INTEGER REFERENCES returns(id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_payment_idempotency ON payments(idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_pay_order ON payments(order_id);
@@ -400,6 +403,9 @@ function migrate() {
   add('payments', 'shift_id', 'shift_id INTEGER REFERENCES shifts(id)');
   add('payments', 'kind', "kind TEXT NOT NULL DEFAULT 'sale'");
   add('payments', 'idempotency_key', 'idempotency_key TEXT');
+  add('payments', 'tendered', 'tendered INTEGER');
+  add('payments', 'change_given', 'change_given INTEGER NOT NULL DEFAULT 0');
+  add('payments', 'return_id', 'return_id INTEGER REFERENCES returns(id)');
   db.prepare("UPDATE payments SET kind='refund' WHERE method='refund'").run();
   add('gift_cards', 'funding_id', 'funding_id INTEGER REFERENCES gift_card_funding(id)');
   add('menu_items', 'sku', 'sku TEXT');
@@ -454,6 +460,7 @@ function migrate() {
       amount INTEGER NOT NULL DEFAULT 0, cost INTEGER NOT NULL DEFAULT 0
     );
     CREATE UNIQUE INDEX IF NOT EXISTS ux_payment_idempotency ON payments(idempotency_key) WHERE idempotency_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_payment_return ON payments(return_id) WHERE return_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS ux_gift_funding ON gift_cards(funding_id) WHERE funding_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS ux_gift_funding_idem ON gift_card_funding(idempotency_key) WHERE idempotency_key IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS ux_menu_sku ON menu_items(sku) WHERE sku IS NOT NULL AND sku != '';

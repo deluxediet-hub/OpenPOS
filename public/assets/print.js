@@ -1,7 +1,7 @@
 /* print.js — receipt & ticket rendering + browser print */
 'use strict';
 
-function receiptHtml(r, { paid = false } = {}) {
+function receiptHtml(r, { paid = false, partial = false } = {}) {
   const s = r.settings, t = r.totals || r.order.totals, o = r.order;
   const money = (c) => (Number(c || 0) / 100).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const row = (label, value, cls = '') => `<div class="r ${cls}"><span>${label}</span><span>${value}</span></div>`;
@@ -11,7 +11,7 @@ function receiptHtml(r, { paid = false } = {}) {
   const items = groupedSaleItems(r.items).map((i) => `<tr>
     <td class="rq">${i.qty}</td><td class="ri">${esc(i.name)}${i.note ? `<div class="receipt-note">${esc(i.note)}</div>` : ''}
       <div class="receipt-unit">@ ${money(i.price)}</div></td><td class="ra">${money(i.price * i.qty)}</td></tr>`).join('');
-  const payments = paid && o.payments && o.payments.length ? o.payments.map((p) =>
+  const payments = (paid || partial) && o.payments && o.payments.length ? o.payments.map((p) =>
     `${row(esc(String(p.method || '').toUpperCase()), money(p.amount), 'payment')}${p.reference ? `<div class="receipt-ref">${esc(p.reference)}</div>` : ''}`).join('') : '';
   return `<div class="receipt${chars <= 32 ? ' receipt-58' : ''}">
     <div class="receipt-brand">${esc(s.business_name)}</div>
@@ -19,7 +19,7 @@ function receiptHtml(r, { paid = false } = {}) {
     ${s.phone ? `<div class="c">Tel: ${esc(s.phone)}</div>` : ''}
     ${s.kra_pin ? `<div class="c">KRA PIN: ${esc(s.kra_pin)}</div>` : ''}
     ${s.business_type === 'wines_spirits' && s.licence_number ? `<div class="c">Licence: ${esc(s.licence_number)}</div>` : ''}
-    <div class="receipt-title">${paid ? 'SALES RECEIPT · PAID' : 'SALE SUMMARY · UNPAID'}</div>
+    <div class="receipt-title">${paid ? 'SALES RECEIPT · PAID' : partial ? 'PART PAYMENT · BALANCE DUE' : 'SALE SUMMARY · UNPAID'}</div>
     ${row('Receipt', '#' + esc(o.number))}
     ${row('Date', esc((o.closed_at || o.opened_at || '').slice(0, 16)))}
     ${r.table ? row('Table', esc(r.table.name) + ' · ' + esc(r.table.area)) : ''}
@@ -36,6 +36,7 @@ function receiptHtml(r, { paid = false } = {}) {
     ${t.grand_total !== t.total ? row('AMOUNT DUE', money(t.grand_total), 'receipt-due') : ''}
     ${row(`VAT ${esc(s.vat_rate)}% ${s.tax_mode === 'inclusive' ? 'included' : ''}`, money(t.vat), 'receipt-tax')}
     ${payments ? `<div class="receipt-rule"></div><div class="receipt-section">PAYMENT</div>${payments}` : ''}
+    ${partial ? row('BALANCE REMAINING', money(o.balance), 'receipt-due') : ''}
     <div class="receipt-rule"></div>
     ${s.receipt_footer ? `<div class="c receipt-footer">${esc(s.receipt_footer)}</div>` : ''}
     ${s.business_type === 'wines_spirits' ? `<div class="c receipt-warning">${esc(s.minimum_sale_age || 18)}+ ONLY · DRINK RESPONSIBLY</div>` : ''}
@@ -43,16 +44,18 @@ function receiptHtml(r, { paid = false } = {}) {
   </div>`;
 }
 
-async function printReceipt(orderId, { paid = true, kick = false } = {}) {
+async function printReceipt(orderId, { paid = true, partial = false, kick = false } = {}) {
   try {
     if (State.settings.printer_enabled === '1' && State.settings.printer_host) {
       try {
-        const result = await api(`/api/print/receipt/${orderId}?paid=${paid?1:0}&kick=${kick?1:0}`, { method: 'POST' });
+        const result = await api(`/api/print/receipt/${orderId}?paid=${paid?1:0}&partial=${partial?1:0}&kick=${kick?1:0}`, { method: 'POST' });
         if (result.sent) return toast('Receipt sent to thermal printer', 'ok');
       } catch (e) { toast('Network printer unavailable — using browser print', 'err'); }
     }
     const r = await api('/api/receipt/' + orderId);
-    doPrint(receiptHtml(r, { paid }));
+    const effectivePaid=paid&&r.order.status==='closed';
+    const effectivePartial=!effectivePaid&&r.order.paid>0&&(partial||paid);
+    doPrint(receiptHtml(r, { paid:effectivePaid, partial:effectivePartial }));
   } catch (e) { toast('Could not print: ' + e.message, 'err'); }
 }
 
