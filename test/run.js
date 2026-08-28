@@ -40,7 +40,7 @@ function runSuite(file, base) {
 }
 
 (async () => {
-  const suites = ['domain.js', 'packaging.js', 'retail.js', 'hardening.js', 'e2e.js', 'features.js', 'ui.js'];
+  const suites = ['domain.js', 'packaging.js', 'structure.js', 'retail.js', 'hardening.js', 'e2e.js', 'features.js', 'ui.js'];
   let code = 0;
 
   for (const suite of suites) {
@@ -52,8 +52,8 @@ function runSuite(file, base) {
 
     for (const f of [db, db + '-wal', db + '-shm']) { try { fs.unlinkSync(f); } catch {} }
 
-    if (suite === 'domain.js' || suite === 'packaging.js') {
-      /* pure unit tests — no server needed */
+    if (['domain.js', 'packaging.js', 'structure.js'].includes(suite)) {
+      /* pure/static tests — no server needed */
       code = await runSuite(suite, base);
       if (code) break;
       continue;

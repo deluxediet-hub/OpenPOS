@@ -26,7 +26,7 @@ New-Item -ItemType Directory -Path "$pay\runtime"  -Force | Out-Null
 New-Item -ItemType Directory -Path "$pay\scripts"  -Force | Out-Null
 
 # 1. The EXISTING POS code, byte-for-byte (never modified by packaging).
-foreach ($i in @('server.js','db.js','lib','public','scripts','package.json','package-lock.json')) {
+foreach ($i in @('server.js','db.js','lib','routes','services','public','scripts','package.json','package-lock.json')) {
   Copy-Item -Path (Join-Path $repo $i) -Destination "$pay\app" -Recurse -Force
 }
 # 2. Helper scripts.

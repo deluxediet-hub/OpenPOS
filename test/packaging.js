@@ -75,6 +75,7 @@ const build = P('build-installer.ps1');
 ck('build bundles the Windows native better-sqlite3 via npm once', /install --omit=dev/.test(build) && /node_modules/.test(build));
 ck('build bundles the private node runtime', /node\.exe/.test(build) && /win-x64/.test(build));
 ck('build copies the app byte-for-byte (no transformation)', /'server\.js'/.test(build) && /Copy-Item/.test(build) && !/transform/i.test(build));
+ck('build includes modular routes and services', /'routes'/.test(build) && /'services'/.test(build));
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===\n`);
 process.exit(fail ? 1 : 0);

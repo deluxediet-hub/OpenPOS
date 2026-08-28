@@ -1,0 +1,76 @@
+'use strict';
+const crypto = require('crypto');
+
+/** Authentication route + middleware boundary. Keeps the existing in-memory,
+ * cookie-based contract intact while removing session concerns from server.js. */
+module.exports = function registerAuth(app, { db, findUserByPin, audit, bad }) {
+  const sessions = new Map();
+  const attempts = new Map();
+  const cookie = 'pos_session';
+  const token = () => crypto.randomBytes(24).toString('hex');
+
+  function parseCookies(req) {
+    const out = {};
+    const raw = req.headers.cookie;
+    if (!raw) return out;
+    raw.split(';').forEach((part) => {
+      const i = part.indexOf('=');
+      if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    });
+    return out;
+  }
+
+  function currentUser(req) {
+    const sessionToken = parseCookies(req)[cookie];
+    if (!sessionToken || !sessions.has(sessionToken)) return null;
+    return db.prepare('SELECT id,name,role,active FROM users WHERE id=? AND active=1')
+      .get(sessions.get(sessionToken).user_id) || null;
+  }
+
+  function requireAuth(req, res, next) {
+    const user = currentUser(req);
+    if (!user) return res.status(401).json({ error: 'Not signed in' });
+    req.user = user;
+    next();
+  }
+
+  const requireRole = (...roles) => (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'Not signed in' });
+    if (!roles.includes(req.user.role)) return res.status(403).json({ error: 'Permission denied' });
+    next();
+  };
+
+  app.post('/api/login', (req, res) => {
+    const ip = req.ip || req.socket.remoteAddress || 'local';
+    const attempt = attempts.get(ip) || { failures: 0, blockedUntil: 0 };
+    if (attempt.blockedUntil > Date.now())
+      return bad(res, `Too many failed PINs. Try again in ${Math.ceil((attempt.blockedUntil - Date.now()) / 1000)} seconds.`, 429);
+    const pin = String(req.body.pin || '').trim();
+    if (!pin) return bad(res, 'PIN required');
+    const user = findUserByPin(pin);
+    if (!user) {
+      attempt.failures += 1;
+      if (attempt.failures >= 5) { attempt.blockedUntil = Date.now() + 60000; attempt.failures = 0; }
+      attempts.set(ip, attempt);
+      return bad(res, 'Invalid PIN', 401);
+    }
+    attempts.delete(ip);
+    const sessionToken = token();
+    sessions.set(sessionToken, { user_id: user.id });
+    res.setHeader('Set-Cookie', `${cookie}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200`);
+    audit({ id: user.id, name: user.name }, 'login', user.role);
+    res.json({ user });
+  });
+
+  app.post('/api/logout', (req, res) => {
+    const sessionToken = parseCookies(req)[cookie];
+    if (sessionToken) sessions.delete(sessionToken);
+    res.setHeader('Set-Cookie', `${cookie}=; Path=/; Max-Age=0`);
+    res.json({ ok: true });
+  });
+
+  app.get('/api/me', requireAuth, (req, res) =>
+    res.json({ user: { id: req.user.id, name: req.user.name, role: req.user.role } }));
+
+  return { requireAuth, requireRole };
+};
