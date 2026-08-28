@@ -14,9 +14,15 @@ $base = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)   #
 $appSpool = Join-Path $base 'app\spool'
 $root = Join-Path $env:ProgramData 'OpenPOS'
 
-foreach ($d in @('data','backups','spool','app-backups')) {
+foreach ($d in @('data','backups','spool','logs','app-backups')) {
   New-Item -ItemType Directory -Path (Join-Path $root $d) -Force | Out-Null
 }
+
+# The server starts as the signed-in shop user, while setup runs elevated. Grant
+# the built-in Users group Modify rights using its language-independent SID so
+# SQLite, backups, logs and print spool remain writable after installer exit/reboot.
+& icacls.exe $root /grant '*S-1-5-32-545:(OI)(CI)M' /T /C | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Could not grant the shop user write access to $root" }
 
 # Junction <app>\app\spool -> ProgramData\OpenPOS\spool (link only; data stays put).
 if (-not (Test-Path $appSpool)) {

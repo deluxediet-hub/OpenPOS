@@ -46,6 +46,13 @@ The shop PC does not require a system Node installation or internet after instal
 | Database backups | `C:\ProgramData\OpenPOS\backups\` |
 | Receipt spool | `C:\ProgramData\OpenPOS\spool\` |
 | Update rollback copies | `C:\ProgramData\OpenPOS\app-backups\` |
+| Hidden server log | `C:\ProgramData\OpenPOS\logs\server.log` |
+
+### If localhost does not load
+
+Use **Start menu → OpenPOS → Startup diagnostics**. It checks the private runtime, installed app modules, server health and displays the latest hidden-server log.
+
+The **Open POS** shortcut now starts the server, waits up to 30 seconds for `/healthz`, and only then opens the browser. If startup fails, it displays the diagnostics log path instead of silently opening a dead localhost page.
 
 ## Portable/source installation
 

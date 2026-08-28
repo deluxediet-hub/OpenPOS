@@ -30,10 +30,13 @@ ck('launcher never points POS_DATA_DIR at the app folder', !/POS_DATA_DIR"\)\s*=
 ck('launcher is headless (hidden window flag 0)', /sh\.Run [^\n]*,\s*0,\s*False/.test(vbs));
 ck('launcher uses the bundled runtime, not system node', /runtime\\node\.exe/.test(vbs));
 ck('launcher is single-instance (health check before start)', /healthz/.test(vbs) && /ServerUp/.test(vbs) && /Quit 0/.test(vbs));
+ck('launcher logs hidden server output under ProgramData', /OpenPOS.*logs|dataRoot.*logs/i.test(vbs) && /server\.log/.test(vbs) && /2>&1/.test(vbs));
+ck('interactive launcher waits for health before opening browser', /\/open/.test(vbs) && /For i = 1 To 60/.test(vbs) && /did not start within 30 seconds/.test(vbs));
 
 const init = P('assets/init-data.ps1');
 ck('init creates data/spool/backups under ProgramData', /ProgramData/.test(init) && /data/.test(init) && /spool/.test(init) && /app-backups/.test(init));
 ck('init uses a junction so spool survives updates', /mklink \/J/.test(init));
+ck('init grants normal shop user write access to ProgramData', /icacls\.exe/.test(init) && /S-1-5-32-545/.test(init) && /\(OI\)\(CI\)M/.test(init));
 ck('init is create-only (no Remove/Delete of data)', !/Remove-Item|Del\b/.test(init));
 
 const fw = P('assets/allow-lan-access.ps1');
@@ -46,6 +49,9 @@ ck('installer does not create a data dir inside the app', !/\{app\}\\data/.test(
 ck('installer places persistent data in ProgramData', /commonappdata/.test(iss));
 ck('installer wires single-instance hidden auto-start', /userstartup.*start-hidden\.vbs/.test(iss.replace(/\n/g, ' ')) );
 ck('installer runs init-data before first start', /init-data\.ps1/.test(iss));
+ck('Open POS shortcuts start the server instead of opening a dead URL',
+  (iss.match(/start-hidden\.vbs"" \/open/g)||[]).length >= 2 && !/Name: "\{group\}\\Open POS"; Filename: "http/.test(iss));
+ck('post-install server runs as original shop user', /start-hidden\.vbs"" \/open[^\n]*runasoriginaluser/.test(iss));
 ck('installer removes only the spool junction on uninstall', /rmdir [^\n]*app\\spool/.test(iss) && !/DelTree\(ExpandConstant\('\{app\}'\)/.test(iss));
 ck('uninstall keeps data by default (explicit confirm to delete)', /Keep your business data/.test(iss) && /DelTree\(ExpandConstant\('\{commonappdata\}\\OpenPOS'\)/.test(iss));
 ck('installer registers watchdog + daily backup tasks', /OpenPOS Watchdog/.test(iss) && /OpenPOS Daily Backup/.test(iss) && /\/mo 5/.test(iss) && /\/sc daily/.test(iss));
@@ -72,6 +78,7 @@ ck('backup runner supports recent-copy catch-up guard',/AddHours\(-20\)/.test(rb
 const verifyBackup=fs.readFileSync(path.join(__dirname,'..','scripts','verify-backup.js'),'utf8');
 ck('restore drill runs SQLite integrity_check and checks core tables', /integrity_check/.test(verifyBackup) && /missing tables/.test(verifyBackup));
 ck('installer exposes owner-facing backup verification shortcut', /Verify latest backup/.test(iss) && fs.existsSync(path.join(__dirname,'..','packaging','assets','verify-latest-backup.ps1')));
+ck('installer exposes startup diagnostics and server log',/Startup diagnostics/.test(iss)&&fs.existsSync(path.join(__dirname,'..','packaging','assets','show-diagnostics.ps1'))&&/server\.log/.test(P('assets/show-diagnostics.ps1')));
 
 const build = P('build-installer.ps1');
 ck('build bundles the Windows native better-sqlite3 via npm once', /install --omit=dev/.test(build) && /node_modules/.test(build));

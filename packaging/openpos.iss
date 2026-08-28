@@ -37,13 +37,14 @@ Source: "build\payload\scripts\*";             DestDir: "{app}\scripts";     Fla
 ; Auto-start at logon, hidden, single-instance.
 Name: "{userstartup}\OpenPOS Server"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"""; WorkingDir: "{app}"
 ; Owner-facing shortcuts (no PowerShell knowledge required).
-Name: "{group}\Open POS"; Filename: "http://localhost:{#AppPort}"
+Name: "{group}\Open POS"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"" /open"; WorkingDir: "{app}"
 Name: "{group}\Show my LAN address (for phones & tablets)"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\show-lan-address.ps1"""; WorkingDir: "{app}"
+Name: "{group}\Startup diagnostics"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\show-diagnostics.ps1"""; WorkingDir: "{app}"
 Name: "{group}\Stop OpenPOS server"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\stop-server.ps1"""; WorkingDir: "{app}"
 Name: "{group}\Verify latest backup"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\verify-latest-backup.ps1"""; WorkingDir: "{app}"
 Name: "{group}\Update application code"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\update-app.ps1"""; WorkingDir: "{app}"
 Name: "{group}\Roll back application code"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\rollback-app.ps1"""; WorkingDir: "{app}"
-Name: "{commondesktop}\OpenPOS"; Filename: "http://localhost:{#AppPort}"; Tasks: desktopicon
+Name: "{commondesktop}\OpenPOS"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"" /open"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
@@ -61,8 +62,7 @@ Filename: "schtasks.exe"; Parameters: "/create /tn ""OpenPOS Backup Catchup"" /t
 ; 2. LAN-only firewall rule (Private/Domain, never Public).
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\allow-lan-access.ps1"""; Flags: runhidden waituntilterminated; Tasks: firewall
 ; 3. Start the server now (hidden, single-instance) and open the browser once.
-Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"""; Flags: nowait postinstall skipifsilent; Description: "Start the POS server now"
-Filename: "http://localhost:{#AppPort}"; Flags: nowait postinstall shellexec skipifsilent; Description: "Open the POS in your browser"
+Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"" /open"; Flags: nowait postinstall skipifsilent runasoriginaluser; Description: "Start OpenPOS and open it when ready"
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\show-lan-address.ps1"""; Flags: nowait postinstall skipifsilent unchecked; Description: "Show the LAN address for phones/tablets"
 
 [UninstallRun]

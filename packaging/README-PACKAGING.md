@@ -52,6 +52,7 @@ The build downloads the pinned private Node 20 runtime, installs production-only
 
 - Open POS
 - Show LAN address
+- Startup diagnostics and latest hidden-server log
 - Stop server
 - Verify latest backup
 - Update application code
