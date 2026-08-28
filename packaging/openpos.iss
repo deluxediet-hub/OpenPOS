@@ -59,6 +59,8 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\s
 Filename: "schtasks.exe"; Parameters: "/create /tn ""OpenPOS Watchdog"" /tr ""wscript.exe \""{app}\scripts\watchdog.vbs\"""" /sc minute /mo 5 /f"; Flags: runhidden waituntilterminated
 ; 3. Daily backup at 23:30 (keeps last 14 local copies; optional off-site webhook).
 Filename: "schtasks.exe"; Parameters: "/create /tn ""OpenPOS Daily Backup"" /tr ""powershell.exe -ExecutionPolicy Bypass -File \""{app}\scripts\run-backup.ps1\"""" /sc daily /st 23:30 /f"; Flags: runhidden waituntilterminated
+; Catch up a missed nightly backup at the next Windows logon (runner skips copies newer than 20h).
+Filename: "schtasks.exe"; Parameters: "/create /tn ""OpenPOS Backup Catchup"" /tr ""powershell.exe -ExecutionPolicy Bypass -File \""{app}\scripts\run-backup.ps1\"""" /sc onlogon /f"; Flags: runhidden waituntilterminated
 ; 2. LAN-only firewall rule (Private/Domain, never Public).
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\allow-lan-access.ps1"""; Flags: runhidden waituntilterminated; Tasks: firewall
 ; 3. Start the server now (hidden, single-instance) and open the browser once.
@@ -70,6 +72,7 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\s
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\stop-server.ps1"""; Flags: runhidden waituntilterminated; RunOnceId: "StopOpenPOS"
 Filename: "schtasks.exe"; Parameters: "/delete /tn ""OpenPOS Watchdog"" /f"; Flags: runhidden waituntilterminated; RunOnceId: "DelWatchdog"
 Filename: "schtasks.exe"; Parameters: "/delete /tn ""OpenPOS Daily Backup"" /f"; Flags: runhidden waituntilterminated; RunOnceId: "DelBackup"
+Filename: "schtasks.exe"; Parameters: "/delete /tn ""OpenPOS Backup Catchup"" /f"; Flags: runhidden waituntilterminated; RunOnceId: "DelBackupCatchup"
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""Remove-NetFirewallRule -DisplayName 'OpenPOS LAN (TCP 3000)' -ErrorAction SilentlyContinue"""; Flags: runhidden waituntilterminated; RunOnceId: "FwOpenPOS"
 ; Remove ONLY the spool junction (the link, never the data behind it).
 Filename: "cmd.exe"; Parameters: "/c rmdir ""{app}\app\spool"" 2>nul"; Flags: runhidden waituntilterminated; RunOnceId: "SpoolJunction"

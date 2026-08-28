@@ -141,13 +141,14 @@ async function loginWithPin(w, pin) {
   await waitFor(() => !$('#login', w).classList.contains('hidden') || !$('#setup', w).classList.contains('hidden'), 'auth screen');
   ck('login screen visible', !!$('#login .login-card', w) && !$('#login', w).classList.contains('hidden'));
   ck('keypad has 12 keys', $$(w, '#keypad button').length === 12);
+  ck('explicit sign-in control supports variable PIN length',!!$('#loginSubmit',w));
   ck('PIN dots render', $$(w, '.pin-dot').length === 4);
 
   click(w, $$(w, '#keypad button').find((b) => b.dataset.k === '9'));
   click(w, $$(w, '#keypad button').find((b) => b.dataset.k === '9'));
   click(w, $$(w, '#keypad button').find((b) => b.dataset.k === '9'));
   click(w, $$(w, '#keypad button').find((b) => b.dataset.k === '9'));
-  await wait(900);
+  await waitFor(() => $('#loginErr', w).textContent.trim(), 'wrong PIN response');
   ck('wrong PIN shows error and stays on login', $('#loginErr', w).textContent.trim() === 'Invalid PIN'
     && !$('#login', w).classList.contains('hidden'), $('#loginErr', w).textContent);
 
@@ -467,7 +468,7 @@ async function loginWithPin(w, pin) {
   await walk('Products & Pricing', ['Options', 'Recipes', 'Happy Hour']);
   await walk('Cash & Loyalty', ['Cash Drawer', 'Loyalty']);
   await walk('Reports', ['Labour', 'Audit log']);
-  await walk('Settings', ['Printer', 'eTIMS / M-Pesa']);
+  await walk('Settings', ['Printer', 'Backup & Recovery', 'eTIMS / M-Pesa']);
   await walk('Bookings', ['Reservations']);
   await walk('Team', ['Staff']);
 

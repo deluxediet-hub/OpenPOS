@@ -17,7 +17,7 @@ const Manager = (() => {
     ['money',     'Cash & Loyalty', [['drawer', 'Cash Drawer'], ['loyalty', 'Loyalty']]],
     ['bookings',  'Bookings',    [['bookings', 'Reservations']]],
     ['team',      'Team',        [['staff', 'Staff']]],
-    ['settings',  'Settings',    [['settings', 'Business'], ['printer', 'Printer'], ['integrations', 'eTIMS / M-Pesa']]],
+    ['settings',  'Settings',    [['settings', 'Business'], ['printer', 'Printer'], ['backup', 'Backup & Recovery'], ['integrations', 'eTIMS / M-Pesa']]],
   ];
   const LOCAL = { dashboard, sales, menu, stock, staff, settings, audit };
   const EXTERNAL = {
@@ -25,7 +25,7 @@ const Manager = (() => {
     drawer: ManagerReconciliation.drawer,
     bookings: ManagerHospitality.reservations, labour: ManagerHospitality.labour,
     loyalty: ManagerLoyalty.loyalty,
-    integrations: ManagerSystem.integrations, printer: ManagerSystem.printer
+    integrations: ManagerSystem.integrations, printer: ManagerSystem.printer, backup:ManagerSystem.backup
   };
 
   function render(host) {

@@ -287,17 +287,17 @@ const Pos = (() => {
     const transferBtn = host.querySelector('#transfer');
     if (transferBtn) transferBtn.onclick = () => transferModal(o, host);
     const voidBtn = host.querySelector('#voidBtn');
-    if (voidBtn) voidBtn.onclick = () => requireManagerPin('Voiding a whole order needs manager authorisation.', async () => {
+    if (voidBtn) voidBtn.onclick = () => requireManagerPin('Voiding a whole order needs manager authorisation.', async (approval) => {
       confirmBox(`Void ${retail ? 'sale' : 'order'} #${o.number}`, retail ? 'All products will be removed and the sale cancelled. This cannot be undone.' : 'All items will be voided and the table freed. This cannot be undone.', {
         danger: true, okLabel: `Void ${retail ? 'sale' : 'order'}`, fields: [{ name: 'reason', label: 'Reason', placeholder: retail ? 'Duplicate / wrong sale' : 'Guest walked out / wrong order' }],
         onOk: async (v) => {
-          try { await api(`/api/orders/${o.id}/void`, { body: { reason: v.reason } }); await refresh(); toast('Order voided', 'ok'); closeEditor(host); }
+          try { await api(`/api/orders/${o.id}/void`, { body: { reason: v.reason },approvalToken:approval.approvalToken }); await refresh(); toast('Order voided', 'ok'); closeEditor(host); }
           catch (e) { toast(e.message, 'err'); }
         }
       });
     });
     const discountBtn = host.querySelector('#discBtn');
-    if (discountBtn) discountBtn.onclick = () => requireManagerPin('Discounts need manager authorisation.', () => discountModal(o, host));
+    if (discountBtn) discountBtn.onclick = () => requireManagerPin('Discounts need manager authorisation.', (approval) => discountModal(o, host,approval));
     const peopleBtn = host.querySelector('#peopleBtn');
     if (peopleBtn) peopleBtn.onclick = async () => {
       const n = prompt('Number of guests at this table', o.people);
@@ -500,12 +500,12 @@ const Pos = (() => {
       await refresh(); renderEditor(host);
       return;
     }
-    requireManagerPin(`"${line.name}" has already been sent to the ${line.station}. Removing it needs a manager.`, () => {
+    requireManagerPin(`"${line.name}" has already been sent to the ${line.station}. Removing it needs a manager.`, (approval) => {
       confirmBox('Remove sent item', `Void "${line.name}" from order #${o.number}?`, {
         danger: true, okLabel: 'Void item', fields: [{ name: 'reason', label: 'Reason', placeholder: 'Guest changed mind / wrong item' }],
         onOk: async (v) => {
           try {
-            await api(`/api/orders/${o.id}/items/${lineId}`, { method: 'PATCH', body: { status: 'void', reason: v.reason } });
+            await api(`/api/orders/${o.id}/items/${lineId}`, { method: 'PATCH', body: { status: 'void', reason: v.reason },approvalToken:approval.approvalToken });
             await refresh(); renderEditor(host); toast('Item voided', 'ok');
           } catch (e) { toast(e.message, 'err'); }
         }
@@ -567,7 +567,7 @@ const Pos = (() => {
     });
   }
 
-  function discountModal(o, host) {
+  function discountModal(o, host,approval={}) {
     modal({
       title: 'Discount — order #' + o.number,
       body: `<div class="grid2">
@@ -586,7 +586,7 @@ const Pos = (() => {
       let amt = Number(ov.querySelector('#damt').value) || 0;
       if (pct) amt = Math.round(o.totals.subtotal * pct) / 100;
       try {
-        await api(`/api/orders/${o.id}/discount`, { body: { amount: amt, reason: ov.querySelector('#drsn').value } });
+        await api(`/api/orders/${o.id}/discount`, { body: { amount: amt, reason: ov.querySelector('#drsn').value },approvalToken:approval.approvalToken });
         closeModal(); await refresh(); renderEditor(host); toast('Discount applied', 'ok');
       } catch (e) { toast(e.message, 'err'); }
     };

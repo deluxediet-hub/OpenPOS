@@ -6,7 +6,7 @@ const path = require('path');
 const express = require('express');
 const {
   db, seed, loadSampleData, importRetailCsv, setupStatus, runSetup, hashPin, findUserByPin, pinTaken,
-  getSettings, getSetting, setSetting, computeTotals, nextOrderNumber, audit,
+  getSettings, getSetting, setSetting, computeTotals, nextOrderNumber, audit, DB_PATH,
   nowLocal, todayLocal
 } = require('./db');
 const domain = require('./lib/domain');
@@ -255,6 +255,9 @@ require('./routes/qr-ordering')(app, {
   audit, broadcast, bad
 });
 
+const backupOperations=require('./services/backup-operations')({rootDir:__dirname,dbPath:DB_PATH});
+require('./routes/operations')(app,{requireAuth,requireRole,backupOperations,bad});
+
 /* ------------------------------- frontend ------------------------------- */
 /* Legacy hospitality screens stay available only to migrated restaurant installs. */
 app.get(['/kds', '/kds.html'], (req, res, next) => {
@@ -271,8 +274,19 @@ app.get('/healthz', (req, res) => res.json({ ok: true, orders: clients.size }));
 
 const PORT = Number(process.env.PORT) || 3000;
 if (require.main === module) {
-  app.listen(PORT, '0.0.0.0', () => {
+  const listener=app.listen(PORT, '0.0.0.0', () => {
     console.log(`${getSettings().business_name} POS listening on http://0.0.0.0:${PORT}`);
   });
+  let stopping=false;
+  const shutdown=(signal)=>{
+    if(stopping)return;stopping=true;
+    const force=setTimeout(()=>process.exit(1),5000);force.unref();
+    listener.close(()=>{
+      try{db.pragma('wal_checkpoint(TRUNCATE)');db.close();}catch{}
+      clearTimeout(force);process.exit(0);
+    });
+  };
+  process.on('SIGTERM',()=>shutdown('SIGTERM'));
+  process.on('SIGINT',()=>shutdown('SIGINT'));
 }
 module.exports = app;

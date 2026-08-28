@@ -58,11 +58,11 @@ const Cashier = (() => {
       <div class="card"><div class="scroll-x" id="recentBox"><div class="empty">Loading…</div></div></div>`;
 
     host.querySelectorAll('[data-pay]').forEach((b) => b.onclick = () => payModal(Number(b.dataset.pay)));
-    host.querySelectorAll('[data-print]').forEach((b) => b.onclick = () => printReceipt(Number(b.dataset.print), { paid: true }));
+    host.querySelectorAll('[data-print]').forEach((b) => b.onclick = () => printReceipt(Number(b.dataset.print), { paid: true, reprint: true }));
     host.querySelector('#reprintLast').onclick = async () => {
       try {
         const o = await api('/api/last-closed-order');
-        await printReceipt(o.id, { paid: true });
+        await printReceipt(o.id, { paid: true, reprint: true });
         toast('Reprinting last receipt (#' + o.number + ')', 'ok');
       } catch (e) { toast(e.message, 'err'); }
     };
@@ -85,7 +85,7 @@ const Cashier = (() => {
           <td class="right"><button class="btn xs ghost" data-rp="${r.order_id}">Receipt</button></td>
         </tr>`).join('')}</tbody></table>`
         : '<div class="empty">No payments match.</div>';
-      box.querySelectorAll('[data-rp]').forEach((b) => b.onclick = () => printReceipt(Number(b.dataset.rp), { paid: true }));
+      box.querySelectorAll('[data-rp]').forEach((b) => b.onclick = () => printReceipt(Number(b.dataset.rp), { paid: true, reprint: true }));
     }, 250); };
 
     host.querySelector('#shiftPdf').onclick = async () => {
@@ -169,13 +169,13 @@ const Cashier = (() => {
             <td class="right"><button class="btn xs ghost" data-rp="${o.id}">Receipt</button>
             ${['manager','admin'].includes(State.user.role) ? `<button class="btn xs red" data-rf="${o.id}">Refund</button>` : ''}</td></tr>`;
         }).join('')}</tbody></table>` : '<div class="empty">No closed orders today yet.</div>';
-      box.querySelectorAll('[data-rp]').forEach((b) => b.onclick = () => printReceipt(Number(b.dataset.rp), { paid: true }));
+      box.querySelectorAll('[data-rp]').forEach((b) => b.onclick = () => printReceipt(Number(b.dataset.rp), { paid: true, reprint: true }));
       box.querySelectorAll('[data-rf]').forEach((b) => b.onclick = () => refundModal(Number(b.dataset.rf)));
     } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   }
 
   function refundModal(orderId) {
-    requireManagerPin('Refunds need manager authorisation.', async () => {
+    requireManagerPin('Refunds need manager authorisation.', async (approval) => {
       const o = State.orders.find((x) => x.id === orderId) || await api('/api/orders/' + orderId);
       const salePayments = o.payments.filter((p) => (p.kind || 'sale') === 'sale').reduce((a,p) => a+p.amount,0);
       const refunds = -o.payments.filter((p) => p.kind === 'refund' || p.method === 'refund').reduce((a,p) => a+p.amount,0);
@@ -202,7 +202,7 @@ const Cashier = (() => {
       ov.querySelector('[data-yes]').onclick=async()=>{
         const items=[...ov.querySelectorAll('[data-return]')].map((i)=>({order_item_id:Number(i.dataset.return),qty:Number(i.value)})).filter((i)=>i.qty>0);
         try { const result=await api(`/api/orders/${o.id}/refund`,{body:{items,amount:Number(ov.querySelector('#ra').value),method:ov.querySelector('#rmethod').value,
-          restock:ov.querySelector('#rstock').checked,reason:ov.querySelector('#rr').value.trim(),reference:ov.querySelector('#rref').value.trim(),idempotency_key:key}});
+          restock:ov.querySelector('#rstock').checked,reason:ov.querySelector('#rr').value.trim(),reference:ov.querySelector('#rref').value.trim(),idempotency_key:key},approvalToken:approval.approvalToken});
           closeModal();await Pos.refresh();toast('Return and refund recorded','ok');await printReturnReceipt(result.return_record.id);renderBills(document.getElementById('view'));
         } catch(e){toast(e.message,'err');}
       };

@@ -164,5 +164,19 @@ const ManagerSystem = (() => {
     };
   }
 
-  return { integrations, printer };
+  async function backup(body){
+    body.innerHTML='<div class="empty">Checking backups…</div>';
+    const state=await api('/api/backups/status');
+    const latest=state.latest;
+    body.innerHTML=`<div class="grid3"><div class="stat"><div class="l">Latest backup</div><div class="v" style="font-size:16px">${latest?esc(latest.mtime.slice(0,16)):'NONE'}</div><div class="d">${latest?Math.round(latest.size/1024)+' KB':'Create a backup now'}</div></div>
+      <div class="stat"><div class="l">Local copies</div><div class="v">${state.count}</div><div class="d">${esc(state.directory)}</div></div>
+      <div class="stat"><div class="l">Status</div><div class="v" style="color:${state.stale?'var(--red)':'var(--green)'}">${state.stale?'STALE':'CURRENT'}</div><div class="d">${esc((state.last_status||{}).integrity||'Not verified this session')}</div></div></div>
+      <div class="card" style="margin-top:14px"><div class="card-b"><p>Backups are local SQLite copies verified with an integrity check. Keep a separate off-device copy for theft or disk failure.</p>
+      <div class="row"><button class="btn primary" id="backupNow">Create backup now</button><button class="btn" id="backupVerify">Verify latest backup</button></div><pre id="backupOut" class="code" style="margin-top:12px;white-space:pre-wrap"></pre></div></div>`;
+    const run=async(path)=>{const out=body.querySelector('#backupOut');out.textContent='Working…';try{const r=await api(path,{body:{}});out.textContent=r.output;await backup(body);}catch(e){out.textContent=e.message;}};
+    body.querySelector('#backupNow').onclick=()=>run('/api/backups/run');
+    body.querySelector('#backupVerify').onclick=()=>run('/api/backups/verify');
+  }
+
+  return { integrations, printer, backup };
 })();

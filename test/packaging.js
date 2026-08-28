@@ -49,7 +49,8 @@ ck('installer runs init-data before first start', /init-data\.ps1/.test(iss));
 ck('installer removes only the spool junction on uninstall', /rmdir [^\n]*app\\spool/.test(iss) && !/DelTree\(ExpandConstant\('\{app\}'\)/.test(iss));
 ck('uninstall keeps data by default (explicit confirm to delete)', /Keep your business data/.test(iss) && /DelTree\(ExpandConstant\('\{commonappdata\}\\OpenPOS'\)/.test(iss));
 ck('installer registers watchdog + daily backup tasks', /OpenPOS Watchdog/.test(iss) && /OpenPOS Daily Backup/.test(iss) && /\/mo 5/.test(iss) && /\/sc daily/.test(iss));
-ck('uninstall removes both scheduled tasks', (iss.match(/\/delete \/tn ""OpenPOS (Watchdog|Daily Backup)""/g) || []).length === 2);
+ck('installer registers backup catch-up at logon',/OpenPOS Backup Catchup/.test(iss)&&/\/sc onlogon/.test(iss));
+ck('uninstall removes all scheduled tasks', (iss.match(/\/delete \/tn ""OpenPOS (Watchdog|Daily Backup|Backup Catchup)""/g) || []).length === 3);
 
 const upd = P('assets/update-app.ps1');
 const rb  = P('assets/rollback-app.ps1');
@@ -67,6 +68,7 @@ const rbk = P('assets/run-backup.ps1');
 ck('scheduled backup targets ProgramData DB and backup directory', /ProgramData/.test(rbk) && /POS_DB/.test(rbk) && /POS_BACKUP_DIR/.test(rbk) && /OpenPOS\\backups/.test(rbk));
 ck('scheduled backup uses the bundled runtime + app backup.js', /runtime\\node\.exe/.test(rbk) && /backup\.js/.test(rbk));
 ck('scheduled backup keeps a bounded number of copies', /POS_BACKUP_KEEP/.test(rbk));
+ck('backup runner supports recent-copy catch-up guard',/AddHours\(-20\)/.test(rbk)&&/\$Force/.test(rbk));
 const verifyBackup=fs.readFileSync(path.join(__dirname,'..','scripts','verify-backup.js'),'utf8');
 ck('restore drill runs SQLite integrity_check and checks core tables', /integrity_check/.test(verifyBackup) && /missing tables/.test(verifyBackup));
 ck('installer exposes owner-facing backup verification shortcut', /Verify latest backup/.test(iss) && fs.existsSync(path.join(__dirname,'..','packaging','assets','verify-latest-backup.ps1')));

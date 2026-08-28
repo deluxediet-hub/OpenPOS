@@ -40,17 +40,19 @@ function runSuite(file, base) {
 }
 
 (async () => {
-  const suites = ['domain.js', 'packaging.js', 'structure.js', 'retail.js', 'hardening.js', 'inventory-packages.js', 'reconciliation.js', 'e2e.js', 'features.js', 'ui.js'];
+  const suites = ['domain.js', 'packaging.js', 'structure.js', 'retail.js', 'hardening.js', 'inventory-packages.js', 'reconciliation.js', 'operations.js', 'e2e.js', 'features.js', 'ui.js'];
   let code = 0;
 
   for (const suite of suites) {
     /* Every suite gets its own server AND its own database — sharing one DB made
        later suites inherit leftover orders from earlier ones. */
     const db = path.join(os.tmpdir(), `pos-test-${process.pid}-${suite}.db`);
+    const backupDir=path.join(os.tmpdir(),`pos-backups-${process.pid}-${suite}`);
     const port = Number(PORT) + suites.indexOf(suite);
     const base = `http://127.0.0.1:${port}`;
 
     for (const f of [db, db + '-wal', db + '-shm']) { try { fs.unlinkSync(f); } catch {} }
+    try{fs.rmSync(backupDir,{recursive:true,force:true});}catch{}
 
     if (['domain.js', 'packaging.js', 'structure.js'].includes(suite)) {
       /* pure/static tests — no server needed */
@@ -62,7 +64,8 @@ function runSuite(file, base) {
     const server = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
       /* Pin a non-UTC zone. Running the suite in UTC hides every local-vs-UTC
          timestamp mismatch, because the two formats happen to agree there. */
-      env: { ...process.env, PORT: String(port), POS_DB: db, TZ: process.env.TEST_TZ || 'Africa/Nairobi' },
+      env: { ...process.env, PORT: String(port), POS_DB: db, POS_BACKUP_DIR:backupDir,
+        TZ: process.env.TEST_TZ || 'Africa/Nairobi' },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     servers.push(server);
@@ -84,8 +87,8 @@ function runSuite(file, base) {
     const setupRes = await fetch(base + '/api/setup', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        business: { business_name: ['retail.js','hardening.js','inventory-packages.js','reconciliation.js'].includes(suite) ? 'Test Wines & Spirits' : 'Test Cafe', address: '1 Test Way',
-          phone: '+254700000000', kra_pin: 'P000000000T', ...(['retail.js','hardening.js','inventory-packages.js','reconciliation.js'].includes(suite) ? { business_type: 'wines_spirits' } : {}) },
+        business: { business_name: ['retail.js','hardening.js','inventory-packages.js','reconciliation.js','operations.js'].includes(suite) ? 'Test Wines & Spirits' : 'Test Cafe', address: '1 Test Way',
+          phone: '+254700000000', kra_pin: 'P000000000T', ...(['retail.js','hardening.js','inventory-packages.js','reconciliation.js','operations.js'].includes(suite) ? { business_type: 'wines_spirits' } : {}) },
         owner_name: 'Owner', owner_pin: '0000', sample: true
       })
     });
@@ -98,6 +101,7 @@ function runSuite(file, base) {
     server.kill('SIGTERM');
     await sleep(150);
     for (const f of [db, db + '-wal', db + '-shm']) { try { fs.unlinkSync(f); } catch {} }
+    try{fs.rmSync(backupDir,{recursive:true,force:true});}catch{}
     if (code) break;
   }
 

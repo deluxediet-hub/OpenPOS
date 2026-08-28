@@ -20,6 +20,8 @@ const DB_PATH = process.env.POS_DB || path.join(DATA_DIR, 'pos.db');
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+const startupCheck=db.pragma('quick_check',{simple:true});
+if(startupCheck!=='ok')throw new Error('Database quick_check failed: '+startupCheck);
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS settings (

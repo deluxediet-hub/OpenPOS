@@ -1,5 +1,6 @@
 'use strict';
 const path = require('path');
+const fs = require('fs');
 
 /** Direct ESC/POS endpoints. Browser fallback remains client-side; this module owns
  * server payload generation, spooling and network delivery. */
@@ -16,8 +17,16 @@ module.exports = function registerPrinting(app, {
   const waiterNameOf = (id) =>
     (db.prepare('SELECT name FROM users WHERE id=?').get(id) || {}).name || '-';
 
+  function rotateSpool(){
+    fs.mkdirSync(spoolDir,{recursive:true});
+    const cutoff=Date.now()-30*86400000;
+    const jobs=fs.readdirSync(spoolDir).filter((f)=>f.endsWith('.prn')).map((f)=>({f,path:path.join(spoolDir,f),mtime:fs.statSync(path.join(spoolDir,f)).mtimeMs})).sort((a,b)=>b.mtime-a.mtime);
+    for(const job of jobs)if(job.mtime<cutoff||jobs.indexOf(job)>=500){try{fs.unlinkSync(job.path);}catch{}}
+  }
+
   async function deliverPrint(buf, kind, name, res, req) {
     const printer = printerTarget(kind);
+    rotateSpool();
     const spoolPath = path.join(spoolDir, `${name}-${Date.now()}.prn`);
     escpos.writeToFile(spoolPath, buf);
     audit(req.user, 'print', `${kind} ${name} (${buf.length} bytes)`);
@@ -50,8 +59,19 @@ module.exports = function registerPrinting(app, {
     };
     const paid = order.status === 'closed' && req.query.paid !== '0';
     const partial = !paid && req.query.partial === '1' && decorated.paid > 0;
-    const buf = escpos.buildReceipt(payload, { paid, partial });
+    const reprint=req.query.reprint==='1';
+    if(reprint)settings.drawer_kick_enabled='0';
+    const buf = escpos.buildReceipt(payload, { paid, partial, reprint });
     await deliverPrint(buf, 'till', `receipt-${order.number}`, res, req);
+  });
+
+  app.post('/api/print/return/:id',requireAuth,requireRole('manager','admin'),async(req,res)=>{
+    const ret=db.prepare(`SELECT r.*,o.number order_number,u.name created_by_name FROM returns r JOIN orders o ON o.id=r.order_id
+      LEFT JOIN users u ON u.id=r.created_by WHERE r.id=?`).get(req.params.id);
+    if(!ret)return bad(res,'Return not found',404);
+    ret.items=db.prepare('SELECT * FROM return_items WHERE return_id=? ORDER BY id').all(ret.id);
+    const buf=escpos.buildReturnReceipt(ret,getSettings());
+    await deliverPrint(buf,'till',`return-${ret.id}`,res,req);
   });
 
   app.post('/api/print/kitchen/:id', requireAuth, async (req, res) => {

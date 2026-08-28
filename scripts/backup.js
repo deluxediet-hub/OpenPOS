@@ -23,6 +23,15 @@ const DB = process.env.POS_DB || path.join(__dirname, '..', 'data', 'pos.db');
 const KEEP = Number(process.env.POS_BACKUP_KEEP ?? 14);
 const WEBHOOK = process.env.POS_BACKUP_WEBHOOK || '';
 const BACKUP_DIR = process.env.POS_BACKUP_DIR || path.join(__dirname, '..', 'backups');
+const STATUS_FILE = path.join(BACKUP_DIR, 'backup-status.json');
+function writeStatus(ok, detail = {}) {
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const tmp=STATUS_FILE+'.tmp';
+    fs.writeFileSync(tmp,JSON.stringify({ok,at:new Date().toISOString(),...detail},null,2));
+    fs.renameSync(tmp,STATUS_FILE);
+  } catch {}
+}
 
 if (!fs.existsSync(DB)) {
   console.error('No database at ' + DB + ' — has the server been started at least once?');
@@ -97,8 +106,9 @@ src.backup(dest)
     const kb = Math.round(fs.statSync(dest).size / 1024);
     console.log(`Backup written: ${dest}`);
     console.log(`  ${kb} KB · ${orders} orders · ${items} menu items · verified readable`);
+    writeStatus(true,{file:dest,size_kb:kb,orders,products:items,integrity:'ok'});
     rotate();
     await pushOffSite(dest);
   })
-  .catch((e) => { console.error('Backup failed:', e.message); process.exit(1); })
+  .catch((e) => { writeStatus(false,{error:e.message}); console.error('Backup failed:', e.message); process.exit(1); })
   .finally(() => src.close());

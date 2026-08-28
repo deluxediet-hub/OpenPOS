@@ -1,7 +1,7 @@
 /* print.js — receipt & ticket rendering + browser print */
 'use strict';
 
-function receiptHtml(r, { paid = false, partial = false } = {}) {
+function receiptHtml(r, { paid = false, partial = false, reprint = false } = {}) {
   const s = r.settings, t = r.totals || r.order.totals, o = r.order;
   const money = (c) => (Number(c || 0) / 100).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const row = (label, value, cls = '') => `<div class="r ${cls}"><span>${label}</span><span>${value}</span></div>`;
@@ -19,7 +19,7 @@ function receiptHtml(r, { paid = false, partial = false } = {}) {
     ${s.phone ? `<div class="c">Tel: ${esc(s.phone)}</div>` : ''}
     ${s.kra_pin ? `<div class="c">KRA PIN: ${esc(s.kra_pin)}</div>` : ''}
     ${s.business_type === 'wines_spirits' && s.licence_number ? `<div class="c">Licence: ${esc(s.licence_number)}</div>` : ''}
-    <div class="receipt-title">${paid ? 'SALES RECEIPT · PAID' : partial ? 'PART PAYMENT · BALANCE DUE' : 'SALE SUMMARY · UNPAID'}</div>
+    <div class="receipt-title">${paid ? 'SALES RECEIPT · PAID' : partial ? 'PART PAYMENT · BALANCE DUE' : 'SALE SUMMARY · UNPAID'}${reprint?' · REPRINT':''}</div>
     ${row('Receipt', '#' + esc(o.number))}
     ${row('Date', esc((o.closed_at || o.opened_at || '').slice(0, 16)))}
     ${r.table ? row('Table', esc(r.table.name) + ' · ' + esc(r.table.area)) : ''}
@@ -44,23 +44,27 @@ function receiptHtml(r, { paid = false, partial = false } = {}) {
   </div>`;
 }
 
-async function printReceipt(orderId, { paid = true, partial = false, kick = false } = {}) {
+async function printReceipt(orderId, { paid = true, partial = false, kick = false, reprint = false } = {}) {
   try {
     if (State.settings.printer_enabled === '1' && State.settings.printer_host) {
       try {
-        const result = await api(`/api/print/receipt/${orderId}?paid=${paid?1:0}&partial=${partial?1:0}&kick=${kick?1:0}`, { method: 'POST' });
+        const result = await api(`/api/print/receipt/${orderId}?paid=${paid?1:0}&partial=${partial?1:0}&kick=${kick?1:0}&reprint=${reprint?1:0}`, { method: 'POST' });
         if (result.sent) return toast('Receipt sent to thermal printer', 'ok');
       } catch (e) { toast('Network printer unavailable — using browser print', 'err'); }
     }
     const r = await api('/api/receipt/' + orderId);
     const effectivePaid=paid&&r.order.status==='closed';
     const effectivePartial=!effectivePaid&&r.order.paid>0&&(partial||paid);
-    doPrint(receiptHtml(r, { paid:effectivePaid, partial:effectivePartial }));
+    doPrint(receiptHtml(r, { paid:effectivePaid, partial:effectivePartial, reprint }));
   } catch (e) { toast('Could not print: ' + e.message, 'err'); }
 }
 
 async function printReturnReceipt(returnId) {
   try {
+    if(State.settings.printer_enabled==='1'&&State.settings.printer_host){
+      try{const result=await api('/api/print/return/'+returnId,{method:'POST'});if(result.sent)return toast('Return receipt sent to thermal printer','ok');}
+      catch(e){toast('Network printer unavailable — using browser print','err');}
+    }
     const r=await api('/api/returns/'+returnId);
     const rows=r.items.map((i)=>`<tr><td>${i.qty}x</td><td>${esc(i.item_name)}</td><td class="right">${(i.amount/100).toFixed(2)}</td></tr>`).join('');
     doPrint(`<div class="receipt"><div class="receipt-brand">${esc(State.settings.business_name)}</div><div class="receipt-title">RETURN / REFUND</div>

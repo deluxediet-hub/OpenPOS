@@ -13,6 +13,7 @@ const NAV = {
 const HOME = { seller: 'tables', admin: 'manager', manager: 'manager', waiter: 'tables', cashier: 'bills', bartender: 'kds', kitchen: 'kds' };
 
 let pin = '';
+let loginTimer = null;
 let clockTimer = null;
 let scannerBuffer = '', scannerStarted = 0, scannerLast = 0, scannerBusy = false;
 
@@ -51,6 +52,7 @@ function paintDots() {
     Array.from({ length: Math.max(4, pin.length) }, (_, i) => `<span class="pin-dot${i < pin.length ? ' on' : ''}"></span>`).join('');
 }
 async function tryLogin() {
+  clearTimeout(loginTimer);loginTimer=null;
   const err = document.getElementById('loginErr');
   err.textContent = '';
   try {
@@ -74,13 +76,15 @@ function initLogin() {
     else if (k === 'back') pin = pin.slice(0, -1);
     else if (pin.length < 6) pin += k;
     paintDots();
-    if (pin.length >= 4) setTimeout(() => { if (pin.length >= 4) tryLogin(); }, 160);
+    clearTimeout(loginTimer);
+    if (pin.length >= 4) loginTimer=setTimeout(() => { if (pin.length >= 4) tryLogin(); }, 700);
   });
+  document.getElementById('loginSubmit').onclick=()=>{clearTimeout(loginTimer);if(pin)tryLogin();};
   window.addEventListener('keydown', (e) => {
     if (!document.getElementById('login').classList.contains('hidden')) {
-      if (/^[0-9]$/.test(e.key) && pin.length < 6) { pin += e.key; paintDots(); if (pin.length >= 4) setTimeout(tryLogin, 160); }
-      else if (e.key === 'Backspace') { pin = pin.slice(0, -1); paintDots(); }
-      else if (e.key === 'Enter' && pin) tryLogin();
+      if (/^[0-9]$/.test(e.key) && pin.length < 6) { pin += e.key; paintDots();clearTimeout(loginTimer);if(pin.length>=4)loginTimer=setTimeout(tryLogin,700); }
+      else if (e.key === 'Backspace') { clearTimeout(loginTimer);pin = pin.slice(0, -1); paintDots(); }
+      else if (e.key === 'Enter' && pin) {clearTimeout(loginTimer);tryLogin();}
     }
   });
 }

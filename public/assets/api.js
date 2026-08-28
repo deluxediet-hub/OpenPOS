@@ -32,9 +32,11 @@ const State = {
 
 /* ------------------------------- HTTP --------------------------------- */
 async function api(path, opts = {}) {
+  const headers={...(opts.body?{'Content-Type':'application/json'}:{}),...(opts.headers||{})};
+  if(opts.approvalToken)headers['X-POS-Approval']=opts.approvalToken;
   const res = await fetch(path, {
     method: opts.method || (opts.body ? 'POST' : 'GET'),
-    headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
+    headers:Object.keys(headers).length?headers:undefined,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
     credentials: 'same-origin'
   });
@@ -174,11 +176,10 @@ function requireManagerPin(reason, onOk) {
   setTimeout(() => inp.focus(), 40);
   const go = async () => {
     try {
-      const r = await api('/api/login', { body: { pin: inp.value } });
-      if (!['manager', 'admin'].includes(r.user.role)) throw new Error('That PIN is not a manager');
+      const r = await api('/api/authorize', { body: { pin: inp.value } });
       closeModal();
       toast('Manager authorised', 'ok');
-      onOk({ by: r.user });
+      onOk({ by:r.approved_by, approvalToken:r.approval_token });
     } catch (e) { ov.querySelector('#mperr').textContent = e.message; }
   };
   ov.querySelector('[data-yes]').onclick = go;
