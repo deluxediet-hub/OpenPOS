@@ -20,7 +20,7 @@ const declarations = (allRouteSource.match(/app\.(?:get|post|put|patch|delete)\(
 const countEndpoint = (fragment) => (allRouteSource.match(new RegExp(fragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
 
 ck('server.js is a compact composition root', server.split('\n').length < 400, `${server.split('\n').length} lines`);
-ck('route declaration count is preserved', declarations === 125, String(declarations));
+ck('route declaration count matches the retail package API expansion', declarations === 129, String(declarations));
 ck('authentication route module exists', routes.includes('routes/auth.js'));
 ck('payment and return route modules exist', routes.includes('routes/payments.js') && routes.includes('routes/returns.js'));
 ck('inventory/purchase/stocktake modules exist', routes.includes('routes/inventory.js') && routes.includes('routes/purchases.js') && routes.includes('routes/stocktakes.js'));
@@ -29,6 +29,7 @@ ck('printing route module exists', routes.includes('routes/printing.js'));
 ck('close-out service exists', services.includes('services/sale-closeout.js'));
 ck('reconciliation service exists', services.includes('services/reconciliation.js'));
 ck('retail till service exists', services.includes('services/retail-till.js'));
+ck('structured inventory ledger service exists', services.includes('services/inventory-ledger.js'));
 ck('payment endpoint is registered exactly once', countEndpoint("'/api/orders/:id/pay'") === 1);
 ck('return endpoint is registered exactly once', countEndpoint("'/api/orders/:id/refund'") === 1);
 ck('shift close endpoint is registered exactly once', countEndpoint("'/api/shifts/:id/close'") === 1);

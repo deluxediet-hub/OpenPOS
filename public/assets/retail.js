@@ -72,8 +72,14 @@ const Retail = (() => {
   }
 
   async function deliveryForm(body) {
-    const [suppliers, stock] = await Promise.all([api('/api/suppliers'), api('/api/stock')]);
+    const [suppliers, stock, packages] = await Promise.all([api('/api/suppliers'), api('/api/stock'), api('/api/stock-packages')]);
     const optionHtml = stock.map((x) => `<option value="${x.id}">${esc(x.name)} · ${esc(stockQtyLabel(x.qty, x.unit, x.capacity_ml))}</option>`).join('');
+    const packageOptions=(stockId)=>{
+      const item=stock.find((x)=>x.id===Number(stockId));
+      return `<option value="">Base unit (${esc((item||{}).unit||'unit')})</option>`+packages.filter((p)=>p.stock_item_id===Number(stockId))
+        .map((p)=>`<option value="${p.id}">${esc(p.name)} = ${roundStock(p.units_per_package)} ${esc(p.base_unit)}</option>`).join('');
+    };
+    const deliveryKey=window.crypto&&window.crypto.randomUUID?window.crypto.randomUUID():`delivery-${Date.now()}-${Math.random()}`;
     modal({ title: 'Receive supplier delivery', wide: true, body: `
       <div class="grid3"><div><label class="fld">Supplier</label><select class="inp" id="grSupplier"><option value="">Not listed / walk-in supplier</option>
         ${suppliers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>
@@ -91,19 +97,25 @@ const Retail = (() => {
     const addLine = () => {
       const row = document.createElement('div'); row.className = 'grid delivery-line delivery-line-simple';
       row.innerHTML = `<div><label class="fld">Product</label><select class="inp" data-stock>${optionHtml}</select></div>
+        <div><label class="fld">Received as</label><select class="inp" data-package></select></div>
         <div><label class="fld">Quantity received</label><input class="inp" data-qty type="number" min="0.01" step="0.01" inputmode="decimal"></div>
         <button class="btn red" data-remove title="Remove line">×</button>`;
+      const stockSelect=row.querySelector('[data-stock]'),packageSelect=row.querySelector('[data-package]');
+      const refreshPackages=()=>{packageSelect.innerHTML=packageOptions(stockSelect.value);};
+      stockSelect.onchange=refreshPackages;refreshPackages();
       row.querySelector('[data-remove]').onclick = () => row.remove(); lines.appendChild(row);
     };
     addLine(); ov.querySelector('#addDeliveryLine').onclick = addLine; ov.querySelector('[data-no]').onclick = closeModal;
     ov.querySelector('[data-yes]').onclick = async () => {
       const items = [...lines.children].map((r) => ({
-        stock_item_id: Number(r.querySelector('[data-stock]').value), qty: Number(r.querySelector('[data-qty]').value)
+        stock_item_id: Number(r.querySelector('[data-stock]').value),
+        package_id: Number(r.querySelector('[data-package]').value)||null,
+        qty: Number(r.querySelector('[data-qty]').value)
       }));
       try {
         const result = await api('/api/goods-receipts', { body: { supplier_id: Number(ov.querySelector('#grSupplier').value) || null,
           invoice_no: ov.querySelector('#grInvoice').value.trim(), payment_method: ov.querySelector('#grPayment').value,
-          notes: ov.querySelector('#grNotes').value.trim(), items } });
+          notes: ov.querySelector('#grNotes').value.trim(),idempotency_key:deliveryKey,items } });
         closeModal(); await loadBootstrap(); deliveries(body);
         toast(`Delivery ${result.invoice_no} received · ${result.payment_method === 'pay_later' ? 'payment pending' : 'payment recorded'}`, 'ok');
       } catch (e) { toast(e.message, 'err'); }

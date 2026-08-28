@@ -2,7 +2,8 @@
 
 /** Simple owner-authorized declarations; seller policy is intentionally unchanged. */
 module.exports = function register(app, {
-  db, requireAuth, requireRole, getSetting, ensureRetailTill, todayLocal, dayBounds, dayEnd, audit, broadcast, bad
+  db, requireAuth, requireRole, getSetting, ensureRetailTill, todayLocal, dayBounds, dayEnd,
+  stockLedger, audit, broadcast, bad
 }) {
   /* ---------------- complimentary stock issues (no cash transaction) -------- */
   app.get('/api/complimentaries', requireAuth, requireRole('manager', 'admin'), (req, res) => {
@@ -47,17 +48,14 @@ module.exports = function register(app, {
     let id;
     const tx = db.transaction(() => {
       const deducted = recipe.deduction_mode === 'count' ? 0 : 1;
-      if (deducted) {
-        db.prepare(`UPDATE stock_items SET qty=CASE WHEN ABS(ROUND(qty-?,6))<0.000001 THEN 0 ELSE ROUND(qty-?,6) END WHERE id=?`)
-          .run(stockQty, stockQty, recipe.id);
-        db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
-          .run(recipe.id, -stockQty, `Complimentary: ${reason}${recipient ? ' · ' + recipient : ''}`, req.user.id);
-      }
       id = db.prepare(`INSERT INTO complimentary_issues(menu_item_id,item_name,qty,measure_ml,stock_factor,
         retail_value,cost_value,stock_item_id,stock_qty,deducted,reason,recipient,shift_id,created_by,authorized_by,authorization_reference)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(m.id, itemName, qty, measureMl || null, stockFactor,
         retailValue, costValue, recipe.id, stockQty, deducted, reason, recipient || null, shift.id, req.user.id,
         authorizer.id, authorizationReference || (req.user.id === authorizer.id ? 'Owner self-authorized' : null)).lastInsertRowid;
+      if (deducted) stockLedger.record({ stockItemId:recipe.id, delta:-stockQty,
+        movementType:'COMPLIMENTARY', reason:`Complimentary: ${reason}${recipient ? ' · ' + recipient : ''}`,
+        userId:req.user.id, referenceType:'complimentary', referenceId:Number(id) });
     }); tx();
     audit(req.user, 'complimentary.issue', `${itemName} x${qty} · retail KSh${(retailValue / 100).toFixed(2)} · cost KSh${(costValue / 100).toFixed(2)} · ${reason}${recipient ? ' · ' + recipient : ''} · recorded by ${req.user.name} · authorized by ${authorizer.name} (${authorizationReference || 'self'})`);
     broadcast('stock'); broadcast('sales');

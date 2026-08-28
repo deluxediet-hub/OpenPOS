@@ -294,9 +294,11 @@ const Manager = (() => {
             head: ['Supplier', 'Phone', 'Email', 'KRA PIN', 'Address'], rows: suppliers.map((x) => [x.name, x.phone || '—', x.email || '—', x.kra_pin || '—', x.address || '—']),
             footer: [`TOTAL · ${suppliers.length} SUPPLIER(S)`, '', '', '', ''] });
           if (selected.has('stockmoves')) tables.push({ title: 'Stock movement log',
-            head: ['Date', 'Product', 'Change', 'Reason', 'By'], right: [2],
-            rows: periodMoves.map((x) => [(x.created_at || '').slice(0,16), x.name, `${x.delta > 0 ? '+' : ''}${roundStock(x.delta,4)} ${x.unit}`, x.reason || '—', x.user_name || 'system']),
-            footer: [`TOTAL · ${periodMoves.length} MOVEMENT(S)`, '', '', '', ''] });
+            head: ['Date', 'Type', 'Product', 'Before', 'Change', 'After', 'Reason / reference', 'By'], right: [3,4,5],
+            rows: periodMoves.map((x) => [(x.created_at || '').slice(0,16), x.movement_type || 'LEGACY', x.name,
+              x.qty_before==null?'—':`${roundStock(x.qty_before,4)} ${x.unit}`,`${x.delta > 0 ? '+' : ''}${roundStock(x.delta,4)} ${x.unit}`,
+              x.qty_after==null?'—':`${roundStock(x.qty_after,4)} ${x.unit}`,`${x.reason || '—'}${x.reference_code?' · '+x.reference_code:''}`,x.user_name || 'system']),
+            footer: [`TOTAL · ${periodMoves.length} MOVEMENT(S)`, '', '', '', '', '', '', ''] });
           if (selected.has('shifts')) tables.push({ title: 'Till and reconciliation history',
             head: ['Closed', 'By', 'Cash var.', 'M-Pesa var.', 'Card var.', 'Stock retail var.', 'Overall', 'Status'], right: [2,3,4,5,6],
             rows: periodShifts.map((x) => [(x.closed_at || x.opened_at || '').slice(0,16), x.closed_by_name || x.opened_by_name || '—',
@@ -672,14 +674,15 @@ const Manager = (() => {
             <td>${x.qty <= 0 ? '<span class="tag bad">Out</span>' : x.qty <= x.min_qty ? '<span class="tag warn">Low</span>' : '<span class="tag ok">OK</span>'}</td>
             <td class="right nowrap">${canManage() ? `${State.settings.business_type === 'wines_spirits' ? '' : `<button class="btn xs green" data-rec="${x.id}">Quick receive</button>`}
               <button class="btn xs ghost" data-adj="${x.id}">Quick correction</button>
+              ${State.settings.business_type === 'wines_spirits' ? `<button class="btn xs ghost" data-pkg="${x.id}">Packages</button>` : ''}
               <button class="btn xs ghost" data-se="${x.id}">Edit controls</button>` : '<span class="tiny muted">Owner controlled</span>'}</td>
           </tr>`).join('')}</tbody></table></div>
       </div>
-      <div class="card" style="margin-top:14px"><div class="card-h"><h3>Recent stock movement</h3><span class="grow"></span><span class="tiny muted">Sales, deliveries and counts</span></div>
-        <div class="scroll-x" style="max-height:300px"><table class="tbl"><thead><tr><th>When</th><th>Product</th><th class="right">Change</th><th>Reason</th><th>By</th></tr></thead>
-        <tbody>${moves.map((m) => `<tr><td class="nowrap muted small">${esc(m.created_at)}</td><td><b>${esc(m.name)}</b></td>
-          <td class="right mono"><span class="tag ${m.delta < 0 ? 'warn' : 'ok'}">${m.delta > 0 ? '+' : ''}${roundStock(m.delta, 4)} ${esc(m.unit)}</span></td>
-          <td class="small">${esc(m.reason || '—')}</td><td>${esc(m.user_name || 'system')}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">No stock movement yet.</td></tr>'}</tbody></table></div></div>`;
+      <div class="card" style="margin-top:14px"><div class="card-h"><h3>Recent stock movement</h3><span class="grow"></span><span class="tiny muted">Sales, purchases, returns and counts</span></div>
+        <div class="scroll-x" style="max-height:300px"><table class="tbl"><thead><tr><th>When</th><th>Type</th><th>Product</th><th class="right">Before</th><th class="right">Change</th><th class="right">After</th><th>Reason / reference</th><th>By</th></tr></thead>
+        <tbody>${moves.map((m) => `<tr><td class="nowrap muted small">${esc(m.created_at)}</td><td><span class="tag info">${esc(m.movement_type||'LEGACY')}</span></td><td><b>${esc(m.name)}</b></td>
+          <td class="right mono">${m.qty_before==null?'—':roundStock(m.qty_before,4)}</td><td class="right mono"><span class="tag ${m.delta < 0 ? 'warn' : 'ok'}">${m.delta > 0 ? '+' : ''}${roundStock(m.delta, 4)} ${esc(m.unit)}</span></td>
+          <td class="right mono">${m.qty_after==null?'—':roundStock(m.qty_after,4)}</td><td class="small">${esc(m.reason || '—')}${m.reference_code?`<div class="tiny mono">${esc(m.reference_code)}</div>`:''}</td><td>${esc(m.user_name || 'system')}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">No stock movement yet.</td></tr>'}</tbody></table></div></div>`;
 
     if (!canManage()) return;
     const addStock = body.querySelector('#addS');
@@ -688,6 +691,32 @@ const Manager = (() => {
       stockForm(State.stock.find((x) => x.id === Number(b.dataset.se)), body));
     body.querySelectorAll('[data-rec]').forEach((b) => b.onclick = () => adjust(State.stock.find((x) => x.id === Number(b.dataset.rec)), body, 'receive'));
     body.querySelectorAll('[data-adj]').forEach((b) => b.onclick = () => adjust(State.stock.find((x) => x.id === Number(b.dataset.adj)), body, 'adjust'));
+    body.querySelectorAll('[data-pkg]').forEach((b)=>b.onclick=()=>packageManager(State.stock.find((x)=>x.id===Number(b.dataset.pkg)),body));
+  }
+
+  async function packageManager(stockItem,body){
+    const packages=await api('/api/stock-packages?all=1');
+    const own=packages.filter((p)=>p.stock_item_id===stockItem.id);
+    modal({title:'Packages — '+stockItem.name,wide:true,body:`<p class="muted" style="margin-top:0">Define deterministic case, crate or carton conversions into ${esc(stockItem.unit)} stock.</p>
+      <div class="scroll-x"><table class="tbl"><thead><tr><th>Package</th><th>Conversion</th><th>SKU / Barcode</th><th>Purchase cost</th><th>Sale price</th><th>Status</th></tr></thead><tbody>
+      ${own.map((p)=>`<tr><td>${esc(p.name)}</td><td>${roundStock(p.units_per_package)} ${esc(stockItem.unit)}</td><td>${esc(p.sku||p.barcode||'—')}</td>
+        <td>${fmt(p.purchase_cost)}</td><td>${p.saleable?fmt(p.sale_price):'Not saleable'}</td><td>${p.active?'Active':'Inactive'}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">No packages yet.</td></tr>'}
+      </tbody></table></div><div class="grid3" style="margin-top:14px">
+        <div><label class="fld">Package name</label><input class="inp" id="pkn" placeholder="Case of 12 / Crate of 24"></div>
+        <div><label class="fld">Base units in package</label><input class="inp" id="pku" type="number" min="0.000001" step="1" placeholder="12"></div>
+        <div><label class="fld">Package SKU</label><input class="inp mono" id="pks"></div>
+        <div><label class="fld">Package barcode</label><input class="inp mono" id="pkb"></div>
+        <div><label class="fld">Purchase cost (${sym()})</label><input class="inp" id="pkc" type="number" min="0" step="0.01"></div>
+        <div><label class="fld">Sale price (${sym()})</label><input class="inp" id="pkp" type="number" min="0" step="0.01"></div>
+      </div><label class="row" style="margin-top:12px;gap:8px"><input type="checkbox" id="pksale"> Allow this package to be sold by its SKU/barcode</label>`,
+      footer:'<button class="btn" data-no>Close</button><button class="btn primary" data-yes>Add package</button>'});
+    const ov=document.querySelector('#modalRoot .ov');ov.querySelector('[data-no]').onclick=closeModal;
+    ov.querySelector('[data-yes]').onclick=async()=>{
+      try{await api('/api/stock-packages',{body:{stock_item_id:stockItem.id,name:ov.querySelector('#pkn').value.trim(),
+        units_per_package:Number(ov.querySelector('#pku').value),sku:ov.querySelector('#pks').value.trim(),barcode:ov.querySelector('#pkb').value.trim(),
+        purchase_cost:Number(ov.querySelector('#pkc').value||0),sale_price:Number(ov.querySelector('#pkp').value||0),saleable:ov.querySelector('#pksale').checked}});
+        closeModal();await loadBootstrap();stock(body);toast('Package conversion added','ok');}catch(e){toast(e.message,'err');}
+    };
   }
 
   function adjust(x, body, mode) {
@@ -696,8 +725,11 @@ const Manager = (() => {
       body: `<p class="muted" style="margin-top:0">Current level: <b>${esc(stockQtyLabel(x.qty, x.unit, x.capacity_ml))}</b></p>
         <label class="fld">${mode === 'receive' ? 'Quantity received' : 'Actual quantity counted'}</label>
         <input class="inp" id="aq" type="number" step="0.5" value="${mode === 'receive' ? '' : x.qty}" placeholder="${mode === 'receive' ? 'e.g. 25' : 'e.g. 9'}">
+        ${mode==='adjust'?`<div style="margin-top:12px"><label class="fld">Adjustment type</label><select class="inp" id="atype">
+          <option value="ADJUSTMENT">Correction</option><option value="BREAKAGE">Breakage / leakage</option>
+          <option value="SPOILAGE">Spoilage / expiry</option><option value="SUPPLIER_RETURN">Returned to supplier</option></select></div>`:''}
         <div style="margin-top:12px"><label class="fld">Reason</label>
-          <input class="inp" id="ar" placeholder="${mode === 'receive' ? 'Supplier delivery / invoice no.' : 'Full count, breakage found, correction…'}"></div>`,
+          <input class="inp" id="ar" placeholder="${mode === 'receive' ? 'Supplier delivery / invoice no.' : 'Count reference or explanation…'}"></div>`,
       footer: `<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Save</button>`
     });
     const ov = document.querySelector('#modalRoot .ov');
@@ -710,7 +742,8 @@ const Manager = (() => {
       if (!d) return toast('The count matches the current stock', 'err');
       if (!reason) return toast('Enter a reason or count reference', 'err');
       try {
-        await api(`/api/stock/${x.id}/adjust`, { body: { delta: d, reason } });
+        await api(`/api/stock/${x.id}/adjust`, { body: { delta: d, reason,
+          movement_type:ov.querySelector('#atype')?.value||'ADJUSTMENT' } });
         closeModal(); stock(body); toast('Stock updated', 'ok');
       } catch (e) { toast(e.message, 'err'); }
     };

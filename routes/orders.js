@@ -52,8 +52,9 @@ module.exports = function register(app, {
     const dayparts = db.prepare('SELECT * FROM dayparts WHERE active = 1').all();
     const groups = db.prepare('SELECT * FROM modifier_groups').all();
     const options = db.prepare('SELECT * FROM modifier_options').all();
-    const ins = db.prepare(`INSERT INTO order_items(order_id,menu_item_id,name,price,qty,note,station,added_by,modifiers,stock_factor,cost_snapshot)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?)`);
+    const ins = db.prepare(`INSERT INTO order_items(order_id,menu_item_id,name,price,qty,note,station,added_by,modifiers,
+      stock_factor,cost_snapshot,package_id,package_name,units_per_package)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     const tx = db.transaction(() => {
       for (const l of lines) {
         const m = db.prepare('SELECT * FROM menu_items WHERE id=?').get(Number(l.menu_item_id));
@@ -64,10 +65,19 @@ module.exports = function register(app, {
           throw new Error('Retail sale quantity must be a positive whole number');
         const fullMl = Number(m.volume_ml) || 0;
         const measureMl = Number(l.measure_ml) || 0;
+        const packageRow=l.package_id?db.prepare('SELECT * FROM stock_packages WHERE id=? AND active=1').get(Number(l.package_id)):null;
+        if(l.package_id&&!packageRow)throw new Error('Sale package was not found');
+        if(packageRow&&!packageRow.saleable)throw new Error(`${packageRow.name} is not enabled for sale`);
+        if(packageRow&&measureMl)throw new Error('Choose either a measured amount or a sealed package');
+        if(packageRow){
+          const source=db.prepare('SELECT stock_item_id FROM recipes WHERE menu_item_id=? ORDER BY id LIMIT 1').get(m.id);
+          if(!source||source.stock_item_id!==packageRow.stock_item_id)throw new Error('Package does not belong to this product stock');
+        }
         if (measureMl && (!(fullMl > 0) || measureMl <= 0 || measureMl > fullMl))
           throw new Error('Measured sale must be greater than zero and no larger than the product size');
         const priceFactor = measureMl ? measureMl / fullMl : 1;
-        const stockFactor = measureMl ? (m.stock_mode === 'weighed' ? measureMl / 1000 : priceFactor) : 1;
+        const stockFactor = packageRow ? Number(packageRow.units_per_package)
+          : measureMl ? (m.stock_mode === 'weighed' ? measureMl / 1000 : priceFactor) : 1;
         if (getSetting('business_type') === 'wines_spirits' && getSetting('prevent_negative_stock') === '1') {
           const tracked = db.prepare(`SELECT si.qty,r.qty deduction FROM recipes r JOIN stock_items si ON si.id=r.stock_item_id
             WHERE r.menu_item_id=? ORDER BY r.id LIMIT 1`).get(m.id);
@@ -82,8 +92,10 @@ module.exports = function register(app, {
         /* base price, less any active daypart discount */
         const rule = domain.bestDiscountFor(m, dayparts);
         let price = rule ? domain.discountedPrice(m.price, rule.discount_pct) : m.price;
-        if (priceFactor !== 1) price = Math.round(price * priceFactor);
-        const effectiveName = measureMl ? `${m.name} — ${Number(measureMl.toFixed(2))}ml` : m.name;
+        if(packageRow)price=packageRow.sale_price>0?packageRow.sale_price:Math.round(price*packageRow.units_per_package);
+        else if (priceFactor !== 1) price = Math.round(price * priceFactor);
+        const effectiveName = packageRow ? `${m.name} — ${packageRow.name}`
+          : measureMl ? `${m.name} — ${Number(measureMl.toFixed(2))}ml` : m.name;
         const chosen = [];
 
         /* modifiers: validate every one against the menu item's allowed groups */
@@ -118,7 +130,8 @@ module.exports = function register(app, {
           ORDER BY id LIMIT 1`).get(o.id, m.id, effectiveName, price, stockFactor, l.note || null, modifierJson) : null;
         if (existing) db.prepare('UPDATE order_items SET qty=qty+? WHERE id=?').run(qty, existing.id);
         else ins.run(o.id, m.id, effectiveName, price, qty, l.note || null, m.station, req.user.id,
-          modifierJson, stockFactor, Math.round(m.cost * stockFactor));
+          modifierJson, stockFactor, Math.round(m.cost * stockFactor),packageRow?packageRow.id:null,
+          packageRow?packageRow.name:null,packageRow?packageRow.units_per_package:1);
       }
     });
     try { tx(); } catch (e) { return bad(res, e.message); }

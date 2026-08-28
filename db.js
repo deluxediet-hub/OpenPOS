@@ -112,7 +112,9 @@ CREATE TABLE IF NOT EXISTS order_items (
   sent_at     TEXT,
   void_reason TEXT,
   stock_factor REAL NOT NULL DEFAULT 1,
-  cost_snapshot INTEGER, discount_allocated INTEGER NOT NULL DEFAULT 0
+  cost_snapshot INTEGER, discount_allocated INTEGER NOT NULL DEFAULT 0,
+  package_id INTEGER REFERENCES stock_packages(id), package_name TEXT,
+  units_per_package REAL NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS ix_oi_order ON order_items(order_id);
 
@@ -145,15 +147,38 @@ CREATE TABLE IF NOT EXISTS stock_items (
   capacity_ml REAL                              -- ml in one bottle/can/keg unit
 );
 
+CREATE TABLE IF NOT EXISTS stock_packages (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  stock_item_id     INTEGER NOT NULL REFERENCES stock_items(id) ON DELETE CASCADE,
+  name              TEXT NOT NULL,
+  units_per_package REAL NOT NULL CHECK(units_per_package > 0),
+  sku               TEXT,
+  barcode           TEXT,
+  purchase_cost     INTEGER NOT NULL DEFAULT 0,
+  sale_price        INTEGER NOT NULL DEFAULT 0,
+  saleable          INTEGER NOT NULL DEFAULT 0,
+  active            INTEGER NOT NULL DEFAULT 1,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_stock_package_sku ON stock_packages(sku) WHERE sku IS NOT NULL AND sku!='';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_stock_package_barcode ON stock_packages(barcode) WHERE barcode IS NOT NULL AND barcode!='';
+
 CREATE TABLE IF NOT EXISTS stock_moves (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   stock_item_id  INTEGER NOT NULL REFERENCES stock_items(id) ON DELETE CASCADE,
   delta          REAL NOT NULL,
   reason         TEXT,
   user_id        INTEGER REFERENCES users(id),
-  created_at     TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  created_at     TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  movement_type  TEXT NOT NULL DEFAULT 'LEGACY',
+  reference_type TEXT,
+  reference_id   INTEGER,
+  reference_code TEXT,
+  qty_before     REAL,
+  qty_after      REAL,
+  unit_cost_snapshot INTEGER,
+  idempotency_key TEXT
 );
-
 CREATE TABLE IF NOT EXISTS audit_log (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER REFERENCES users(id),
@@ -388,6 +413,9 @@ function migrate() {
   add('order_items', 'stock_factor', 'stock_factor REAL NOT NULL DEFAULT 1');
   add('order_items', 'cost_snapshot', 'cost_snapshot INTEGER');
   add('order_items', 'discount_allocated', 'discount_allocated INTEGER NOT NULL DEFAULT 0');
+  add('order_items', 'package_id', 'package_id INTEGER REFERENCES stock_packages(id)');
+  add('order_items', 'package_name', 'package_name TEXT');
+  add('order_items', 'units_per_package', 'units_per_package REAL NOT NULL DEFAULT 1');
   add('orders', 'channel', "channel TEXT NOT NULL DEFAULT 'dine_in'");
   add('orders', 'commission', 'commission INTEGER NOT NULL DEFAULT 0');
   add('orders', 'location_id', 'location_id INTEGER REFERENCES locations(id)');
@@ -400,6 +428,22 @@ function migrate() {
   add('stock_items', 'location_id', 'location_id INTEGER REFERENCES locations(id)');
   add('stock_items', 'deduction_mode', "deduction_mode TEXT NOT NULL DEFAULT 'auto'");
   add('stock_items', 'capacity_ml', 'capacity_ml REAL');
+  add('stock_moves', 'movement_type', "movement_type TEXT NOT NULL DEFAULT 'LEGACY'");
+  add('stock_moves', 'reference_type', 'reference_type TEXT');
+  add('stock_moves', 'reference_id', 'reference_id INTEGER');
+  add('stock_moves', 'reference_code', 'reference_code TEXT');
+  add('stock_moves', 'qty_before', 'qty_before REAL');
+  add('stock_moves', 'qty_after', 'qty_after REAL');
+  add('stock_moves', 'unit_cost_snapshot', 'unit_cost_snapshot INTEGER');
+  add('stock_moves', 'idempotency_key', 'idempotency_key TEXT');
+  db.prepare(`UPDATE stock_moves SET movement_type=CASE
+    WHEN reason LIKE 'Recipe usage%' THEN 'SALE'
+    WHEN reason LIKE 'Delivery %' THEN 'PURCHASE'
+    WHEN reason LIKE 'Opening stock%' OR reason LIKE 'CSV opening stock%' THEN 'OPENING_STOCK'
+    WHEN reason LIKE 'Stocktake %' THEN 'STOCKTAKE'
+    WHEN reason LIKE 'Complimentary:%' THEN 'COMPLIMENTARY'
+    WHEN reason LIKE 'Return %' THEN 'RETURN'
+    ELSE movement_type END WHERE movement_type='LEGACY'`).run();
   add('payments', 'shift_id', 'shift_id INTEGER REFERENCES shifts(id)');
   add('payments', 'kind', "kind TEXT NOT NULL DEFAULT 'sale'");
   add('payments', 'idempotency_key', 'idempotency_key TEXT');
@@ -465,6 +509,17 @@ function migrate() {
     CREATE UNIQUE INDEX IF NOT EXISTS ux_gift_funding_idem ON gift_card_funding(idempotency_key) WHERE idempotency_key IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS ux_menu_sku ON menu_items(sku) WHERE sku IS NOT NULL AND sku != '';
     CREATE UNIQUE INDEX IF NOT EXISTS ux_menu_barcode ON menu_items(barcode) WHERE barcode IS NOT NULL AND barcode != '';
+    CREATE TABLE IF NOT EXISTS stock_packages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      stock_item_id INTEGER NOT NULL REFERENCES stock_items(id) ON DELETE CASCADE,
+      name TEXT NOT NULL, units_per_package REAL NOT NULL CHECK(units_per_package > 0),
+      sku TEXT, barcode TEXT, purchase_cost INTEGER NOT NULL DEFAULT 0,
+      sale_price INTEGER NOT NULL DEFAULT 0, saleable INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_stock_package_sku ON stock_packages(sku) WHERE sku IS NOT NULL AND sku!='';
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_stock_package_barcode ON stock_packages(barcode) WHERE barcode IS NOT NULL AND barcode!='';
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_stock_move_idempotency ON stock_moves(idempotency_key) WHERE idempotency_key IS NOT NULL;
     CREATE TABLE IF NOT EXISTS suppliers (
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, phone TEXT, email TEXT,
       kra_pin TEXT, address TEXT, active INTEGER NOT NULL DEFAULT 1,
@@ -514,6 +569,12 @@ function migrate() {
   add('stock_counts', 'retail_variance', 'retail_variance INTEGER NOT NULL DEFAULT 0');
   add('goods_receipts', 'payment_method', "payment_method TEXT NOT NULL DEFAULT 'pay_later'");
   add('goods_receipts', 'payment_status', "payment_status TEXT NOT NULL DEFAULT 'unpaid'");
+  add('goods_receipts', 'idempotency_key', 'idempotency_key TEXT');
+  add('goods_receipt_items', 'package_id', 'package_id INTEGER REFERENCES stock_packages(id)');
+  add('goods_receipt_items', 'package_name', 'package_name TEXT');
+  add('goods_receipt_items', 'package_qty', 'package_qty REAL');
+  add('goods_receipt_items', 'units_per_package', 'units_per_package REAL NOT NULL DEFAULT 1');
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS ux_goods_receipt_idempotency ON goods_receipts(idempotency_key) WHERE idempotency_key IS NOT NULL");
   add('complimentary_issues', 'authorized_by', 'authorized_by INTEGER REFERENCES users(id)');
   add('complimentary_issues', 'authorization_reference', 'authorization_reference TEXT');
   /* Existing owner-entered complementaries were self-authorized. */
@@ -810,8 +871,11 @@ function importRetailCsv(text, userId = null) {
         stockId = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost,deduction_mode,capacity_ml) VALUES(?,?,?,?,?,?,?)')
           .run(name, mode === 'weighed' ? 'kg' : saleUnit, Number(r.opening_stock || 0), Number(r.reorder_level || 0), cost,
             mode === 'weighed' ? 'count' : 'auto', mode === 'weighed' ? 1000 : size).lastInsertRowid;
-        if (Number(r.opening_stock || 0)) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
-          .run(stockId, Number(r.opening_stock), 'CSV opening stock', userId);
+        if (Number(r.opening_stock || 0)) db.prepare(`INSERT INTO stock_moves(stock_item_id,delta,reason,user_id,movement_type,
+          reference_type,reference_id,reference_code,qty_before,qty_after,unit_cost_snapshot)
+          VALUES(?,?,?,?,'OPENING_STOCK','menu_item',?,?,0,?,?)`)
+          .run(stockId, Number(r.opening_stock), 'CSV opening stock', userId, itemId, r.sku || null,
+            Number(r.opening_stock), cost);
       }
       db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,?)').run(itemId, stockId, recipeQty);
       if (r.sku) created.set(r.sku.toLowerCase(), db.prepare('SELECT * FROM stock_items WHERE id=?').get(stockId));
@@ -1106,6 +1170,10 @@ function loadSampleData() {
       const menuId = insItem.run(cats[category], name, price * 100, cost * 100, 'retail', i + 1, volume, 'bottle').lastInsertRowid;
       const stockId = insStock.run(name, 'bottle', 12, 4, cost * 100, volume).lastInsertRowid;
       insRecipe.run(menuId, stockId); // one retail unit sold = one unit removed
+      const owner=(db.prepare("SELECT id FROM users WHERE role='admin' AND active=1 ORDER BY id LIMIT 1").get()||{}).id||null;
+      db.prepare(`INSERT INTO stock_moves(stock_item_id,delta,reason,user_id,movement_type,reference_type,
+        reference_id,qty_before,qty_after,unit_cost_snapshot) VALUES(?,12,'Starter opening stock',?,'OPENING_STOCK','menu_item',?,0,12,?)`)
+        .run(stockId,owner,menuId,cost*100);
     });
   }
 

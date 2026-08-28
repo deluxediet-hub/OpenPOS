@@ -2,7 +2,7 @@
 
 /** Physical stock-count routes, including existing seller-entered additions. */
 module.exports = function register(app, {
-  db, requireAuth, requireRole, getSetting, todayLocal, audit, broadcast, bad
+  db, requireAuth, requireRole, getSetting, todayLocal, stockLedger, audit, broadcast, bad
 }) {
   app.get('/api/stock-counts', requireAuth, (req, res) => res.json(db.prepare(`
     SELECT sc.*,us.name started_by_name,uc.name completed_by_name,
@@ -92,8 +92,10 @@ module.exports = function register(app, {
         db.prepare('UPDATE stock_count_items SET counted=?,variance=?,added_qty=?,cost_variance=?,retail_variance=? WHERE id=?')
           .run(counted, variance, added, costVariance, retailVariance, row.id);
         db.prepare('UPDATE stock_items SET qty=? WHERE id=?').run(counted, row.stock_item_id);
-        if (actualStockMove) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
-          .run(row.stock_item_id, actualStockMove, `Stocktake ${count.reference}${added ? ` · unrecorded added ${added}` : ''}`, req.user.id);
+        if (actualStockMove) stockLedger.record({ stockItemId:row.stock_item_id, delta:actualStockMove,
+          movementType:'STOCKTAKE', reason:`Stocktake ${count.reference}${added ? ` · unrecorded added ${added}` : ''}`,
+          userId:req.user.id, referenceType:'stock_count', referenceId:Number(count.id),
+          referenceCode:count.reference, alreadyApplied:true });
       }
       db.prepare(`UPDATE stock_counts SET status='completed',completed_by=?,completed_at=datetime('now','localtime'),
         cost_variance=?,retail_variance=? WHERE id=?`).run(req.user.id, totalCostVariance, totalRetailVariance, count.id);

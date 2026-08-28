@@ -2,7 +2,7 @@
 
 /** Supplier and goods-receipt routes. Seller receiving/payment access is preserved. */
 module.exports = function register(app, {
-  db, requireAuth, requireRole, todayLocal, audit, broadcast, bad
+  db, requireAuth, requireRole, todayLocal, stockLedger, audit, broadcast, bad
 }) {
   /* ---------------------- retail receiving & stocktakes --------------------- */
   app.get('/api/suppliers', requireAuth, (req, res) =>
@@ -34,9 +34,23 @@ module.exports = function register(app, {
     FROM goods_receipts gr LEFT JOIN suppliers s ON s.id=gr.supplier_id
     LEFT JOIN users u ON u.id=gr.received_by ORDER BY gr.id DESC LIMIT 100`).all()));
 
+  app.get('/api/goods-receipts/:id', requireAuth, (req,res)=>{
+    const receipt=db.prepare(`SELECT gr.*,s.name supplier_name,u.name received_by_name FROM goods_receipts gr
+      LEFT JOIN suppliers s ON s.id=gr.supplier_id LEFT JOIN users u ON u.id=gr.received_by WHERE gr.id=?`).get(req.params.id);
+    if(!receipt)return bad(res,'Delivery not found',404);
+    receipt.items=db.prepare(`SELECT gi.*,si.name stock_name,si.unit base_unit FROM goods_receipt_items gi
+      JOIN stock_items si ON si.id=gi.stock_item_id WHERE gi.receipt_id=? ORDER BY gi.id`).all(receipt.id);
+    res.json(receipt);
+  });
+
   app.post('/api/goods-receipts', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
     const b = req.body || {}, lines = Array.isArray(b.items) ? b.items : [];
     if (!lines.length) return bad(res, 'Add at least one delivered product');
+    const idempotencyKey=String(b.idempotency_key||'').trim().slice(0,100)||null;
+    if(idempotencyKey){
+      const prior=db.prepare('SELECT * FROM goods_receipts WHERE idempotency_key=?').get(idempotencyKey);
+      if(prior)return res.json({...prior,ok:true,idempotent_replay:true});
+    }
     if (db.prepare("SELECT id FROM stock_counts WHERE status='open'").get())
       return bad(res, 'Finish the active stocktake before receiving a delivery');
     const paymentMethod = ['cash', 'mpesa', 'other', 'pay_later'].includes(b.payment_method) ? b.payment_method : 'pay_later';
@@ -46,19 +60,26 @@ module.exports = function register(app, {
       return bad(res, `Open the till before recording a ${paymentMethod === 'cash' ? 'cash' : 'M-Pesa'} stock payment`);
     let receiptId, total = 0;
     const tx = db.transaction(() => {
-      receiptId = db.prepare(`INSERT INTO goods_receipts(supplier_id,invoice_no,notes,payment_method,payment_status,received_by)
-        VALUES(?,?,?,?,?,?)`).run(Number(b.supplier_id) || null, reference, b.notes || null,
-        paymentMethod, paymentStatus, req.user.id).lastInsertRowid;
-      const ins = db.prepare('INSERT INTO goods_receipt_items(receipt_id,stock_item_id,qty,unit_cost,batch_no,expiry_date) VALUES(?,?,?,?,?,?)');
+      receiptId = db.prepare(`INSERT INTO goods_receipts(supplier_id,invoice_no,notes,payment_method,payment_status,received_by,idempotency_key)
+        VALUES(?,?,?,?,?,?,?)`).run(Number(b.supplier_id) || null, reference, b.notes || null,
+        paymentMethod, paymentStatus, req.user.id,idempotencyKey).lastInsertRowid;
+      const ins = db.prepare(`INSERT INTO goods_receipt_items(receipt_id,stock_item_id,qty,unit_cost,batch_no,expiry_date,
+        package_id,package_name,package_qty,units_per_package) VALUES(?,?,?,?,?,?,?,?,?,?)`);
       for (const line of lines) {
         const stock = db.prepare('SELECT * FROM stock_items WHERE id=?').get(Number(line.stock_item_id));
-        const qty = Number(line.qty);
-        if (!stock || !(qty > 0)) throw new Error('Every delivery line needs a valid product and positive quantity');
-        ins.run(receiptId, stock.id, qty, stock.cost, null, null);
-        db.prepare('UPDATE stock_items SET qty=ROUND(qty+?,6) WHERE id=?').run(qty, stock.id);
-        db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
-          .run(stock.id, qty, `Delivery ${reference}`, req.user.id);
-        total += qty * stock.cost;
+        const enteredQty = Number(line.qty);
+        if (!stock || !Number.isFinite(enteredQty) || !(enteredQty > 0)) throw new Error('Every delivery line needs a valid product and positive quantity');
+        const packageRow=line.package_id?db.prepare('SELECT * FROM stock_packages WHERE id=? AND active=1').get(Number(line.package_id)):null;
+        if(line.package_id&&(!packageRow||packageRow.stock_item_id!==stock.id))throw new Error('Delivery package does not belong to the selected product');
+        const units=packageRow?Number(packageRow.units_per_package):1;
+        const baseQty=Math.round(enteredQty*units*1e6)/1e6;
+        const lineUnitCost=packageRow&&packageRow.purchase_cost>0?Math.round(packageRow.purchase_cost/units):stock.cost;
+        ins.run(receiptId,stock.id,baseQty,lineUnitCost,null,null,packageRow?packageRow.id:null,
+          packageRow?packageRow.name:null,packageRow?enteredQty:null,units);
+        stockLedger.record({stockItemId:stock.id,delta:baseQty,movementType:'PURCHASE',
+          reason:`Delivery ${reference}${packageRow?` · ${enteredQty} ${packageRow.name}`:''}`,userId:req.user.id,
+          referenceType:'goods_receipt',referenceId:Number(receiptId),referenceCode:reference,unitCost:lineUnitCost});
+        total += packageRow&&packageRow.purchase_cost>0?enteredQty*packageRow.purchase_cost:baseQty*stock.cost;
       }
       total = Math.round(total);
       db.prepare('UPDATE goods_receipts SET total_cost=? WHERE id=?').run(total, receiptId);

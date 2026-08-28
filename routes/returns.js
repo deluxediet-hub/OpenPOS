@@ -3,7 +3,7 @@
 /** Item-linked returns/refunds. Kept as one transaction boundary so money, stock,
  * return lines and the audit reference cannot be partially posted. */
 module.exports = function registerReturns(app, {
-  db, requireAuth, requireRole, getSetting, decorate, readOrder, audit, broadcast, bad
+  db, requireAuth, requireRole, getSetting, decorate, readOrder, stockLedger, audit, broadcast, bad
 }) {
   app.post('/api/orders/:id/refund', requireAuth, requireRole('manager', 'admin'), (req, res) => {
     const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
@@ -75,9 +75,9 @@ module.exports = function registerReturns(app, {
             const stock = db.prepare('SELECT * FROM stock_items WHERE id=?').get(recipe.stock_item_id);
             const add = recipe.qty*x.qty*(x.line.stock_factor||1);
             if (!stock || stock.deduction_mode==='count') continue;
-            db.prepare('UPDATE stock_items SET qty=ROUND(qty+?,6) WHERE id=?').run(add,stock.id);
-            db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
-              .run(stock.id,add,`Return #${returnId} · sale #${o.number}`,req.user.id);
+            stockLedger.record({ stockItemId:stock.id, delta:add, movementType:'RETURN',
+              reason:`Return #${returnId} · sale #${o.number}`,userId:req.user.id,
+              referenceType:'return',referenceId:Number(returnId),referenceCode:String(o.number) });
           }
         }
       }

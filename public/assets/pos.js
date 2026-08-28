@@ -183,6 +183,7 @@ const Pos = (() => {
               const live = priceOf(m), rule = ruleFor(m), off = live !== m.price;
               const selectedMl = measureChoice === 'custom' ? Number(customMeasureMl)
                 : Number(m.volume_ml) * ({ half: 0.5, quarter: 0.25, eighth: 0.125 }[measureChoice] || 0);
+              const salePackages=retail&&measureChoice==='whole'?State.stockPackages.filter((p)=>p.stock_item_id===m.stock_item_id&&p.saleable&&p.active):[];
               return `<button class="item${m.available ? '' : ' out'}" data-mid="${m.id}" ${m.available ? '' : `title="${retail ? 'Out of stock / unavailable' : '86 — unavailable'}"`}>
                 <span class="n">${esc(m.name)}${groupsFor(m.id).length ? ' <span class="tiny" style="color:var(--teal)">▸</span>' : ''}</span>
                 ${retail && (m.sku || m.barcode) ? `<span class="tiny muted mono item-code">${esc(m.sku || m.barcode)}</span>` : ''}
@@ -191,7 +192,10 @@ const Pos = (() => {
                 ${off ? `<span class="tiny item-old-price">${fmtPrice(m.price)}</span>` : ''}
                 <span class="p item-price" style="${off ? 'color:var(--green)' : ''}">${m.available ? fmtPrice(live) : (retail ? 'Unavailable' : '86')}</span>
                 ${rule ? `<span class="tiny" style="color:var(--green)">${esc(rule)}</span>` : ''}
-              </button>`;
+              </button>${salePackages.map((p)=>`<button class="item package-item" data-mid="${m.id}" data-package="${p.id}">
+                <span class="n">${esc(m.name)}</span><span class="tiny item-code">${esc(p.name)} · ${roundStock(p.units_per_package)} ${esc(p.base_unit)}</span>
+                ${p.sku||p.barcode?`<span class="tiny muted mono">${esc(p.sku||p.barcode)}</span>`:''}
+                <span class="p item-price">${fmtPrice(p.sale_price>0?p.sale_price:live*p.units_per_package)}</span></button>`).join('')}`;
             }).join('') : '<div class="empty">No items match.</div>'}
           </div>
         </div>
@@ -258,7 +262,7 @@ const Pos = (() => {
     host.querySelectorAll('[data-cat]').forEach((b) => b.onclick = () => {
       State.category = Number(b.dataset.cat); search = ''; renderEditor(host);
     });
-    host.querySelectorAll('[data-mid]').forEach((b) => b.onclick = () => addItem(host, Number(b.dataset.mid)));
+    host.querySelectorAll('[data-mid]').forEach((b) => b.onclick = () => addItem(host, Number(b.dataset.mid), Number(b.dataset.package)||null));
     host.querySelectorAll('[data-inc]').forEach((b) => b.onclick = () => bump(host, Number(b.dataset.inc), 1));
     host.querySelectorAll('[data-dec]').forEach((b) => b.onclick = () => bump(host, Number(b.dataset.dec), -1));
     host.querySelectorAll('[data-rm]').forEach((b) => b.onclick = () => removeLine(host, Number(b.dataset.rm)));
@@ -316,11 +320,17 @@ const Pos = (() => {
   }
 
   /* --------------------------- line actions --------------------------- */
-  async function addItem(host, mid) {
+  async function addItem(host, mid, packageId = null) {
     const o = activeOrder();
     const m = State.menu.find((x) => x.id === mid);
     if (!m) return;
     if (!m.available) return toast(m.name + (State.settings.business_type === 'wines_spirits' ? ' is unavailable' : ' is marked 86 (unavailable)'), 'err');
+    if(packageId){
+      const packageRow=State.stockPackages.find((p)=>p.id===Number(packageId)&&p.saleable);
+      if(!packageRow)return toast('Sale package is unavailable','err');
+      await pushLines(host,o.id,[{menu_item_id:mid,qty:1,package_id:packageRow.id}]);
+      return;
+    }
     if (measureChoice !== 'whole' && State.settings.business_type === 'wines_spirits' && m.stock_mode !== 'pour') {
       const full = Number(m.volume_ml);
       if (!(full > 0)) return toast('Set this product’s size before selling a measured amount', 'err');
@@ -584,7 +594,10 @@ const Pos = (() => {
 
   async function scanItem(code) {
     const normalized = String(code || '').trim().toLowerCase();
-    const product = State.menu.find((m) => [m.barcode, m.sku].some((v) => String(v || '').trim().toLowerCase() === normalized));
+    const packageRow=State.stockPackages.find((p)=>[p.barcode,p.sku].some((v)=>String(v||'').trim().toLowerCase()===normalized));
+    const product = packageRow
+      ? State.menu.find((m)=>m.stock_item_id===packageRow.stock_item_id&&m.stock_mode==='unit')
+      : State.menu.find((m) => [m.barcode, m.sku].some((v) => String(v || '').trim().toLowerCase() === normalized));
     if (!product) return toast(`Barcode not found: ${code}`, 'err');
     if (!product.available) return toast(product.name + ' is unavailable', 'err');
     if (State.settings.business_type === 'wines_spirits' && State.shift?.status !== 'open' && State.user.role === 'seller')
@@ -601,8 +614,8 @@ const Pos = (() => {
     }
     search = '';
     await openEditor(host, sale.id);
-    await addItem(host, product.id);
-    toast(`Scanned: ${product.name}`, 'ok');
+    await addItem(host, product.id, packageRow ? packageRow.id : null);
+    toast(`Scanned: ${product.name}${packageRow ? ' · '+packageRow.name : ''}`, 'ok');
   }
 
   async function refresh() {

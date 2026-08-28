@@ -26,6 +26,7 @@ const dayEnd = (date) => `${date} 23:59:59`;
 const { requireAuth, requireRole } = require('./routes/auth')(app, {
   db, findUserByPin, audit, bad
 });
+const stockLedger = require('./services/inventory-ledger')({ db });
 
 /* ------------------------------- realtime ------------------------------- */
 const clients = new Set();
@@ -140,6 +141,8 @@ app.get('/api/bootstrap', requireAuth, (req, res) => {
     qr_base: (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:' + (process.env.PORT || 3000)),
     users: db.prepare('SELECT id,name,role,active FROM users ORDER BY role,name').all(),
     stock: db.prepare('SELECT * FROM stock_items ORDER BY name').all(),
+    stock_packages: db.prepare(`SELECT p.*,s.name stock_name,s.unit base_unit FROM stock_packages p
+      JOIN stock_items s ON s.id=p.stock_item_id WHERE p.active=1 ORDER BY s.name,p.units_per_package`).all(),
     /* Phase 2-4 working data */
     dayparts, active_dayparts: active, pricing,
     modifier_groups: db.prepare('SELECT * FROM modifier_groups ORDER BY name').all(),
@@ -154,7 +157,7 @@ app.get('/api/bootstrap', requireAuth, (req, res) => {
 });
 
 require('./routes/catalogue')(app, {
-  db, requireAuth, requireRole, getSetting, importRetailCsv, listMenu, audit, broadcast, bad
+  db, requireAuth, requireRole, getSetting, importRetailCsv, listMenu, stockLedger, audit, broadcast, bad
 });
 
 require('./routes/tables')(app, { db, requireAuth, requireRole, broadcast, bad });
@@ -167,14 +170,14 @@ require('./routes/orders')(app, {
 });
 
 /* ------------------------------- payments ------------------------------- */
-const closeOut = require('./services/sale-closeout')({ db, domain });
+const closeOut = require('./services/sale-closeout')({ db, domain, stockLedger });
 require('./routes/payments')(app, {
   db, domain, requireAuth, requireRole, getSettings, ensureRetailTill,
   decorate, readOrder, computeTotals, closeOut, audit, broadcast, bad
 });
 
 require('./routes/returns')(app, {
-  db, requireAuth, requireRole, getSetting, decorate, readOrder, audit, broadcast, bad
+  db, requireAuth, requireRole, getSetting, decorate, readOrder, stockLedger, audit, broadcast, bad
 });
 
 app.get('/api/receipt/:id', requireAuth, (req, res) => {
@@ -186,18 +189,19 @@ app.get('/api/receipt/:id', requireAuth, (req, res) => {
   res.json({ order: decorate(o), table: t, waiter: w, settings: getSettings(), items });
 });
 
-require('./routes/inventory')(app, { db, requireAuth, requireRole, audit, bad });
+require('./routes/inventory')(app, { db, requireAuth, requireRole, stockLedger, audit, broadcast, bad });
 
 require('./routes/complimentaries')(app, {
-  db, requireAuth, requireRole, getSetting, ensureRetailTill, todayLocal, dayBounds, dayEnd, audit, broadcast, bad
+  db, requireAuth, requireRole, getSetting, ensureRetailTill, todayLocal, dayBounds, dayEnd,
+  stockLedger, audit, broadcast, bad
 });
 
 /* ---------------------- retail receiving & stocktakes --------------------- */
 require('./routes/purchases')(app, {
-  db, requireAuth, requireRole, todayLocal, audit, broadcast, bad
+  db, requireAuth, requireRole, todayLocal, stockLedger, audit, broadcast, bad
 });
 require('./routes/stocktakes')(app, {
-  db, requireAuth, requireRole, getSetting, todayLocal, audit, broadcast, bad
+  db, requireAuth, requireRole, getSetting, todayLocal, stockLedger, audit, broadcast, bad
 });
 
 require('./routes/users')(app, {

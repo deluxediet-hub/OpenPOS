@@ -10,6 +10,7 @@ const State = {
   orders: [],
   users: [],
   stock: [],
+  stockPackages: [],
   view: 'tables',
   openOrderId: null,
   area: 'All',
@@ -220,7 +221,7 @@ async function loadBootstrap() {
   Object.assign(State, {
     user: b.user, settings: b.settings, categories: b.categories,
     menu: b.menu, tables: b.tables, orders: b.orders, users: b.users, stock: b.stock || [],
-    dayparts: b.dayparts || [], activeDayparts: b.active_dayparts || [], pricing: b.pricing || {},
+    stockPackages: b.stock_packages || [], dayparts: b.dayparts || [], activeDayparts: b.active_dayparts || [], pricing: b.pricing || {},
     modifierGroups: b.modifier_groups || [], modifierOptions: b.modifier_options || [],
     itemModifiers: b.item_modifiers || [], shift: b.shift || null,
     reservations: b.reservations || [], locations: b.locations || []

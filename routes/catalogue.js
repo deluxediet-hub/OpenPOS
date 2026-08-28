@@ -2,7 +2,7 @@
 
 /** Product/category routes; existing stock/recipe creation transactions are preserved. */
 module.exports = function register(app, {
-  db, requireAuth, requireRole, getSetting, importRetailCsv, listMenu, audit, broadcast, bad
+  db, requireAuth, requireRole, getSetting, importRetailCsv, listMenu, stockLedger, audit, broadcast, bad
 }) {
   /* ------------------------------- catalogue ------------------------------ */
   app.get('/api/menu', requireAuth, (req, res) => res.json(listMenu()));
@@ -55,8 +55,10 @@ module.exports = function register(app, {
         const stockId = db.prepare('INSERT INTO stock_items(name,unit,qty,min_qty,cost,deduction_mode,capacity_ml) VALUES(?,?,?,?,?,?,?)')
           .run(name.trim(), stockUnit, opening, Number(min_qty) || 0, effectiveCost, deductionMode, capacity).lastInsertRowid;
         db.prepare('INSERT INTO recipes(menu_item_id,stock_item_id,qty) VALUES(?,?,1)').run(itemId, stockId);
-        if (opening) db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
-          .run(stockId, opening, 'Opening stock', req.user.id);
+        if (opening) stockLedger.record({ stockItemId: stockId, delta: opening,
+          movementType: 'OPENING_STOCK', reason: 'Opening stock', userId: req.user.id,
+          referenceType: 'menu_item', referenceId: itemId, referenceCode: String(sku || '').trim() || null,
+          unitCost: effectiveCost, alreadyApplied: true });
       }
     });
     try { tx(); } catch (e) { return bad(res, e.message); }

@@ -1,7 +1,7 @@
 'use strict';
 
 /** Runs only inside the successful atomic order-close transaction. */
-module.exports = function createSaleCloseOut({ db, domain }) {
+module.exports = function createSaleCloseOut({ db, domain, stockLedger }) {
   return function closeOut(orderId, decorated, settings, user, customerId) {
     const lines = db.prepare("SELECT * FROM order_items WHERE order_id=? AND status!='void'").all(orderId);
     const recipes = db.prepare('SELECT * FROM recipes').all();
@@ -9,11 +9,9 @@ module.exports = function createSaleCloseOut({ db, domain }) {
     for (const movement of domain.stockMovementsFor(stockLines, recipes)) {
       const stock = db.prepare('SELECT deduction_mode FROM stock_items WHERE id=?').get(movement.stock_item_id);
       if (stock && stock.deduction_mode === 'count') continue;
-      db.prepare(`UPDATE stock_items
-        SET qty=CASE WHEN ABS(ROUND(qty-?,6))<0.000001 THEN 0 ELSE ROUND(qty-?,6) END WHERE id=?`)
-        .run(movement.qty, movement.qty, movement.stock_item_id);
-      db.prepare('INSERT INTO stock_moves(stock_item_id,delta,reason,user_id) VALUES(?,?,?,?)')
-        .run(movement.stock_item_id, -movement.qty, `Recipe usage — order #${orderId}`, user ? user.id : null);
+      stockLedger.record({ stockItemId:movement.stock_item_id, delta:-movement.qty,
+        movementType:'SALE', reason:`Recipe usage — order #${orderId}`, userId:user ? user.id : null,
+        referenceType:'order', referenceId:Number(orderId) });
     }
 
     const customer = customerId ? db.prepare('SELECT * FROM customers WHERE id=?').get(customerId) : null;
