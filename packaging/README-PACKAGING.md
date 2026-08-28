@@ -34,7 +34,7 @@ Output:
 packaging\output\OpenPOS-Setup.exe
 ```
 
-The build downloads the pinned private Node 20 runtime, installs production-only dependencies for that runtime and compiles one offline-capable installer.
+The build downloads the pinned private Node 20 runtime, runs `npm ci --omit=dev` through that exact runtime, and verifies that its `node.exe` can open an in-memory `better-sqlite3` database before compiling the offline-capable installer. The build stops instead of producing an installer when the native ABI does not match.
 
 ## Installed behavior
 

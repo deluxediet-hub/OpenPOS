@@ -12,7 +12,7 @@ Do not describe Windows production readiness as proven until the prepared Window
 ## Verified locally
 
 ```text
-Standard automated suite: 671 passed, 0 failed
+Standard automated suite: 673 passed, 0 failed
 JavaScript syntax:         passed
 Whitespace/diff checks:    passed
 Clean npm lock install:    passed using available local Node headers

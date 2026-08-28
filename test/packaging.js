@@ -81,7 +81,11 @@ ck('installer exposes owner-facing backup verification shortcut', /Verify latest
 ck('installer exposes startup diagnostics and server log',/Startup diagnostics/.test(iss)&&fs.existsSync(path.join(__dirname,'..','packaging','assets','show-diagnostics.ps1'))&&/server\.log/.test(P('assets/show-diagnostics.ps1')));
 
 const build = P('build-installer.ps1');
-ck('build bundles the Windows native better-sqlite3 via npm once', /install --omit=dev/.test(build) && /node_modules/.test(build));
+ck('build installs production dependencies deterministically', /npm-cli\.js/.test(build) && /ci --omit=dev/.test(build) && /node_modules/.test(build));
+ck('build runs npm through the bundled Node with bundled runtime first on PATH',
+  /node\.exe'\) \$npmCli/.test(build) && /env:PATH = "\$nodedir;\$oldPath"/.test(build));
+ck('build verifies better-sqlite3 with the exact bundled runtime before compiling',
+  /Verifying bundled Node \/ better-sqlite3 ABI/.test(build) && /new Database\(':memory:'\)/.test(build) && /process\.versions\.modules/.test(build));
 ck('build bundles the private node runtime', /node\.exe/.test(build) && /win-x64/.test(build));
 ck('build copies the app byte-for-byte (no transformation)', /'server\.js'/.test(build) && /Copy-Item/.test(build) && !/transform/i.test(build));
 ck('build includes modular routes and services', /'routes'/.test(build) && /'services'/.test(build));

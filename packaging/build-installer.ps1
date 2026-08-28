@@ -42,17 +42,42 @@ Expand-Archive -Path $zip -DestinationPath $tools -Force
 $nodedir = Join-Path $tools "node-$NodeVersion-win-x64"
 Copy-Item (Join-Path $nodedir 'node.exe') "$pay\runtime\node.exe" -Force
 
-# 4. Windows-native dependencies (better-sqlite3 prebuilt for this Node).
-#    Uses the bundled node/npm so the native ABI matches the bundled runtime.
-Write-Host "==> Installing Windows dependencies (one time)" -ForegroundColor Cyan
-Push-Location "$pay\app"
-& (Join-Path $nodedir 'npm.cmd') install --omit=dev --no-audit --no-fund
-if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
-Pop-Location
+# 4. Windows-native dependencies (better-sqlite3 must match the bundled Node ABI).
+# Run npm THROUGH the downloaded node.exe and put that runtime first on PATH.
+# Invoking npm.cmd alone can let native lifecycle scripts find a system Node first,
+# which previously packaged a Node-22 ABI 127 binary beside Node-20 ABI 115.
+Write-Host "==> Installing Windows dependencies for bundled $NodeVersion" -ForegroundColor Cyan
+$npmCli = Join-Path $nodedir 'node_modules\npm\bin\npm-cli.js'
+if (-not (Test-Path $npmCli)) { throw "Bundled npm CLI not found: $npmCli" }
+$oldPath = $env:PATH
+try {
+  $env:PATH = "$nodedir;$oldPath"
+  Push-Location "$pay\app"
+  & (Join-Path $nodedir 'node.exe') $npmCli ci --omit=dev --no-audit --no-fund
+  if ($LASTEXITCODE -ne 0) { throw "npm ci failed under bundled Node" }
+} finally {
+  Pop-Location
+  $env:PATH = $oldPath
+}
 # Present node_modules as a sibling of app\ (matches the installer layout and the
 # way Node resolves require() from app\server.js), keeping code and deps separate.
 if (Test-Path "$pay\node_modules") { Remove-Item "$pay\node_modules" -Recurse -Force }
 Move-Item "$pay\app\node_modules" "$pay\node_modules"
+
+# Refuse to compile an installer until the exact bundled runtime can load and use
+# its packaged native SQLite module. This turns an ABI mismatch into a build error.
+Write-Host "==> Verifying bundled Node / better-sqlite3 ABI" -ForegroundColor Cyan
+$verifyNative = @'
+const modulePath = process.argv[1];
+const Database = require(modulePath);
+const db = new Database(':memory:');
+const answer = db.prepare('SELECT 42 answer').get().answer;
+db.close();
+if (answer !== 42) throw new Error('SQLite native smoke test failed');
+console.log(`Native SQLite OK: Node ${process.version}, ABI ${process.versions.modules}`);
+'@
+& "$pay\runtime\node.exe" -e $verifyNative "$pay\node_modules\better-sqlite3"
+if ($LASTEXITCODE -ne 0) { throw "Bundled better-sqlite3 is incompatible with bundled Node $NodeVersion" }
 
 # 5. Compile the installer.
 Write-Host "==> Compiling OpenPOS-Setup.exe" -ForegroundColor Cyan
