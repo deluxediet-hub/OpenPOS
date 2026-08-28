@@ -47,6 +47,9 @@ ck('firewall requires elevation', /RunAsAdministrator/.test(fw));
 const iss = P('openpos.iss');
 ck('installer does not create a data dir inside the app', !/\{app\}\\data/.test(iss));
 ck('installer places persistent data in ProgramData', /commonappdata/.test(iss));
+ck('installer clearly limits install to supported 64-bit Windows 10+',/MinVersion=10\.0\.17763/.test(iss)&&/ArchitecturesAllowed=x64compatible/.test(iss));
+ck('installer and main shortcuts use the OpenPOS icon',/SetupIconFile=assets\\openpos\.ico/.test(iss)&&/UninstallDisplayIcon=\{app\}\\scripts\\openpos\.ico/.test(iss)&&
+  (iss.match(/IconFilename: "\{app\}\\scripts\\openpos\.ico"/g)||[]).length>=2&&fs.existsSync(path.join(__dirname,'..','packaging','assets','openpos.ico')));
 ck('installer wires single-instance hidden auto-start', /userstartup.*start-hidden\.vbs/.test(iss.replace(/\n/g, ' ')) );
 ck('installer runs init-data before first start', /init-data\.ps1/.test(iss));
 ck('Open POS shortcuts start the server instead of opening a dead URL',

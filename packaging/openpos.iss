@@ -13,19 +13,28 @@
 #define AppPort "3000"
 
 [Setup]
+AppId={{8A128F45-33DE-4A5A-B6BA-77C91F4057D8}
 AppName={#MyAppName}
-AppVersion=1.0
+AppVersion=1.0.0
 AppPublisher=OpenPOS
 DefaultDirName={autopf}\OpenPOS
 DefaultGroupName=OpenPOS
 PrivilegesRequired=admin
+MinVersion=10.0.17763
+ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+WizardStyle=modern
+SetupIconFile=assets\openpos.ico
 OutputDir=output
 OutputBaseFilename=OpenPOS-Setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 SetupLogging=yes
-UninstallDisplayIcon={app}\runtime\node.exe
+UninstallDisplayIcon={app}\scripts\openpos.ico
+VersionInfoVersion=1.0.0.0
+VersionInfoCompany=OpenPOS
+VersionInfoDescription=OpenPOS Wines and Spirits Retail POS
+VersionInfoProductName=OpenPOS
 
 [Files]
 Source: "build\payload\runtime\node.exe";      DestDir: "{app}\runtime";     Flags: ignoreversion
@@ -37,14 +46,14 @@ Source: "build\payload\scripts\*";             DestDir: "{app}\scripts";     Fla
 ; Auto-start at logon, hidden, single-instance.
 Name: "{userstartup}\OpenPOS Server"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"""; WorkingDir: "{app}"
 ; Owner-facing shortcuts (no PowerShell knowledge required).
-Name: "{group}\Open POS"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"" /open"; WorkingDir: "{app}"
+Name: "{group}\Open POS"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"" /open"; WorkingDir: "{app}"; IconFilename: "{app}\scripts\openpos.ico"
 Name: "{group}\Show my LAN address (for phones & tablets)"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\show-lan-address.ps1"""; WorkingDir: "{app}"
 Name: "{group}\Startup diagnostics"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\show-diagnostics.ps1"""; WorkingDir: "{app}"
 Name: "{group}\Stop OpenPOS server"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\stop-server.ps1"""; WorkingDir: "{app}"
 Name: "{group}\Verify latest backup"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\verify-latest-backup.ps1"""; WorkingDir: "{app}"
 Name: "{group}\Update application code"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\update-app.ps1"""; WorkingDir: "{app}"
 Name: "{group}\Roll back application code"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\rollback-app.ps1"""; WorkingDir: "{app}"
-Name: "{commondesktop}\OpenPOS"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"" /open"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{commondesktop}\OpenPOS"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"" /open"; WorkingDir: "{app}"; IconFilename: "{app}\scripts\openpos.ico"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked

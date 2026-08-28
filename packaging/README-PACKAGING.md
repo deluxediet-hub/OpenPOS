@@ -36,6 +36,8 @@ packaging\output\OpenPOS-Setup.exe
 
 The build first removes the previous payload with retries and stops if Windows still has it locked. It then downloads the pinned private Node 22 LTS runtime, runs `npm ci --omit=dev` through that exact runtime, and verifies that its `node.exe` can open an in-memory `better-sqlite3` database before compiling the offline-capable installer. Node 22 uses ABI 127, matching the available Windows prebuilt binary, so the build machine does not need Python or Visual Studio. The build stops instead of producing an installer when the native ABI does not match.
 
+The resulting EXE supports 64-bit Windows 10 build 1809 or newer. It bundles Node and all production dependencies; the shop PC does not need Node, npm, Python, Visual Studio or internet. Unsupported Windows/CPU combinations are rejected by the installer instead of failing silently. The installer, uninstaller, Start-menu entry and desktop shortcut use `assets\openpos.ico`.
+
 ## Installed behavior
 
 - Hidden startup at user logon
