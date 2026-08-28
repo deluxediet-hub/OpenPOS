@@ -36,6 +36,13 @@ ck('shift close endpoint is registered exactly once', countEndpoint("'/api/shift
 ck('receipt print endpoint is registered exactly once', countEndpoint("'/api/print/receipt/:id'") === 1);
 ck('route modules do not import server.js', routes.every((file) => !/require\(['"]\.\.\/server/.test(read(file))));
 ck('server still exports the Express app', /module\.exports\s*=\s*app/.test(server));
+const assets=path.join(root,'public','assets');
+ck('legacy manager2 bundle is removed',!fs.existsSync(path.join(assets,'manager2.js')));
+ck('manager responsibilities are split into focused modules',
+  ['manager-pricing.js','manager-reconciliation.js','manager-hospitality.js','manager-loyalty.js','manager-system.js']
+    .every((file)=>fs.existsSync(path.join(assets,file))));
+ck('retail manager hides loyalty from active navigation',/children=children\.filter\(\(\[id\]\)=>id==='drawer'\)/.test(read('public/assets/manager.js')));
+ck('retail checkout conditionally removes tip controls',/retail\?'':`<div class="tline"><span>Tip/.test(read('public/assets/cashier.js')));
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===\n`);
 process.exit(fail ? 1 : 0);

@@ -10,7 +10,9 @@ const { JSDOM } = require('jsdom');
 
 const BASE = process.env.BASE || 'http://127.0.0.1:3000';
 const PUB = path.join(__dirname, '..', 'public');
-const ASSETS = ['api.js', 'print.js', 'pos.js', 'cashier.js', 'kds.js', 'retail.js', 'manager.js', 'manager2.js', 'app.js'];
+const ASSETS = ['api.js', 'print.js', 'pos.js', 'cashier.js', 'kds.js', 'retail.js',
+  'manager-pricing.js', 'manager-reconciliation.js', 'manager-hospitality.js',
+  'manager-loyalty.js', 'manager-system.js', 'manager.js', 'app.js'];
 
 let pass = 0, fail = 0;
 const ck = (name, cond, extra = '') => {
@@ -542,6 +544,27 @@ async function loginWithPin(w, pin) {
   ck('audit tab: payment action logged', m.w.document.body.textContent.includes('payment'));
   ck('audit tab: tender recorded', m.w.document.body.textContent.includes('tendered') || m.w.document.body.textContent.includes('Tendered'));
   ck('no uncaught errors in manager console', m.errs.length === 0, m.errs.join(' | '));
+
+  /* ---------------- RETAIL ACTIVE EXPERIENCE ---------------- */
+  console.log('\nRETAIL — active navigation and checkout');
+  await m.w.__h.api('/api/settings',{method:'PUT',body:{business_type:'wines_spirits'}});
+  const retailUi=await bootPage('index.html',ASSETS);
+  await loginWithPin(retailUi.w,'1111');
+  await waitFor(()=>retailUi.w.document.querySelectorAll('[data-top]').length,'retail manager tabs');
+  const retailLabels=[...retailUi.w.document.querySelectorAll('[data-top],[data-sub]')].map((x)=>x.textContent.trim());
+  ck('retail manager removes Bookings from active UI',!retailLabels.includes('Bookings'),retailLabels.join(','));
+  ck('retail manager removes Labour and Loyalty from active UI',!retailLabels.includes('Labour')&&!retailLabels.includes('Loyalty'),retailLabels.join(','));
+  ck('retail manager narrows pricing to Products',!retailLabels.includes('Happy Hour')&&!retailLabels.includes('Options')&&!retailLabels.includes('Recipes'),retailLabels.join(','));
+  ck('retail till navigation is explicit',retailLabels.includes('Till & Reconciliation'),retailLabels.join(','));
+  const retailState=retailUi.w.__h.State;
+  let retailSale=await retailUi.w.__h.api('/api/orders',{body:{people:1}});
+  await retailUi.w.__h.api(`/api/orders/${retailSale.id}/items`,{body:{items:[{menu_item_id:retailState.menu[0].id,qty:1}]}});
+  retailState.orders=await retailUi.w.__h.api('/api/orders');
+  retailUi.w.__h.Cashier.payModal(retailSale.id);
+  await waitFor(()=>retailUi.w.document.querySelector('#payForm'),'retail payment modal');
+  ck('retail checkout hides tip controls',!retailUi.w.document.querySelector('#tipInp')&&!retailUi.w.document.querySelector('[data-tip]'));
+  ck('retail checkout keeps Cash, Card and M-Pesa',retailUi.w.document.querySelectorAll('.mbtn').length===3);
+  ck('retail UI has no uncaught errors',retailUi.errs.length===0,retailUi.errs.join(' | '));
 
   console.log(`\n=== ${pass} passed, ${fail} failed ===\n`);
   process.exit(fail ? 1 : 0);

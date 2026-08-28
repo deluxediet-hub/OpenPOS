@@ -20,10 +20,12 @@ const Manager = (() => {
     ['settings',  'Settings',    [['settings', 'Business'], ['printer', 'Printer'], ['integrations', 'eTIMS / M-Pesa']]],
   ];
   const LOCAL = { dashboard, sales, menu, stock, staff, settings, audit };
-  const EXT2 = {
-    modifiers: 'modifiers', recipes: 'recipes', dayparts: 'dayparts', drawer: 'drawer',
-    bookings: 'reservations', loyalty: 'loyalty', labour: 'labour',
-    integrations: 'integrations', printer: 'printer'
+  const EXTERNAL = {
+    modifiers: ManagerPricing.modifiers, recipes: ManagerPricing.recipes, dayparts: ManagerPricing.dayparts,
+    drawer: ManagerReconciliation.drawer,
+    bookings: ManagerHospitality.reservations, labour: ManagerHospitality.labour,
+    loyalty: ManagerLoyalty.loyalty,
+    integrations: ManagerSystem.integrations, printer: ManagerSystem.printer
   };
 
   function render(host) {
@@ -31,6 +33,7 @@ const Manager = (() => {
     const retailTop = TOP.filter(([k]) => k !== 'bookings').map(([k, label, children]) => {
       if (k === 'reports') children = children.filter(([id]) => ['sales', 'audit'].includes(id));
       if (k === 'menu') children = children.filter(([id]) => id === 'menu');
+      if (k === 'money') { label='Till & Reconciliation'; children=children.filter(([id])=>id==='drawer'); }
       return [k, label, children];
     });
     const sellerTop = TOP.filter(([k]) => ['stock', 'money'].includes(k)).map(([k, label, children]) =>
@@ -50,7 +53,8 @@ const Manager = (() => {
     const body = host.querySelector('#mbody');
     if (LOCAL[sub]) LOCAL[sub](body);
     else if (['stocktakes', 'deliveries', 'suppliers'].includes(sub)) Retail[sub](body);
-    else Manager2[EXT2[sub]](body);
+    else if(EXTERNAL[sub])EXTERNAL[sub](body);
+    else body.innerHTML='<div class="empty">This management panel is unavailable.</div>';
   }
 
   /* ---------------------------- dashboard ---------------------------- */
@@ -180,9 +184,10 @@ const Manager = (() => {
         ['staff', 'Staff list', 'Role and active status; PINs are never printed'],
         ['audit', 'Audit log', 'Owner-visible operational actions for the selected period']
       ];
+      const visibleOptions=retail?options.filter(([id])=>id!=='loyalty'):options;
       modal({ title: 'Build PDF report', wide: true,
         body: `<p class="muted" style="margin-top:0">Nothing is selected by default. Choose only the sections this PDF should contain.</p>
-          <div class="grid2">${options.map(([id, title, help]) => `<label class="card" style="cursor:pointer"><div class="card-b row" style="align-items:flex-start">
+          <div class="grid2">${visibleOptions.map(([id, title, help]) => `<label class="card" style="cursor:pointer"><div class="card-b row" style="align-items:flex-start">
             <input type="checkbox" data-pdf="${id}"><span><b>${title}</b><br><span class="tiny muted">${help}</span></span></div></label>`).join('')}</div>`,
         footer: '<button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Generate selected PDF</button>' });
       const ov = document.querySelector('#modalRoot .ov');

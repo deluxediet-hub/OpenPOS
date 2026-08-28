@@ -215,6 +215,7 @@ const Cashier = (() => {
     if (!o) return toast('Order not found', 'err');
     let method = 'cash';
     let tip = 0;
+    const retail=State.settings.business_type==='wines_spirits';
     let tendered = o.balance;
     const paymentKey = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : `pay-${o.id}-${Date.now()}-${Math.random()}`;
 
@@ -232,19 +233,19 @@ const Cashier = (() => {
               ${o.totals.discount ? `<div class="tline"><span>Discount</span><b style="color:var(--red)">−${fmt(o.totals.discount)}</b></div>` : ''}
               ${o.totals.service ? `<div class="tline"><span>Service charge ${State.settings.service_charge_rate}%</span><b>${fmt(o.totals.service)}</b></div>` : ''}
               <div class="tline"><span>VAT ${State.settings.vat_rate}% ${State.settings.tax_mode==='inclusive'?'(incl.)':''}</span><b>${fmt(o.totals.vat)}</b></div>
-              <div class="tline"><span>Tip</span><b id="tipLine">${fmt(0)}</b></div>
+              ${retail?'':`<div class="tline"><span>Tip</span><b id="tipLine">${fmt(0)}</b></div>`}
               <div class="tline total"><span>Balance due</span><b id="balLine">${fmt(o.balance)}</b></div>
               ${o.paid ? `<div class="tiny muted" style="margin-top:6px">Already paid ${fmt(o.paid)}
                 (${o.payments.map((p) => METHOD_LABEL[p.method]).join(', ')})</div>` : ''}
             </div>
           </div>
-          <div style="margin-top:12px">
+          ${retail?'':`<div style="margin-top:12px">
             <label class="fld">Tip (${sym()})</label>
             <div class="row">
               ${[0, 50, 100, 200, 500].map((v) => `<button class="btn sm" data-tip="${v}">${v === 0 ? 'None' : v}</button>`).join('')}
               <input class="inp" id="tipInp" type="number" min="0" step="1" placeholder="Custom" style="width:100px">
             </div>
-          </div>
+          </div>`}
           <div style="margin-top:14px">
             <label class="fld">Split payment</label>
             <div class="row">
@@ -354,7 +355,8 @@ const Cashier = (() => {
       ov.querySelector('#balLine').textContent = fmt(o.balance + tip - o.paid);
       renderForm();
     });
-    ov.querySelector('#tipInp').oninput = (e) => {
+    const tipInput=ov.querySelector('#tipInp');
+    if(tipInput)tipInput.oninput = (e) => {
       tip = Math.max(0, Math.round(Number(e.target.value || 0) * 100));
       ov.querySelector('#tipLine').textContent = fmt(tip);
       ov.querySelector('#balLine').textContent = fmt(o.balance + tip - o.paid);
