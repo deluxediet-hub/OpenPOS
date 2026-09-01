@@ -58,7 +58,9 @@ Source: "build\payload\docs\Node-LICENSE.txt";   DestDir: "{app}\docs";        F
 
 [Icons]
 ; Auto-start at logon, hidden, single-instance.
-Name: "{userstartup}\OpenPOS Server"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"""; WorkingDir: "{app}"
+; This is an all-users startup shortcut because Setup runs in administrative mode.
+; The server itself starts unelevated in the signed-in user's session and its single-instance health check prevents duplicates.
+Name: "{commonstartup}\OpenPOS Server"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"""; WorkingDir: "{app}"
 ; Owner-facing shortcuts (no PowerShell knowledge required).
 Name: "{group}\Open POS"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"" /open"; WorkingDir: "{app}"; IconFilename: "{app}\scripts\openpos.ico"
 Name: "{group}\Show my LAN address (for phones & tablets)"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\show-lan-address.ps1"""; WorkingDir: "{app}"
@@ -104,7 +106,7 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""Remo
 Filename: "cmd.exe"; Parameters: "/c rmdir ""{app}\app\spool"" 2>nul"; Flags: runhidden waituntilterminated; RunOnceId: "SpoolJunction"
 
 [UninstallDelete]
-Name: "{userstartup}\OpenPOS Server*"; Type: files
+Name: "{commonstartup}\OpenPOS Server*"; Type: files
 
 [Code]
 var KeepData: Boolean;

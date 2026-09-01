@@ -55,7 +55,8 @@ ck('installer ships privacy and third-party notices',/PRIVACY-NOTICE\.txt/.test(
 ck('bundled Node licence is preserved',/Node-LICENSE\.txt/.test(P('build-installer.ps1')));
 ck('installer and main shortcuts use the OpenPOS icon',/SetupIconFile=assets\\openpos\.ico/.test(iss)&&/UninstallDisplayIcon=\{app\}\\scripts\\openpos\.ico/.test(iss)&&
   (iss.match(/IconFilename: "\{app\}\\scripts\\openpos\.ico"/g)||[]).length>=2&&fs.existsSync(path.join(__dirname,'..','packaging','assets','openpos.ico')));
-ck('installer wires single-instance hidden auto-start', /userstartup.*start-hidden\.vbs/.test(iss.replace(/\n/g, ' ')) );
+ck('admin installer uses all-users startup, avoiding per-user elevation ambiguity', /commonstartup.*start-hidden\.vbs/.test(iss.replace(/\n/g, ' ')) && !/userstartup/.test(iss));
+ck('all-users startup shortcut is removed on uninstall', /UninstallDelete[\s\S]*commonstartup.*OpenPOS Server/.test(iss));
 ck('installer runs init-data before first start', /init-data\.ps1/.test(iss));
 ck('Open POS shortcuts start the server instead of opening a dead URL',
   (iss.match(/start-hidden\.vbs"" \/open/g)||[]).length >= 2 && !/Name: "\{group\}\\Open POS"; Filename: "http/.test(iss));
