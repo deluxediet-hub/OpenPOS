@@ -125,8 +125,11 @@ const decorate = (o) => { const d = orderWithTotals(o); d.balance = o.status ===
 const readOrder = (id) => db.prepare('SELECT * FROM orders WHERE id=?').get(id);
 
 app.get('/api/bootstrap', requireAuth, (req, res) => {
+  const retailMode=getSetting('business_type')==='wines_spirits';
   const orders = db.prepare("SELECT * FROM orders WHERE status IN ('open','billed') ORDER BY id").all();
-  const dayparts = db.prepare('SELECT * FROM dayparts WHERE active = 1').all();
+  /* Retail tills do not use restaurant dayparts/modifiers/tables. Avoid querying
+     and transferring those compatibility datasets on every realtime refresh. */
+  const dayparts = retailMode ? [] : db.prepare('SELECT * FROM dayparts WHERE active = 1').all();
   const active = domain.activeDayparts(dayparts);
   /* Effective prices right now, so the till shows what the guest will be charged. */
   const pricing = {};
@@ -140,7 +143,7 @@ app.get('/api/bootstrap', requireAuth, (req, res) => {
     settings: getSettings(),
     categories: db.prepare('SELECT * FROM categories ORDER BY sort_order, name').all(),
     menu,
-    tables: db.prepare('SELECT * FROM tables ORDER BY sort_order, name').all(),
+    tables: retailMode ? [] : db.prepare('SELECT * FROM tables ORDER BY sort_order, name').all(),
     orders: orders.map(decorate),
     qr_base: (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:' + (process.env.PORT || 3000)),
     users: db.prepare('SELECT id,name,role,active FROM users ORDER BY role,name').all(),
@@ -149,11 +152,11 @@ app.get('/api/bootstrap', requireAuth, (req, res) => {
       JOIN stock_items s ON s.id=p.stock_item_id WHERE p.active=1 ORDER BY s.name,p.units_per_package`).all(),
     /* Phase 2-4 working data */
     dayparts, active_dayparts: active, pricing,
-    modifier_groups: db.prepare('SELECT * FROM modifier_groups ORDER BY name').all(),
-    modifier_options: db.prepare('SELECT * FROM modifier_options ORDER BY group_id, sort_order, name').all(),
-    item_modifiers: db.prepare('SELECT * FROM menu_item_modifiers').all(),
+    modifier_groups: retailMode ? [] : db.prepare('SELECT * FROM modifier_groups ORDER BY name').all(),
+    modifier_options: retailMode ? [] : db.prepare('SELECT * FROM modifier_options ORDER BY group_id, sort_order, name').all(),
+    item_modifiers: retailMode ? [] : db.prepare('SELECT * FROM menu_item_modifiers').all(),
     shift: db.prepare("SELECT * FROM shifts WHERE status IN ('open','reconciling') ORDER BY id DESC LIMIT 1").get() || null,
-    reservations: db.prepare(`SELECT r.*, t.name AS table_name FROM reservations r
+    reservations: retailMode ? [] : db.prepare(`SELECT r.*, t.name AS table_name FROM reservations r
       LEFT JOIN tables t ON t.id = r.table_id
       WHERE r.res_date = date('now','localtime') AND r.status = 'booked' ORDER BY r.res_time`).all(),
     locations: db.prepare('SELECT * FROM locations WHERE active = 1 ORDER BY name').all()

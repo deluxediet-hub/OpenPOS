@@ -1,5 +1,9 @@
 # Install and Deploy OpenPOS
 
+Publisher: **Rekonet Inv Systems** · Support: [rekonetsystems@outlook.com](mailto:rekonetsystems@outlook.com)
+
+The Windows installer presents licence terms and pre-install safety information, then installs privacy, support and third-party notices. Have the legal wording reviewed by qualified Kenyan counsel before commercial distribution.
+
 ## Supported shop setup
 
 - One Windows 10/11 64-bit till PC
@@ -33,7 +37,9 @@ The installer provides:
 - Private/Domain firewall rule
 - Five-minute watchdog
 - Nightly backup and missed-backup catch-up
-- Start-menu shortcuts for opening, stopping, LAN address, backup verification, update and rollback
+- Licence acceptance plus privacy, third-party and getting-started documents
+- Rekonet Inv Systems publisher/support metadata
+- Start-menu shortcuts for opening, stopping, LAN address, backup verification, update, rollback, documentation and support
 
 The shop PC does not require a system Node installation or internet after installation.
 

@@ -101,6 +101,10 @@ Before distribution, also test on a clean Windows PC/VM:
 
 The workflow source is `ci/openpos-ci.yml`. It becomes active only when copied to `.github/workflows/ci.yml` using a GitHub identity with Workflow permission.
 
+## Installer identity and customer documents
+
+The installer identifies **Rekonet Inv Systems** as publisher and uses `rekonetsystems@outlook.com` for support. It displays the EULA for acceptance, presents the pre-install safety notice, and installs getting-started, privacy and third-party notices under `C:\Program Files\OpenPOS\docs` with Start-menu links. The Node.js licence is copied from the exact runtime bundled in each build. Have commercial legal wording reviewed by qualified Kenyan counsel before public distribution.
+
 ## Verified updates, rollback, restore and releases
 
 - `build-installer.ps1` reads the version from `package.json`; the Inno application and EXE versions are no longer maintained separately.

@@ -1,9 +1,9 @@
 {
   "product": "OpenPOS",
   "version": "1.1.0",
-  "generated_at": "2026-09-01T21:12:13.921Z",
+  "generated_at": "2026-09-01T21:28:31.304Z",
   "files": {
-    "server.js": "31dedcd43661d3f40a229c62694b3262f6366fb7525c5f004a168cadf3db8bc2",
+    "server.js": "fe32ddbeb3a26b37a2f8f57d750c53e1ebeea31b4c7b5f489bd0bc4402d89374",
     "db.js": "65e1140ed6918df77d02ddbb48690bdcbe7dbe6059cf23dc92a12ea1cae9af4e",
     "lib/domain.js": "6c22563f10c46849ec60085b464f86170ced5d71a5190312f3f2296833af931d",
     "lib/escpos.js": "fd7d3882326d6410df86d57d980f0fbdedaa199bac5a2b004460927cb2c72e31",
@@ -37,8 +37,8 @@
     "services/reconciliation.js": "31a77b28d7ceddf00be4b8920c4166f515879e5f610b8478f9090b39cbd5c016",
     "services/retail-till.js": "cdab8773e1cbec3af93b4bfa3c8f893625fbc82a3fda62481b3571d1d6b4102d",
     "services/sale-closeout.js": "efc70ed9a6c27e5375e79f816857780d264ba9352dfff2b65532f4fb1bd2431e",
-    "public/assets/api.js": "795d54a7c2b2375c79ba0db4859ec29a80bc875fa005e2928ae890c51b23f457",
-    "public/assets/app.js": "d6d9a7955cfdcb1c7112efd8ba463a42f7c6950b5135bd6b72ed4d4c3f7b24d4",
+    "public/assets/api.js": "9265305fd186db6ed74aa1dd147e3079fd7b796b3adba61f6fb5c0917a444733",
+    "public/assets/app.js": "e0a9ca9b44a42617a4ff9f1cfd95ffbb1e16386358075bf19b3faef4d4e54780",
     "public/assets/cashier.js": "ed40cbd7c6e5d129e65a785255a6fc96eaf002d847c8e205f3276dfaadf11003",
     "public/assets/kds-boot.js": "22b36b28986770c71e19dca2bbf29dbf97cd6debd95abf8686d04132d9815b33",
     "public/assets/kds.js": "c18a46ca8e7b03a2d60701cb9160ce994e3c98a3839c0910f21098712d4c312f",

@@ -199,22 +199,23 @@ function connectEvents() {
   };
   es.onopen = () => mark(true);
   es.onerror = () => mark(false);
-  const refresh = async (ev) => {
-    mark(true);
+  /* One business action commonly emits both stock and sales events. Coalesce
+     that burst so phones do not download the full bootstrap two or three times. */
+  const pending=new Set();let refreshTimer=null;
+  const flushRefresh=async()=>{
+    refreshTimer=null;const events=[...pending];pending.clear();mark(true);
     try {
-      if (ev === 'menu') State.menu = await api('/api/menu');
-      if (ev === 'tables' || ev === 'orders' || ev === 'kitchen') {
-        State.orders = await api('/api/orders');
-        if (ev === 'tables') { /* tables list only changes via manager */ }
+      const full=events.some((ev)=>['users','settings','stock','sales'].includes(ev));
+      if(full){await loadBootstrap();if(typeof updateScannerState==='function')updateScannerState();}
+      else {
+        if(events.includes('menu'))State.menu=await api('/api/menu');
+        if(events.some((ev)=>['tables','orders','kitchen'].includes(ev)))State.orders=await api('/api/orders');
       }
-      if (ev === 'users' || ev === 'settings' || ev === 'stock' || ev === 'sales') {
-        await loadBootstrap();
-        if (typeof updateScannerState === 'function') updateScannerState();
-      }
-      document.dispatchEvent(new CustomEvent('pos:update', { detail: { ev } }));
-    } catch (e) { /* transient */ }
+      for(const ev of events)document.dispatchEvent(new CustomEvent('pos:update',{detail:{ev}}));
+    } catch(e){/* transient; SSE reconnect or the next event retries */}
   };
-  ['orders', 'kitchen', 'menu', 'tables', 'users', 'settings', 'sales', 'stock'].forEach((t) => es.addEventListener(t, () => refresh(t)));
+  const scheduleRefresh=(ev)=>{pending.add(ev);if(!refreshTimer)refreshTimer=setTimeout(flushRefresh,30);};
+  ['orders', 'kitchen', 'menu', 'tables', 'users', 'settings', 'sales', 'stock'].forEach((t) => es.addEventListener(t, () => scheduleRefresh(t)));
 }
 
 async function loadBootstrap() {

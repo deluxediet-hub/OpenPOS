@@ -19,7 +19,15 @@
 AppId={{8A128F45-33DE-4A5A-B6BA-77C91F4057D8}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-AppPublisher=OpenPOS
+AppPublisher=Rekonet Inv Systems
+AppPublisherURL=mailto:rekonetsystems@outlook.com
+AppSupportURL=mailto:rekonetsystems@outlook.com
+AppContact=rekonetsystems@outlook.com
+AppComments=Local-first wines and spirits point of sale
+UninstallDisplayName=OpenPOS by Rekonet Inv Systems
+LicenseFile=legal\EULA.txt
+InfoBeforeFile=legal\INSTALL-NOTICE.txt
+InfoAfterFile=legal\GETTING-STARTED.txt
 DefaultDirName={autopf}\OpenPOS
 DefaultGroupName=OpenPOS
 PrivilegesRequired=admin
@@ -35,7 +43,8 @@ SolidCompression=yes
 SetupLogging=yes
 UninstallDisplayIcon={app}\scripts\openpos.ico
 VersionInfoVersion={#MyAppVersion}.0
-VersionInfoCompany=OpenPOS
+VersionInfoCompany=Rekonet Inv Systems
+VersionInfoCopyright=Copyright (C) 2026 Rekonet Inv Systems
 VersionInfoDescription=OpenPOS Wines and Spirits Retail POS
 VersionInfoProductName=OpenPOS
 
@@ -44,6 +53,8 @@ Source: "build\payload\runtime\node.exe";      DestDir: "{app}\runtime";     Fla
 Source: "build\payload\app\*";                 DestDir: "{app}\app";         Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "build\payload\node_modules\*";        DestDir: "{app}\node_modules";Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "build\payload\scripts\*";             DestDir: "{app}\scripts";     Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "legal\*.txt";                            DestDir: "{app}\docs";        Flags: ignoreversion
+Source: "build\payload\docs\Node-LICENSE.txt";   DestDir: "{app}\docs";        Flags: ignoreversion
 
 [Icons]
 ; Auto-start at logon, hidden, single-instance.
@@ -56,6 +67,11 @@ Name: "{group}\Stop OpenPOS server"; Filename: "powershell.exe"; Parameters: "-E
 Name: "{group}\Verify latest backup"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\verify-latest-backup.ps1"""; WorkingDir: "{app}"
 Name: "{group}\Update application code"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\update-app.ps1"""; WorkingDir: "{app}"
 Name: "{group}\Roll back application code"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\rollback-app.ps1"""; WorkingDir: "{app}"
+Name: "{group}\Documentation\Getting started"; Filename: "{app}\docs\GETTING-STARTED.txt"
+Name: "{group}\Documentation\Terms and conditions"; Filename: "{app}\docs\EULA.txt"
+Name: "{group}\Documentation\Privacy notice"; Filename: "{app}\docs\PRIVACY-NOTICE.txt"
+Name: "{group}\Documentation\Third-party notices"; Filename: "{app}\docs\THIRD-PARTY-NOTICES.txt"
+Name: "{group}\Contact Rekonet support"; Filename: "mailto:rekonetsystems@outlook.com"; Flags: shellexec
 Name: "{commondesktop}\OpenPOS"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"" /open"; WorkingDir: "{app}"; IconFilename: "{app}\scripts\openpos.ico"; Tasks: desktopicon
 
 [Tasks]

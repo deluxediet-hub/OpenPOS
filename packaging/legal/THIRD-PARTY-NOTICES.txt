@@ -1,0 +1,17 @@
+OPENPOS THIRD-PARTY NOTICES
+
+OpenPOS includes third-party software. The corresponding package directories distributed with the application contain their licence files and copyright notices.
+
+Node.js — https://nodejs.org/
+Node.js is distributed under the MIT licence and includes separately licensed dependencies. The official Node.js LICENSE file is installed with the OpenPOS documentation.
+
+Express — https://expressjs.com/
+Copyright JS Foundation and other contributors. MIT licence.
+
+better-sqlite3 — https://github.com/WiseLibs/better-sqlite3
+Copyright Joshua Wise and contributors. MIT licence.
+
+SQLite — https://sqlite.org/
+SQLite is in the public domain.
+
+Other transitive Node packages retain the notices and licence files included in their installed package directories. Nothing in the OpenPOS EULA limits rights granted by an applicable open-source licence.

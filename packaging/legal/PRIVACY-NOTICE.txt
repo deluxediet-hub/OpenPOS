@@ -1,0 +1,26 @@
+OPENPOS PRIVACY AND DATA NOTICE
+Publisher: Rekonet Inv Systems
+Contact: rekonetsystems@outlook.com
+Updated: 2 September 2026
+
+OpenPOS is designed as a local-first point-of-sale application. This notice explains its technical data behaviour. The shop or other business operating OpenPOS is normally the data controller for personal data entered into the system and should provide its own customer and employee privacy notice.
+
+DATA STORED LOCALLY
+Depending on use and configuration, OpenPOS may store staff names, salted PIN hashes and roles; customer names, phone numbers, loyalty activity and balances; supplier contacts; sales, returns, expenses, stock, complimentary issues, shifts, authorisations and audit records; receipt/business identity settings; and external-service configuration. Payment references may be recorded. Do not enter payment-card PINs, CVVs, full card numbers or magnetic-stripe data.
+
+STORAGE LOCATIONS
+On a standard Windows installation, the database, backups, logs and print spool are stored under C:\ProgramData\OpenPOS. Application code is stored under C:\Program Files\OpenPOS. Other devices on the authorised local network may access the server when the installer’s LAN firewall option is enabled.
+
+TRANSMISSION
+Core POS use does not require cloud database transmission. Data leaves the computer only when an authorised user or configured feature causes it—for example an off-device backup webhook, a future enabled external integration, access from another LAN device, or use of a network printer. Configuration-only and dry-run integrations do not represent a completed live connection.
+
+SECURITY AND RETENTION
+The operating business should restrict Windows and network access, use unique staff PINs, install trusted updates, review audit records, protect backup media, keep an off-device backup and delete records only in accordance with legal and business retention requirements. Local backups are retained according to configuration. Print spool files are operational records and are automatically limited by age/count.
+
+YOUR RIGHTS AND REQUESTS
+Customers and staff should direct access, correction, deletion, objection or other privacy requests to the business operating OpenPOS. Rekonet Inv Systems can assist the licensed business with technical questions at rekonetsystems@outlook.com but cannot independently verify or disclose a shop’s locally held database.
+
+UNINSTALLATION
+The uninstaller asks whether local business data should be retained. Keeping data leaves records under ProgramData. Deleting data removes that local folder, but separate exported or off-device copies remain under the operator’s control.
+
+This technical notice should be reviewed together with the operator’s obligations under Kenya’s Data Protection Act, 2019 and other applicable law.

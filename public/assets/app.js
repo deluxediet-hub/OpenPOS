@@ -203,7 +203,7 @@ function onLiveUpdate(e) {
     else Pos.renderFloor(host);
   } else if (State.view === 'bills') Cashier.renderBills(host);
   else if (State.view === 'kds') KDS.render(host);
-  else if (State.view === 'manager' && ['settings', 'users', 'menu'].includes(ev)) Manager.reload().then(() => Manager.render(host));
+  else if (State.view === 'manager' && ['settings', 'users', 'menu'].includes(ev)) Manager.render(host);
   badge();
 }
 

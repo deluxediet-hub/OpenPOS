@@ -42,6 +42,7 @@ Remove-BuildTree $pay
 New-Item -ItemType Directory -Path "$pay\app"      -Force | Out-Null
 New-Item -ItemType Directory -Path "$pay\runtime"  -Force | Out-Null
 New-Item -ItemType Directory -Path "$pay\scripts"  -Force | Out-Null
+New-Item -ItemType Directory -Path "$pay\docs"     -Force | Out-Null
 
 # 1. The EXISTING POS code, byte-for-byte (never modified by packaging).
 foreach ($i in @('server.js','db.js','lib','routes','services','public','scripts','package.json','package-lock.json','release-manifest.json')) {
@@ -59,6 +60,8 @@ if (-not (Test-Path $zip)) {
 Expand-Archive -Path $zip -DestinationPath $tools -Force
 $nodedir = Join-Path $tools "node-$NodeVersion-win-x64"
 Copy-Item (Join-Path $nodedir 'node.exe') "$pay\runtime\node.exe" -Force
+if (-not (Test-Path (Join-Path $nodedir 'LICENSE'))) { throw 'Official Node.js licence file is missing from the downloaded runtime' }
+Copy-Item (Join-Path $nodedir 'LICENSE') "$pay\docs\Node-LICENSE.txt" -Force
 
 # 4. Windows-native dependencies (better-sqlite3 must match the bundled Node ABI).
 # Run npm THROUGH the downloaded node.exe and put that runtime first on PATH.

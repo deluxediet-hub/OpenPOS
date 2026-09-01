@@ -1,0 +1,16 @@
+OPENPOS INSTALLATION COMPLETE
+
+1. Open OpenPOS from the desktop or Start menu. The hidden server can take up to 30 seconds on first launch.
+2. Complete first-run setup and create the owner PIN. Keep owner access private.
+3. Check business name, KRA PIN, VAT-inclusive pricing, receipt footer and printer width.
+4. Import or create products, then verify every price, cost and opening stock quantity before trading.
+5. Create named seller accounts. Do not share PINs.
+6. Run a test sale, M-Pesa manual confirmation, receipt/reprint, return, expense, delivery, stock count and till reconciliation.
+7. Create and verify a backup from Settings → Backup. Copy a verified backup off the till computer.
+8. Print a test receipt and confirm paper width, code page, cut and cash-drawer behaviour on the physical printer.
+
+Data: C:\ProgramData\OpenPOS
+Logs: C:\ProgramData\OpenPOS\logs\server.log
+Support: rekonetsystems@outlook.com
+
+The Start menu includes Startup diagnostics, LAN address, backup verification, application update and rollback tools.

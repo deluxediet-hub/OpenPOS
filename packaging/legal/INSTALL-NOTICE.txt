@@ -1,0 +1,18 @@
+BEFORE INSTALLING OPENPOS
+
+Publisher: Rekonet Inv Systems
+Support: rekonetsystems@outlook.com
+
+Please confirm the following:
+
+• This is a supported 64-bit Windows 10 or Windows 11 computer.
+• You have administrator permission to install the application, scheduled backup tasks and optional LAN firewall rule.
+• Existing OpenPOS business data has a current, verified backup before upgrading.
+• The computer clock, timezone and Windows updates are correct.
+• The shop will keep an off-device backup. Local backups on the same disk do not protect against theft or disk failure.
+• The private-network firewall option should be enabled only on a trusted shop network. It is never opened for Public networks.
+• OpenPOS is local-first and opens in a web browser. The server runs hidden in the background.
+• Live M-Pesa STK push and KRA eTIMS transmission are not included unless a separately supported integration explicitly states otherwise. Verify M-Pesa references manually.
+• The installer may be unsigned until Rekonet Inv Systems publishes a trusted Authenticode-signed build. Verify the published SHA-256 checksum before installing.
+
+Business data is stored separately under C:\ProgramData\OpenPOS so normal application upgrades do not overwrite it.

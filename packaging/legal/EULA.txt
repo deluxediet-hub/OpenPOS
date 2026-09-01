@@ -1,0 +1,45 @@
+OPENPOS END-USER LICENCE AGREEMENT
+Version 1.1 — 2 September 2026
+
+Publisher: Rekonet Inv Systems
+Support: rekonetsystems@outlook.com
+
+IMPORTANT: PLEASE READ THIS AGREEMENT BEFORE INSTALLING OR USING OPENPOS. BY INSTALLING, COPYING OR USING THE SOFTWARE, YOU CONFIRM THAT YOU ARE AUTHORISED TO ACCEPT THESE TERMS FOR THE BUSINESS THAT WILL USE IT. IF YOU DO NOT AGREE, DO NOT INSTALL OR USE THE SOFTWARE.
+
+1. SOFTWARE AND LICENCE
+“OpenPOS” means the point-of-sale application, installer, documentation and updates supplied by Rekonet Inv Systems. Subject to these terms and any separate written order or licence issued to you, Rekonet Inv Systems grants the authorised business a limited, non-exclusive, non-transferable right to install and use OpenPOS for its internal retail operations.
+
+2. OWNERSHIP
+OpenPOS is licensed, not sold. Rekonet Inv Systems and its licensors retain their rights in the software. Third-party components remain subject to their respective open-source licences, identified in the Third-Party Notices installed with OpenPOS.
+
+3. PERMITTED USE AND RESTRICTIONS
+You may make reasonable backup copies for recovery. You must not sell, sublicense, rent, commercially redistribute, bypass access controls, use the software unlawfully, or misrepresent ownership. You must not use OpenPOS to store payment-card PINs, CVVs, full magnetic-stripe data or other prohibited authentication data.
+
+4. BUSINESS RESPONSIBILITIES
+You are responsible for configuring prices, taxes, licences, receipt details, staff access and stock correctly; checking every transaction; maintaining secure, tested backups, including an off-device copy; securing the Windows computer and local network; maintaining lawful alcohol-sale procedures; and meeting tax, employment, consumer, privacy and record-retention obligations applicable to your business. OpenPOS does not replace professional accounting, tax, legal or regulatory advice.
+
+5. LOCAL DATA AND PRIVACY
+OpenPOS is local-first. Business data is normally stored on the installed computer. The business operating OpenPOS determines why and how customer and staff data is processed and is responsible for appropriate notices, lawful processing, access control, retention and data-subject requests. Read the installed Privacy Notice for further technical details.
+
+6. THIRD-PARTY AND EXTERNAL SERVICES
+Features described as configuration-only, dry-run or manual do not transmit live transactions. External services such as M-Pesa, eTIMS, banks, email, webhooks or network printers may have separate terms, costs and availability. Rekonet Inv Systems is not responsible for an external service’s outage or acts.
+
+7. UPDATES AND SUPPORT
+Updates may correct defects, improve security or change compatibility. Back up and verify business data before an update. Support is provided according to the applicable order or support arrangement. Contact rekonetsystems@outlook.com.
+
+8. WARRANTY DISCLAIMER
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, OPENPOS IS PROVIDED “AS IS” AND “AS AVAILABLE”. REKONET INV SYSTEMS DOES NOT WARRANT THAT THE SOFTWARE WILL BE ERROR-FREE, UNINTERRUPTED, SUITABLE FOR EVERY LEGAL OR ACCOUNTING REQUIREMENT, OR COMPATIBLE WITH EVERY DEVICE. RIGHTS THAT CANNOT LAWFULLY BE EXCLUDED REMAIN UNAFFECTED.
+
+9. LIMITATION OF LIABILITY
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, REKONET INV SYSTEMS WILL NOT BE LIABLE FOR INDIRECT, INCIDENTAL, SPECIAL OR CONSEQUENTIAL LOSS, LOST PROFITS, LOST SALES, LOST DATA OR BUSINESS INTERRUPTION ARISING FROM USE OF OPENPOS. ANY AGGREGATE LIABILITY WILL NOT EXCEED THE AMOUNT PAID FOR OPENPOS DURING THE TWELVE MONTHS BEFORE THE EVENT GIVING RISE TO THE CLAIM. THIS LIMIT DOES NOT APPLY WHERE LIABILITY CANNOT LAWFULLY BE LIMITED.
+
+10. TERMINATION
+This licence ends if you materially breach these terms and do not remedy the breach where remedy is possible. On termination, stop using and uninstall OpenPOS. Before uninstalling, export or back up records you are legally required to keep. Uninstallation can retain or delete local business data at your choice.
+
+11. GOVERNING LAW
+These terms are governed by the laws of Kenya. The courts of Kenya have jurisdiction, subject to any mandatory law and any separate written dispute-resolution agreement.
+
+12. GENERAL
+If one provision is unenforceable, the remaining provisions continue. Failure to enforce a provision is not a waiver. A separate signed agreement prevails over conflicting terms in this EULA. Rekonet Inv Systems may update these terms for future software releases; the version presented with your installation applies to that installation.
+
+Copyright © 2026 Rekonet Inv Systems. All rights reserved.

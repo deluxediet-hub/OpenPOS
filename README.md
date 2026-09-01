@@ -1,4 +1,6 @@
-# OpenPOS — Kenyan Wines & Spirits Retail POS
+# OpenPOS
+
+OpenPOS is published by **Rekonet Inv Systems**. Installation and product support: [rekonetsystems@outlook.com](mailto:rekonetsystems@outlook.com). — Kenyan Wines & Spirits Retail POS
 
 OpenPOS is a local-first point of sale for a small wines and spirits shop with one owner and a few sellers. It runs on one shop computer and is accessed from that computer or trusted phones/tablets on the same LAN.
 
