@@ -49,6 +49,7 @@ ck('installer does not create a data dir inside the app', !/\{app\}\\data/.test(
 ck('installer places persistent data in ProgramData', /commonappdata/.test(iss));
 ck('installer clearly limits install to supported 64-bit Windows 10+',/MinVersion=10\.0\.17763/.test(iss)&&/ArchitecturesAllowed=x64compatible/.test(iss));
 ck('installer identifies Rekonet as publisher and provides support contact',/AppPublisher=Rekonet Inv Systems/.test(iss)&&/rekonetsystems@outlook\.com/.test(iss)&&/VersionInfoCompany=Rekonet Inv Systems/.test(iss));
+ck('support shortcut uses only flags valid in the Icons section',!/Contact Rekonet support[^\n]*Flags:\s*shellexec/i.test(iss));
 ck('installer requires licence acceptance and presents safety information',/LicenseFile=legal\\EULA\.txt/.test(iss)&&/InfoBeforeFile=legal\\INSTALL-NOTICE\.txt/.test(iss)&&/InfoAfterFile=legal\\GETTING-STARTED\.txt/.test(iss));
 ck('installer ships privacy and third-party notices',/PRIVACY-NOTICE\.txt/.test(iss)&&/THIRD-PARTY-NOTICES\.txt/.test(iss)&&fs.existsSync(path.join(__dirname,'..','packaging','legal','PRIVACY-NOTICE.txt')));
 ck('bundled Node licence is preserved',/Node-LICENSE\.txt/.test(P('build-installer.ps1')));

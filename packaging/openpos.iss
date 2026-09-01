@@ -71,7 +71,8 @@ Name: "{group}\Documentation\Getting started"; Filename: "{app}\docs\GETTING-STA
 Name: "{group}\Documentation\Terms and conditions"; Filename: "{app}\docs\EULA.txt"
 Name: "{group}\Documentation\Privacy notice"; Filename: "{app}\docs\PRIVACY-NOTICE.txt"
 Name: "{group}\Documentation\Third-party notices"; Filename: "{app}\docs\THIRD-PARTY-NOTICES.txt"
-Name: "{group}\Contact Rekonet support"; Filename: "mailto:rekonetsystems@outlook.com"; Flags: shellexec
+; [Icons] URL/mail shortcuts use the shell automatically; "shellexec" is a [Run] flag, not an [Icons] flag.
+Name: "{group}\Contact Rekonet support"; Filename: "mailto:rekonetsystems@outlook.com"
 Name: "{commondesktop}\OpenPOS"; Filename: "wscript.exe"; Parameters: """{app}\scripts\start-hidden.vbs"" /open"; WorkingDir: "{app}"; IconFilename: "{app}\scripts\openpos.ico"; Tasks: desktopicon
 
 [Tasks]
