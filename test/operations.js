@@ -33,6 +33,8 @@ const mk=()=>{let cookie='';const req=async(method,path,body,headers={})=>{const
  r=await seller.post(`/api/print/receipt/${order.id}?paid=1&reprint=1&kick=1`,{});
  const reprintBytes=r.status===200&&r.data.spool?fs.readFileSync(r.data.spool):Buffer.alloc(0);
  ck('reprint is labelled and suppresses drawer kick',reprintBytes.includes(Buffer.from('REPRINT'))&&!reprintBytes.includes(Buffer.from([0x1b,0x70,0x00,0x19,0xfa])),JSON.stringify(r.data));
+ const receiptLines=reprintBytes.toString('utf8').split('\n');
+ ck('receipt keeps ordinary item and amount on one compact line',receiptLines.some((text)=>text.includes(line.name)&&text.includes((line.price*line.qty/100).toFixed(2))),receiptLines.join(' | '));
 
  r=await admin.get('/api/backups/status');ck('owner can see backup health',r.status===200&&r.data.stale===true&&!r.data.latest,JSON.stringify(r.data));
  r=await admin.post('/api/backups/run',{});ck('owner can create verified hot backup',r.status===200&&r.data.ok&&r.data.status.latest&&!r.data.status.stale,JSON.stringify(r.data));

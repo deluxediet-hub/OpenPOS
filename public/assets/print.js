@@ -9,8 +9,8 @@ function receiptHtml(r, { paid = false, partial = false, reprint = false } = {})
   const cashier = State.user ? esc(State.user.name) : seller;
   const chars = Number(s.printer_chars) || 42;
   const items = groupedSaleItems(r.items).map((i) => `<tr>
-    <td class="rq">${i.qty}</td><td class="ri">${esc(i.name)}${i.note ? `<div class="receipt-note">${esc(i.note)}</div>` : ''}
-      <div class="receipt-unit">@ ${money(i.price)}</div></td><td class="ra">${money(i.price * i.qty)}</td></tr>`).join('');
+    <td class="ri"><b>${i.qty} x ${esc(i.name)}</b>${i.note ? `<div class="receipt-note">${esc(i.note)}</div>` : ''}</td>
+    <td class="ra">${money(i.price * i.qty)}</td></tr>`).join('');
   const payments = (paid || partial) && o.payments && o.payments.length ? o.payments.map((p) =>
     `${row(esc(String(p.method || '').toUpperCase()), money(p.amount), 'payment')}${p.reference ? `<div class="receipt-ref">${esc(p.reference)}</div>` : ''}`).join('') : '';
   return `<div class="receipt${chars <= 32 ? ' receipt-58' : ''}">
@@ -26,7 +26,7 @@ function receiptHtml(r, { paid = false, partial = false, reprint = false } = {})
     ${row(s.business_type === 'wines_spirits' ? 'Seller' : 'Served by', seller)}
     ${cashier !== seller ? row('Cashier', cashier) : ''}
     <div class="receipt-rule"></div>
-    <table class="receipt-items"><thead><tr><th>QTY</th><th>ITEM</th><th>AMOUNT</th></tr></thead><tbody>${items}</tbody></table>
+    <table class="receipt-items"><thead><tr><th>QTY × ITEM</th><th>AMOUNT</th></tr></thead><tbody>${items}</tbody></table>
     <div class="receipt-rule"></div>
     ${row('Subtotal', money(t.subtotal))}
     ${t.discount ? row('Discount', '−' + money(t.discount)) : ''}

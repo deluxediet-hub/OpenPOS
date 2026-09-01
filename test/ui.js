@@ -345,6 +345,7 @@ async function loginWithPin(w, pin) {
     $$(c.w, '.toast').map((t) => t.textContent).join(' | '));
   await wait(400);
   ck('print invoked for the receipt', c.w.__printed >= 1, 'print() calls=' + c.w.__printed);
+  ck('browser receipt uses compact two-column item rows',!$('.receipt-unit',c.w)&&$$('.receipt-items tbody tr',c.w).every((row)=>row.children.length===2));
   await waitFor(() => $$(c.w, '#view .card').length, 'bills view repainted');
   ck('paid check left the bills queue', !c.w.__h.State.orders.some((o) => o.id === orderId), 'open orders=' + c.w.__h.State.orders.length);
   ck('no uncaught errors in cashier flow', c.errs.length === 0, c.errs.join(' | '));
