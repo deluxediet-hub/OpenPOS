@@ -90,3 +90,15 @@ Arena's current GitHub App lacks Workflow permission, so the active file cannot 
 - `SHOP_PILOT_ACCEPTANCE.md` — physical shop acceptance and seven-day sign-off
 - `docs/PRODUCT_IMPORT.md` — product CSV format
 - `packaging/README-PACKAGING.md` — installer build and verification
+
+## v1.1 operational recovery checks
+
+- [ ] GitHub Actions Linux/Windows matrix is green.
+- [ ] Real Chromium responsive job is green and screenshots reviewed.
+- [ ] Windows installer build, silent install and installed-app smoke job are green.
+- [ ] Compare downloaded installer against `SHA256SUMS.txt`.
+- [ ] On a spare Windows till, test upgrade and automatic rollback with a deliberately unhealthy payload.
+- [ ] On a copied database, complete the guided restore and confirm the pre-restore emergency copy exists.
+- [ ] Print sale, reprint, return, 58mm and 80mm samples on the actual shop printer; check cut, code page and drawer behavior.
+
+The last three checks require the physical Windows/printer environment and cannot be certified by Linux CI alone.

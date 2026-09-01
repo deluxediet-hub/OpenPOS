@@ -328,18 +328,7 @@ const Cashier = (() => {
           </div>
           <div style="margin-top:12px"><label class="fld">M-Pesa confirmation code <span style="color:var(--red)">*</span></label>
             <input class="inp mono" id="mref" placeholder="e.g. SDF4GH7JK9" style="text-transform:uppercase"></div>
-          <div class="row" style="margin-top:12px">
-            <button class="btn sm ghost" id="stk">📲 Send STK push</button>
-            <span class="tiny muted" id="stkMsg">Paybill 123456 · Acc = ${o.number}</span>
-          </div>`;
-        form.querySelector('#stk').onclick = () => {
-          const phone = form.querySelector('#mphone').value.trim();
-          const amt = form.querySelector('#mamt').value;
-          if (!phone) return (form.querySelector('#stkMsg').textContent = 'Enter the customer phone number first.');
-          form.querySelector('#stkMsg').innerHTML =
-            `⏳ STK push sent to <b>${esc(phone)}</b> for ${fmt(Math.round(Number(amt)*100))} — waiting for the customer to enter their M-Pesa PIN…`;
-          form.querySelector('#mref').focus();
-        };
+          <p class="tiny muted" style="margin:12px 0 0">Confirm the payment on the shop phone or M-Pesa portal, then enter the genuine confirmation code. OpenPOS does not send an STK push.</p>`;
       }
     }
 

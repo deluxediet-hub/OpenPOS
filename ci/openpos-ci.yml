@@ -90,3 +90,19 @@ jobs:
         with:
           name: OpenPOS-Windows-installer
           path: packaging/output/OpenPOS-Setup.exe
+  release-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run release:check
+      - name: Manifest must match package version
+        run: node -e "const p=require('./package.json'),m=require('./release-manifest.json');if(m.version!==p.version)process.exit(1)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenPOS-release-manifest
+          path: release-manifest.json

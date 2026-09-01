@@ -601,6 +601,38 @@ function migrate() {
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS ux_goods_receipt_idempotency ON goods_receipts(idempotency_key) WHERE idempotency_key IS NOT NULL");
   add('complimentary_issues', 'authorized_by', 'authorized_by INTEGER REFERENCES users(id)');
   add('complimentary_issues', 'authorization_reference', 'authorization_reference TEXT');
+  add('stock_counts', 'cancelled_by', 'cancelled_by INTEGER REFERENCES users(id)');
+  add('stock_counts', 'cancelled_at', 'cancelled_at TEXT');
+  add('stock_counts', 'cancel_reason', 'cancel_reason TEXT');
+
+  /* A durable migration ledger starts here. The existing additive migration is
+     recorded as the baseline; all new migrations are checksum-identified and
+     applied transactionally so support can tell exactly what ran on each till. */
+  db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  )`);
+  const applyMigration=(version,name,sql)=>{
+    const checksum=crypto.createHash('sha256').update(sql).digest('hex');
+    const prior=db.prepare('SELECT * FROM schema_migrations WHERE version=?').get(version);
+    if(prior){
+      if(prior.checksum!==checksum)throw new Error(`Schema migration ${version} checksum mismatch (${name})`);
+      return;
+    }
+    db.transaction(()=>{if(sql.trim())db.exec(sql);db.prepare(
+      'INSERT INTO schema_migrations(version,name,checksum) VALUES(?,?,?)').run(version,name,checksum);})();
+  };
+  applyMigration(1,'legacy additive schema baseline','-- OpenPOS schema through compact receipts');
+  applyMigration(2,'operational recovery and reversals',`
+    CREATE TABLE transaction_reversals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      transaction_type TEXT NOT NULL, transaction_id INTEGER NOT NULL,
+      reason TEXT NOT NULL, reversed_by INTEGER REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      UNIQUE(transaction_type,transaction_id)
+    );
+    CREATE INDEX ix_reversals_created ON transaction_reversals(created_at);
+  `);
   /* Existing owner-entered complementaries were self-authorized. */
   db.prepare('UPDATE complimentary_issues SET authorized_by=created_by WHERE authorized_by IS NULL').run();
   const isRetailDatabase = (db.prepare("SELECT value FROM settings WHERE key='business_type'").get() || {}).value === 'wines_spirits';
@@ -710,6 +742,11 @@ const DEFAULT_SETTINGS = {
   service_charge_enabled: '0',
   service_charge_rate: '0',
   receipt_footer: 'Asante sana. Please drink responsibly. No sale to persons under 18.',
+  receipt_footer_lines: '3',
+  receipt_show_address: '1',
+  receipt_show_phone: '1',
+  receipt_show_kra_pin: '1',
+  receipt_show_licence: '1',
   default_people: '1',
   business_type: 'wines_spirits',
   minimum_sale_age: '18',
@@ -731,13 +768,14 @@ const DEFAULT_SETTINGS = {
   printer_host: '',
   printer_port: '9100',
   printer_chars: '42',
+  printer_code_page: 'cp437',
   kitchen_printer_host: '',
   kitchen_printer_port: '9100',
   drawer_kick_enabled: '1',
   auto_print_docket: '1',   // print the kitchen/bar docket the moment an order is fired
 
   /* --- Loyalty (Phase 3.12) --- */
-  loyalty_enabled: '1',
+  loyalty_enabled: '0',
   loyalty_earn_per: '100',        // 1 point per this many shillings
   loyalty_redeem_per: '1',        // 1 point = this many shillings off
   giftcard_prefix: 'GC',
@@ -775,6 +813,7 @@ const DEFAULT_SETTINGS = {
   mpesa_paybill_account: ''
 };
 
+const isAllowedSetting=(key)=>Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS,key);
 const getSetting = (key) => {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
   if (row) return row.value;
@@ -1235,4 +1274,4 @@ const audit = (user, action, detail) =>
   db.prepare('INSERT INTO audit_log(user_id,user_name,action,detail) VALUES(?,?,?,?)')
     .run(user ? user.id : null, user ? user.name : 'system', action, detail || null);
 
-module.exports = { db, seed, loadSampleData, importRetailCsv, parseCsv, setupStatus, runSetup, hashPin, verifyPin, findUserByPin, pinTaken, getSettings, setSetting, getSetting, computeTotals, nextOrderNumber, audit, money, toCents, round, nowLocal, todayLocal, DB_PATH, DATA_DIR };
+module.exports = { db, seed, loadSampleData, importRetailCsv, parseCsv, setupStatus, runSetup, hashPin, verifyPin, findUserByPin, pinTaken, getSettings, setSetting, getSetting, isAllowedSetting, computeTotals, nextOrderNumber, audit, money, toCents, round, nowLocal, todayLocal, DB_PATH, DATA_DIR };

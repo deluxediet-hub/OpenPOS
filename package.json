@@ -1,6 +1,6 @@
 {
   "name": "openpos",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Point of sale for a small Kenyan wines and spirits shop: owner/admin, sellers, KES, M-Pesa, receipts, stock taking and audit.",
   "main": "server.js",
@@ -11,7 +11,9 @@
     "test:ui": "BASE=http://127.0.0.1:3000 node test/ui.js",
     "backup": "node scripts/backup.js",
     "backup:verify": "node scripts/verify-backup.js",
-    "test:visual": "node test/responsive.js"
+    "test:visual": "node test/responsive.js",
+    "release:manifest": "node scripts/build-release-manifest.js",
+    "release:check": "npm test && node scripts/build-release-manifest.js"
   },
   "engines": {
     "node": ">=18"

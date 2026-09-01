@@ -42,6 +42,13 @@ module.exports = function registerPrinting(app, {
     }
   }
 
+  app.get('/api/print/jobs',requireAuth,requireRole('manager','admin'),(req,res)=>{
+    rotateSpool();const files=fs.readdirSync(spoolDir).filter((f)=>f.endsWith('.prn')).map((name)=>{
+      const stat=fs.statSync(path.join(spoolDir,name));return{name,size:stat.size,created_at:stat.mtime.toISOString()};
+    }).sort((a,b)=>b.created_at.localeCompare(a.created_at)).slice(0,100);
+    res.json({jobs:files,retention:'30 days / 500 jobs'});
+  });
+
   app.post('/api/print/receipt/:id', requireAuth, requireRole('seller','cashier','manager','admin'), async (req, res) => {
     const order = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
     if (!order) return bad(res, 'Order not found', 404);
@@ -60,7 +67,9 @@ module.exports = function registerPrinting(app, {
     const paid = order.status === 'closed' && req.query.paid !== '0';
     const partial = !paid && req.query.partial === '1' && decorated.paid > 0;
     const reprint=req.query.reprint==='1';
-    if(reprint)settings.drawer_kick_enabled='0';
+    if(reprint){settings.drawer_kick_enabled='0';const prior=db.prepare("SELECT COUNT(*) n FROM audit_log WHERE action='receipt.reprint' AND detail LIKE ?").get(`#${order.number}%`).n;
+      audit(req.user,'receipt.reprint',`#${order.number} · copy ${prior+1}`);}
+
     const buf = escpos.buildReceipt(payload, { paid, partial, reprint });
     await deliverPrint(buf, 'till', `receipt-${order.number}`, res, req);
   });

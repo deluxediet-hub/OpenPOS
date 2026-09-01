@@ -15,10 +15,10 @@ function receiptHtml(r, { paid = false, partial = false, reprint = false } = {})
     `${row(esc(String(p.method || '').toUpperCase()), money(p.amount), 'payment')}${p.reference ? `<div class="receipt-ref">${esc(p.reference)}</div>` : ''}`).join('') : '';
   return `<div class="receipt${chars <= 32 ? ' receipt-58' : ''}">
     <div class="receipt-brand">${esc(s.business_name)}</div>
-    ${s.address ? `<div class="c">${esc(s.address)}</div>` : ''}
-    ${s.phone ? `<div class="c">Tel: ${esc(s.phone)}</div>` : ''}
-    ${s.kra_pin ? `<div class="c">KRA PIN: ${esc(s.kra_pin)}</div>` : ''}
-    ${s.business_type === 'wines_spirits' && s.licence_number ? `<div class="c">Licence: ${esc(s.licence_number)}</div>` : ''}
+    ${s.address && s.receipt_show_address !== '0' ? `<div class="c">${esc(s.address)}</div>` : ''}
+    ${s.phone && s.receipt_show_phone !== '0' ? `<div class="c">Tel: ${esc(s.phone)}</div>` : ''}
+    ${s.kra_pin && s.receipt_show_kra_pin !== '0' ? `<div class="c">KRA PIN: ${esc(s.kra_pin)}</div>` : ''}
+    ${s.business_type === 'wines_spirits' && s.licence_number && s.receipt_show_licence !== '0' ? `<div class="c">Licence: ${esc(s.licence_number)}</div>` : ''}
     <div class="receipt-title">${paid ? 'SALES RECEIPT · PAID' : partial ? 'PART PAYMENT · BALANCE DUE' : 'SALE SUMMARY · UNPAID'}${reprint?' · REPRINT':''}</div>
     ${row('Receipt', '#' + esc(o.number))}
     ${row('Date', esc((o.closed_at || o.opened_at || '').slice(0, 16)))}
@@ -28,7 +28,7 @@ function receiptHtml(r, { paid = false, partial = false, reprint = false } = {})
     <div class="receipt-rule"></div>
     <table class="receipt-items"><thead><tr><th>QTY × ITEM</th><th>AMOUNT</th></tr></thead><tbody>${items}</tbody></table>
     <div class="receipt-rule"></div>
-    ${row('Subtotal', money(t.subtotal))}
+    ${t.discount ? row('Subtotal', money(t.subtotal)) : ''}
     ${t.discount ? row('Discount', '−' + money(t.discount)) : ''}
     ${t.service ? row(`Service ${esc(s.service_charge_rate)}%`, money(t.service)) : ''}
     ${row('TOTAL ' + esc(s.currency_symbol || 'KSh'), money(t.total), 'receipt-total')}

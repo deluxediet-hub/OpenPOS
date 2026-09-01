@@ -5,10 +5,11 @@ module.exports = function register(app, {
   db, requireAuth, requireRole, getSetting, todayLocal, stockLedger, audit, broadcast, bad
 }) {
   app.get('/api/stock-counts', requireAuth, (req, res) => res.json(db.prepare(`
-    SELECT sc.*,us.name started_by_name,uc.name completed_by_name,
+    SELECT sc.*,us.name started_by_name,uc.name completed_by_name,ux.name cancelled_by_name,
       (SELECT COUNT(*) FROM stock_count_items si WHERE si.stock_count_id=sc.id) lines,
       (SELECT COUNT(*) FROM stock_count_items si WHERE si.stock_count_id=sc.id AND ABS(COALESCE(si.variance,0))>0.0001) variances
     FROM stock_counts sc LEFT JOIN users us ON us.id=sc.started_by LEFT JOIN users uc ON uc.id=sc.completed_by
+      LEFT JOIN users ux ON ux.id=sc.cancelled_by
     ORDER BY sc.id DESC LIMIT 100`).all()));
 
   app.post('/api/stock-counts', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
@@ -68,6 +69,24 @@ module.exports = function register(app, {
     count.items = db.prepare(`SELECT sci.*,si.name,si.unit,si.capacity_ml FROM stock_count_items sci
       JOIN stock_items si ON si.id=sci.stock_item_id WHERE sci.stock_count_id=? ORDER BY si.name`).all(count.id);
     res.json(count);
+  });
+
+  app.post('/api/stock-counts/:id/cancel', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {
+    const count=db.prepare('SELECT * FROM stock_counts WHERE id=?').get(req.params.id);
+    if(!count||count.status!=='open')return bad(res,'Open stocktake not found',404);
+    const reason=String(req.body.reason||'').trim();
+    if(reason.length<3)return bad(res,'Add a short reason for cancelling the stocktake');
+    db.transaction(()=>{
+      db.prepare(`UPDATE stock_counts SET status='cancelled',cancelled_by=?,cancelled_at=datetime('now','localtime'),
+        cancel_reason=? WHERE id=?`).run(req.user.id,reason,count.id);
+      if(count.for_close&&count.shift_id){
+        const shift=db.prepare('SELECT status FROM shifts WHERE id=?').get(count.shift_id);
+        if(shift&&shift.status==='reconciling')db.prepare("UPDATE shifts SET status='open' WHERE id=?").run(count.shift_id);
+      }
+    })();
+    audit(req.user,'stocktake.cancel',`${count.reference} — ${reason}`);
+    broadcast('stock');broadcast('sales');
+    res.json({ok:true,status:'cancelled',shift_recovered:Boolean(count.for_close&&count.shift_id)});
   });
 
   app.post('/api/stock-counts/:id/save', requireAuth, requireRole('seller', 'manager', 'admin'), (req, res) => {

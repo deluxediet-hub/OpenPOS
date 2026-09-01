@@ -11,11 +11,14 @@
 ; =====================================================================
 #define MyAppName "OpenPOS"
 #define AppPort "3000"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
 
 [Setup]
 AppId={{8A128F45-33DE-4A5A-B6BA-77C91F4057D8}
 AppName={#MyAppName}
-AppVersion=1.0.0
+AppVersion={#MyAppVersion}
 AppPublisher=OpenPOS
 DefaultDirName={autopf}\OpenPOS
 DefaultGroupName=OpenPOS
@@ -31,7 +34,7 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 SetupLogging=yes
 UninstallDisplayIcon={app}\scripts\openpos.ico
-VersionInfoVersion=1.0.0.0
+VersionInfoVersion={#MyAppVersion}.0
 VersionInfoCompany=OpenPOS
 VersionInfoDescription=OpenPOS Wines and Spirits Retail POS
 VersionInfoProductName=OpenPOS

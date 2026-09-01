@@ -6,7 +6,7 @@ const path = require('path');
 const express = require('express');
 const {
   db, seed, loadSampleData, importRetailCsv, setupStatus, runSetup, hashPin, findUserByPin, pinTaken,
-  getSettings, getSetting, setSetting, computeTotals, nextOrderNumber, audit, DB_PATH,
+  getSettings, getSetting, setSetting, isAllowedSetting, computeTotals, nextOrderNumber, audit, DB_PATH,
   nowLocal, todayLocal
 } = require('./db');
 const domain = require('./lib/domain');
@@ -16,6 +16,15 @@ const escpos = require('./lib/escpos');
 seed();
 
 const app = express();
+app.disable('x-powered-by');
+app.use((req,res,next)=>{
+  res.set({
+    'X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY',
+    'Referrer-Policy':'no-referrer','Permissions-Policy':'camera=(), microphone=(), geolocation=()',
+    'Content-Security-Policy':"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'"
+  });
+  next();
+});
 app.use(express.json({ limit: '3mb' })); // supports owner CSV onboarding/import up to the validated 2 MB limit
 
 /* Route modules receive explicit dependencies so APIs stay unchanged without
@@ -205,7 +214,7 @@ require('./routes/users')(app, {
 
 require('./routes/reports')(app, {
   db, requireAuth, requireRole, todayLocal, dayBounds, dayEnd, getSettings,
-  setSetting, audit, broadcast
+  setSetting, isAllowedSetting, audit, broadcast
 });
 
 require('./routes/pricing')(app, {
@@ -251,7 +260,8 @@ require('./routes/qr-ordering')(app, {
 });
 
 const backupOperations=require('./services/backup-operations')({rootDir:__dirname,dbPath:DB_PATH});
-require('./routes/operations')(app,{requireAuth,requireRole,backupOperations,bad});
+require('./routes/operations')(app,{requireAuth,requireRole,backupOperations,audit,bad});
+require('./routes/reversals')(app,{db,requireAuth,requireRole,stockLedger,audit,broadcast,bad});
 
 /* ------------------------------- frontend ------------------------------- */
 /* Legacy hospitality screens stay available only to migrated restaurant installs. */
@@ -265,7 +275,20 @@ app.get('/order/:token', (req, res, next) => {
   res.sendFile(path.join(__dirname, 'public', 'order.html'));
 });
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
-app.get('/healthz', (req, res) => res.json({ ok: true, orders: clients.size }));
+app.get('/healthz', (req, res) => {
+  const check=db.pragma('quick_check',{simple:true});
+  res.status(check==='ok'?200:503).json({ok:check==='ok',database:check,orders:clients.size,
+    version:require('./package.json').version,migration:(db.prepare('SELECT MAX(version) version FROM schema_migrations').get()||{}).version||0});
+});
+app.use('/api', (req,res)=>res.status(404).json({error:'API endpoint not found'}));
+app.use((err,req,res,next)=>{
+  if(res.headersSent)return next(err);
+  const errorId=`ERR-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`.toUpperCase();
+  console.error(`[${errorId}] ${req.method} ${req.originalUrl}`,err&&err.stack||err);
+  const status=err&&err.status>=400&&err.status<600?err.status:500;
+  const safe=status<500?(err.message||'Request failed'):'Unexpected server error';
+  res.status(status).json({error:safe,error_id:errorId});
+});
 
 const PORT = Number(process.env.PORT) || 3000;
 if (require.main === module) {

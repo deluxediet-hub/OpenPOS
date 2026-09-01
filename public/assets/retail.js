@@ -126,7 +126,7 @@ const Retail = (() => {
     const rows = await api('/api/stock-counts'), open = rows.find((r) => r.status === 'open');
     body.innerHTML = `<div class="row" style="margin-bottom:14px"><div><h3 style="margin:0">Physical stock counts</h3>
       <div class="tiny muted">Full, category, selected-product, cycle or spot counts using a frozen expected snapshot</div></div><span class="grow"></span>
-      ${open ? `<button class="btn primary" id="continueCount">Continue ${esc(open.reference)}</button>` : '<button class="btn primary" id="startCount">+ Start stocktake</button>'}</div>
+      ${open ? `<button class="btn ghost" id="cancelCount">Cancel count</button><button class="btn primary" id="continueCount">Continue ${esc(open.reference)}</button>` : '<button class="btn primary" id="startCount">+ Start stocktake</button>'}</div>
       <div class="card"><div class="scroll-x"><table class="tbl"><thead><tr><th>Reference</th><th>Type / scope</th><th>Status</th><th>Started</th><th>Completed</th><th class="right">Coverage</th><th class="right">Variances</th><th class="right">Cost impact</th><th class="right">Retail impact</th><th>By</th></tr></thead>
       <tbody>${rows.map((r) => `<tr><td><b>${esc(r.reference)}</b></td><td><span class="tag info">${esc(r.count_type||'full')}</span><div class="tiny muted">${esc(r.scope_label||'All stock')}${r.for_close?' · closing':''}</div></td><td><span class="tag ${r.status === 'open' ? 'warn' : 'ok'}">${r.status}</span></td>
         <td class="muted nowrap">${esc(r.started_at)}</td><td class="muted nowrap">${esc(r.completed_at || '—')}</td><td class="right">${r.coverage_count||r.lines}/${r.total_stock_items||r.lines}</td>
@@ -134,6 +134,13 @@ const Retail = (() => {
         <td>${esc(r.completed_by_name || r.started_by_name || '—')}</td></tr>`).join('') ||
         '<tr><td colspan="10" class="empty">No stock counts yet.</td></tr>'}</tbody></table></div></div>`;
     body.querySelector('#continueCount')?.addEventListener('click', () => countForm(open.id, body));
+    body.querySelector('#cancelCount')?.addEventListener('click', () => {
+      modal({title:'Cancel stock count',body:`<p>This abandons <b>${esc(open.reference)}</b>. No stock quantities will change. If it put the till into reconciliation, the till will return to open.</p><label class="fld">Reason</label><input class="inp" id="cancelCountReason" placeholder="Started by mistake, interrupted count…">`,
+        footer:'<button class="btn" data-no>Keep counting</button><button class="btn danger" data-yes>Cancel count</button>'});
+      const ov=document.querySelector('#modalRoot .ov');ov.querySelector('[data-no]').onclick=closeModal;
+      ov.querySelector('[data-yes]').onclick=async()=>{try{await api(`/api/stock-counts/${open.id}/cancel`,{body:{reason:ov.querySelector('#cancelCountReason').value}});
+        closeModal();await loadBootstrap();stocktakes(body);toast('Stock count cancelled; till recovered','ok');}catch(e){toast(e.message,'err');}};
+    });
     body.querySelector('#startCount')?.addEventListener('click', () => startCount(body));
   }
 

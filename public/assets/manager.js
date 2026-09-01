@@ -17,9 +17,10 @@ const Manager = (() => {
     ['money',     'Cash & Loyalty', [['drawer', 'Cash Drawer'], ['loyalty', 'Loyalty']]],
     ['bookings',  'Bookings',    [['bookings', 'Reservations']]],
     ['team',      'Team',        [['staff', 'Staff']]],
-    ['settings',  'Settings',    [['settings', 'Business'], ['printer', 'Printer'], ['backup', 'Backup & Recovery'], ['integrations', 'eTIMS / M-Pesa']]],
+    ['settings',  'Settings',    [['settings', 'Business / receipt'], ['retailsettings', 'Retail / inventory'], ['reconciliationsettings', 'Reconciliation'], ['printer', 'Printer'], ['backup', 'Backup'], ['integrations', 'Advanced compatibility']]],
   ];
-  const LOCAL = { dashboard, sales, menu, stock, staff, settings, audit };
+  const LOCAL = { dashboard, sales, menu, stock, staff, settings,
+    retailsettings:(body)=>settings(body,'retail'),reconciliationsettings:(body)=>settings(body,'reconciliation'),audit };
   const EXTERNAL = {
     modifiers: ManagerPricing.modifiers, recipes: ManagerPricing.recipes, dayparts: ManagerPricing.dayparts,
     drawer: ManagerReconciliation.drawer,
@@ -867,18 +868,18 @@ const Manager = (() => {
   }
 
   /* ----------------------------- settings ---------------------------- */
-  function settings(body) {
+  function settings(body,group='business') {
     const s = State.settings;
     const hasMenu = State.menu.length > 0;
     body.innerHTML = `
-      <div class="card" style="margin-bottom:14px"><div class="card-b row">
+      <div class="card" data-setting-group="retail" style="margin-bottom:14px"><div class="card-b row">
         <div style="min-width:220px"><b>Starter template</b>
           <div class="tiny muted" style="margin-top:4px">Load a Kenyan wines &amp; spirits starter catalogue
           (products, selling prices, costs and bottle stock) as a starting point. Never overwrites existing data.</div></div>
         <span class="grow"></span>
         <button class="btn" id="loadSample" ${hasMenu ? 'disabled title="Products already exist"' : ''}>Load starter products</button>
       </div></div>
-      <div class="grid" style="grid-template-columns:1fr 1fr">
+      <div class="grid" data-setting-group="business" style="grid-template-columns:1fr 1fr">
         <div class="card"><div class="card-h"><h3>Business details</h3></div><div class="card-b">
           <label class="fld">Business name</label><input class="inp" id="s_bn" value="${esc(s.business_name)}">
           <div style="margin-top:10px"><label class="fld">Address</label><input class="inp" id="s_ad" value="${esc(s.address)}"></div>
@@ -907,13 +908,13 @@ const Manager = (() => {
           <p class="tiny muted" style="margin-top:12px">Retail selling prices normally already contain VAT. With inclusive mode, a product entered at KSh 200 sells for exactly KSh 200; the VAT portion is extracted for reporting, not added again. Service charge should remain disabled.</p>
         </div></div>
       </div>
-      ${s.business_type === 'wines_spirits' ? `<div class="card" style="margin-top:14px"><div class="card-h"><h3>Retail safeguards &amp; scanner</h3></div><div class="card-b grid3">
+      ${s.business_type === 'wines_spirits' ? `<div class="card" data-setting-group="retail" style="margin-top:14px"><div class="card-h"><h3>Retail safeguards &amp; scanner</h3></div><div class="card-b grid3">
         <div><label class="fld">Receipt age notice</label><input class="inp" id="s_age" type="number" min="18" value="${esc(s.minimum_sale_age || 18)}"><div class="tiny muted" style="margin-top:5px">Printed on receipts only; checkout has no age prompt.</div></div>
         <div><label class="fld">Prevent negative stock</label><select class="inp" id="s_neg"><option value="1" ${s.prevent_negative_stock === '1' ? 'selected' : ''}>Yes</option><option value="0" ${s.prevent_negative_stock !== '1' ? 'selected' : ''}>No</option></select></div>
         <div><label class="fld">Barcode scanner</label><select class="inp" id="s_scan"><option value="0" ${s.barcode_scanner_enabled !== '1' ? 'selected' : ''}>Disabled</option><option value="1" ${s.barcode_scanner_enabled === '1' ? 'selected' : ''}>Enabled everywhere</option></select>
           <div class="tiny muted" style="margin-top:5px">Use a USB/Bluetooth scanner in keyboard mode with Enter suffix. Scanning from any normal page opens the sale and adds the product.</div></div>
       </div></div>
-      <div class="card" style="margin-top:14px"><div class="card-h"><h3>Reconciliation controls</h3></div><div class="card-b grid3">
+      <div class="card" data-setting-group="reconciliation" style="margin-top:14px"><div class="card-h"><h3>Reconciliation controls</h3></div><div class="card-b grid3">
         <div><label class="fld">Balanced tolerance (${sym()})</label><input class="inp" id="s_tol" type="number" min="0" step="1" value="${esc(s.reconciliation_tolerance || 20)}"><div class="tiny muted" style="margin-top:5px">Differences within this amount can be classified as reconciled.</div></div>
         <div><label class="fld">Critical variance (${sym()})</label><input class="inp" id="s_crit" type="number" min="0" step="1" value="${esc(s.reconciliation_critical_threshold || 500)}"><div class="tiny muted" style="margin-top:5px">Larger unexplained shortages or overages are marked critical.</div></div>
         <div><label class="fld">Stock count required to close</label><select class="inp" id="s_count_policy">
@@ -922,7 +923,7 @@ const Manager = (() => {
           <option value="full" ${s.stock_count_close_policy==='full'?'selected':''}>Full physical count</option></select>
           <div class="tiny muted" style="margin-top:5px">Partial counts report scoped variance and never pretend uncounted stock is balanced.</div></div>
       </div></div>` : ''}
-      <div class="card" style="margin-top:14px"><div class="card-h"><h3>Receipt</h3></div><div class="card-b">
+      <div class="card" data-setting-group="business" style="margin-top:14px"><div class="card-h"><h3>Receipt</h3></div><div class="card-b">
         <label class="fld">Footer message</label><input class="inp" id="s_ft" value="${esc(s.receipt_footer)}">
       </div></div>
       <div class="row" style="margin-top:14px">
@@ -943,6 +944,7 @@ const Manager = (() => {
           }).join('')}</tbody></table></div>
       </div>` : ''}`;
 
+    body.querySelectorAll('[data-setting-group]').forEach((el)=>{el.style.display=el.dataset.settingGroup===group?'':'none';});
     const ls = body.querySelector('#loadSample');
     if (ls) ls.onclick = () => confirmBox('Load starter products',
       'Adds a starter wines and spirits catalogue with matching bottle stock. Your existing data is untouched.', {

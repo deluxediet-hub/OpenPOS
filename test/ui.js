@@ -327,10 +327,8 @@ async function loginWithPin(w, pin) {
   click(c.w, $$(c.w, '.mbtn').find((b) => b.dataset.m === 'mpesa'));
   await wait(60);
   ck('M-Pesa form swaps in', !!$('#mref', c.w) && !!$('#mphone', c.w));
-  ck('STK push helper present', !!$('#stk', c.w));
-  click(c.w, $('#stk', c.w));
-  await wait(60);
-  ck('STK push asks for phone first', $('#stkMsg', c.w).textContent.includes('phone'), $('#stkMsg', c.w).textContent);
+  ck('no fake STK push action is shown', !$('#stk', c.w));
+  ck('manual M-Pesa verification is explained', c.w.document.body.textContent.includes('does not send an STK push'));
   click(c.w, $('[data-go]', c.w));
   await wait(200);
   ck('M-Pesa requires confirmation code', $$(c.w, '.toast').some((t) => t.textContent.includes('confirmation code')));
@@ -468,7 +466,7 @@ async function loginWithPin(w, pin) {
   await walk('Products & Pricing', ['Options', 'Recipes', 'Happy Hour']);
   await walk('Cash & Loyalty', ['Cash Drawer', 'Loyalty']);
   await walk('Reports', ['Labour', 'Audit log']);
-  await walk('Settings', ['Printer', 'Backup & Recovery', 'eTIMS / M-Pesa']);
+  await walk('Settings', ['Retail / inventory', 'Reconciliation', 'Printer', 'Backup', 'Advanced compatibility']);
   await walk('Bookings', ['Reservations']);
   await walk('Team', ['Staff']);
 
@@ -529,7 +527,7 @@ async function loginWithPin(w, pin) {
   if (rev && rev.textContent.includes('Gift card issued')) click(m.w, $('[data-no]', m.w));
 
   /* Integrations: dry run must shape a payload */
-  await goTop('Settings'); await goSub('eTIMS / M-Pesa');
+  await goTop('Settings'); await goSub('Advanced compatibility');
   await waitFor(() => $('#etDry', m.w), 'integration controls');
   ck('integration tab explains config-only status', vtext().includes('Configuration only'));
   ck('secrets shown masked, not in the clear', !vtext().includes('SUPERSECRETVALUE'));

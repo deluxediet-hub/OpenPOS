@@ -100,3 +100,20 @@ Before distribution, also test on a clean Windows PC/VM:
 - Backup restore on a separate installation
 
 The workflow source is `ci/openpos-ci.yml`. It becomes active only when copied to `.github/workflows/ci.yml` using a GitHub identity with Workflow permission.
+
+## Verified updates, rollback, restore and releases
+
+- `build-installer.ps1` reads the version from `package.json`; the Inno application and EXE versions are no longer maintained separately.
+- Every build generates `release-manifest.json` with SHA-256 hashes for all application files. The updater verifies every listed file before stopping OpenPOS.
+- After compilation (and optional signing), `packaging/output/SHA256SUMS.txt` is generated for the installer. Publish both files beside the installer.
+- Optional Authenticode signing is enabled by setting `OPENPOS_SIGN_CERT` to a PFX path and `OPENPOS_SIGN_PASSWORD` in the build environment. OpenPOS never installs a self-signed root certificate.
+- Updates replace complete `routes/` and `services/` trees, verify the bundled SQLite ABI, wait for `/healthz`, and automatically restore the pre-update code when health verification fails.
+- Rollback restores complete modular code and dependencies and also waits for health.
+- Settings → Backup provides an admin-only Windows restore workflow. It verifies the selected backup, stops the server, keeps a `pre-restore-*.db` emergency copy, swaps the database, verifies startup, and automatically puts the emergency copy back if startup fails.
+
+Generate/check release metadata without building Windows installer:
+
+```bash
+npm run release:manifest
+npm run release:check
+```

@@ -35,13 +35,16 @@ function Remove-BuildTree([string]$Path) {
 }
 
 Write-Host "==> Preparing clean payload" -ForegroundColor Cyan
+$PackageVersion = (Get-Content (Join-Path $repo 'package.json') -Raw | ConvertFrom-Json).version
+& node (Join-Path $repo 'scripts\build-release-manifest.js')
+if ($LASTEXITCODE -ne 0) { throw 'Could not generate release manifest' }
 Remove-BuildTree $pay
 New-Item -ItemType Directory -Path "$pay\app"      -Force | Out-Null
 New-Item -ItemType Directory -Path "$pay\runtime"  -Force | Out-Null
 New-Item -ItemType Directory -Path "$pay\scripts"  -Force | Out-Null
 
 # 1. The EXISTING POS code, byte-for-byte (never modified by packaging).
-foreach ($i in @('server.js','db.js','lib','routes','services','public','scripts','package.json','package-lock.json')) {
+foreach ($i in @('server.js','db.js','lib','routes','services','public','scripts','package.json','package-lock.json','release-manifest.json')) {
   Copy-Item -Path (Join-Path $repo $i) -Destination "$pay\app" -Recurse -Force
 }
 # 2. Helper scripts.
@@ -102,8 +105,20 @@ if (-not $iscc) {
   $cand = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
   if (Test-Path $cand) { $iscc = $cand } else { throw "Inno Setup (ISCC.exe) not found. Install Inno Setup 6 first." }
 }
-& $iscc (Join-Path $here 'openpos.iss')
+& $iscc "/DMyAppVersion=$PackageVersion" (Join-Path $here 'openpos.iss')
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
-Write-Host "`nDone. Installer at: $here\output\OpenPOS-Setup.exe" -ForegroundColor Green
+$installer=Join-Path $here 'output\OpenPOS-Setup.exe'
+if ($env:OPENPOS_SIGN_CERT) {
+  $signtool=(Get-Command signtool.exe -ErrorAction SilentlyContinue).Source
+  if(-not $signtool){throw 'OPENPOS_SIGN_CERT was supplied but signtool.exe is unavailable'}
+  $signArgs=@('sign','/fd','SHA256','/tr','http://timestamp.digicert.com','/td','SHA256','/f',$env:OPENPOS_SIGN_CERT)
+  if($env:OPENPOS_SIGN_PASSWORD){$signArgs+=@('/p',$env:OPENPOS_SIGN_PASSWORD)}
+  $signArgs+=$installer;& $signtool $signArgs;if($LASTEXITCODE -ne 0){throw 'Installer signing failed'}
+  Write-Host 'Installer Authenticode signature applied.' -ForegroundColor Green
+} else { Write-Host 'Installer is unsigned (set OPENPOS_SIGN_CERT for Authenticode signing).' -ForegroundColor Yellow }
+& "$pay\runtime\node.exe" (Join-Path $repo 'scripts\build-release-manifest.js')
+if ($LASTEXITCODE -ne 0) { throw 'Could not generate installer SHA256SUMS.txt' }
+
+Write-Host "`nDone. Installer at: $installer" -ForegroundColor Green
 Write-Host "Copy that single file to the till PC and double-click it. No internet needed there."

@@ -127,15 +127,17 @@ const ManagerSystem = (() => {
             <div><label class="fld">Port</label><input class="inp mono" id="pr_p" value="${esc(s.printer_port)}"></div>
             ${retail ? '' : `<div><label class="fld">Kitchen printer host (optional)</label><input class="inp mono" id="pr_kh" value="${esc(s.kitchen_printer_host)}" placeholder="defaults to receipt printer"></div>
             <div><label class="fld">Kitchen port</label><input class="inp mono" id="pr_kp" value="${esc(s.kitchen_printer_port)}"></div>`}
-            <div><label class="fld">Characters per line</label><input class="inp" id="pr_c" type="number" value="${esc(s.printer_chars)}">
-              <div class="tiny muted" style="margin-top:4px">42 for 80mm paper, 32 for 58mm</div></div>
+            <div><label class="fld">Paper / preview width</label><select class="inp" id="pr_c"><option value="32" ${Number(s.printer_chars)<=32?'selected':''}>58mm · 32 characters</option><option value="42" ${Number(s.printer_chars)>32?'selected':''}>80mm · 42 characters</option></select></div>
+            <div><label class="fld">Printer code page</label><select class="inp" id="pr_cp"><option value="cp437" ${s.printer_code_page==='cp437'?'selected':''}>CP437 (standard)</option><option value="cp850" ${s.printer_code_page==='cp850'?'selected':''}>CP850 (Western Europe)</option><option value="cp858" ${s.printer_code_page==='cp858'?'selected':''}>CP858 (Euro)</option></select></div>
+            <div><label class="fld">Footer feed lines</label><input class="inp" id="pr_fl" type="number" min="0" max="8" value="${esc(s.receipt_footer_lines||'3')}"></div>
             <div><label class="fld">Cash drawer</label><select class="inp" id="pr_d">
               <option value="1" ${s.drawer_kick_enabled === '1' ? 'selected' : ''}>Kick open on cash sale</option>
               <option value="0" ${s.drawer_kick_enabled !== '1' ? 'selected' : ''}>No drawer attached</option></select></div>
           </div>
+          <div class="row" style="margin-top:12px;gap:14px;flex-wrap:wrap"><label><input type="checkbox" id="pr_addr" ${s.receipt_show_address!=='0'?'checked':''}> Address</label><label><input type="checkbox" id="pr_phone" ${s.receipt_show_phone!=='0'?'checked':''}> Phone</label><label><input type="checkbox" id="pr_kra" ${s.receipt_show_kra_pin!=='0'?'checked':''}> KRA PIN</label><label><input type="checkbox" id="pr_lic" ${s.receipt_show_licence!=='0'?'checked':''}> Licence</label></div>
           <div class="row" style="margin-top:14px">
             <button class="btn primary" id="prSave">Save</button>
-            <button class="btn ghost" id="prTest">Print test receipt</button></div>
+            <button class="btn ghost" id="prTest">Print test receipt</button><button class="btn ghost" id="prQueue">Show print queue</button></div>
           <div id="prOut" class="tiny muted" style="margin-top:10px"></div>
         </div>
       </div>`;
@@ -148,9 +150,14 @@ const ManagerSystem = (() => {
         kitchen_printer_host: body.querySelector('#pr_kh')?.value.trim() || '',
         kitchen_printer_port: body.querySelector('#pr_kp')?.value || '9100',
         printer_chars: body.querySelector('#pr_c').value,
+        printer_code_page: body.querySelector('#pr_cp').value,
+        receipt_footer_lines: body.querySelector('#pr_fl').value,
+        receipt_show_address:body.querySelector('#pr_addr').checked?'1':'0',receipt_show_phone:body.querySelector('#pr_phone').checked?'1':'0',
+        receipt_show_kra_pin:body.querySelector('#pr_kra').checked?'1':'0',receipt_show_licence:body.querySelector('#pr_lic').checked?'1':'0',
         drawer_kick_enabled: body.querySelector('#pr_d').value } });
       toast('Printer settings saved', 'ok'); printer(body);
     };
+    body.querySelector('#prQueue').onclick=async()=>{try{const q=await api('/api/print/jobs');body.querySelector('#prOut').innerHTML=`<b>${q.jobs.length} retained job(s)</b> · ${esc(q.retention)}<br>${q.jobs.slice(0,20).map(j=>`${esc(j.created_at.slice(0,16))} · ${esc(j.name)} · ${j.size} bytes`).join('<br>')||'Queue is empty'}`;}catch(e){toast(e.message,'err');}};
     body.querySelector('#prTest').onclick = async () => {
       const o = State.orders[0] || (await api('/api/orders?status=closed'))[0];
       const out = body.querySelector('#prOut');
@@ -172,10 +179,18 @@ const ManagerSystem = (() => {
       <div class="stat"><div class="l">Local copies</div><div class="v">${state.count}</div><div class="d">${esc(state.directory)}</div></div>
       <div class="stat"><div class="l">Status</div><div class="v" style="color:${state.stale?'var(--red)':'var(--green)'}">${state.stale?'STALE':'CURRENT'}</div><div class="d">${esc((state.last_status||{}).integrity||'Not verified this session')}</div></div></div>
       <div class="card" style="margin-top:14px"><div class="card-b"><p>Backups are local SQLite copies verified with an integrity check. Keep a separate off-device copy for theft or disk failure.</p>
-      <div class="row"><button class="btn primary" id="backupNow">Create backup now</button><button class="btn" id="backupVerify">Verify latest backup</button></div><pre id="backupOut" class="code" style="margin-top:12px;white-space:pre-wrap"></pre></div></div>`;
+      <div class="row"><button class="btn primary" id="backupNow">Create backup now</button><button class="btn" id="backupVerify">Verify latest backup</button></div><pre id="backupOut" class="code" style="margin-top:12px;white-space:pre-wrap"></pre></div></div>
+      ${State.user.role==='admin'&&state.files.length?`<div class="card" style="margin-top:14px;border-left:3px solid var(--red)"><div class="card-h"><h3>Restore database</h3></div><div class="card-b"><p class="small muted">Windows only. The selected copy is verified first, the current database is saved as an emergency backup, then OpenPOS restarts. If startup fails, the current database is restored automatically.</p>
+        <div class="row"><select class="inp" id="restoreName" style="max-width:430px">${state.files.map(x=>`<option value="${esc(x.name)}">${esc(x.name)} · ${Math.round(x.size/1024)} KB</option>`).join('')}</select><button class="btn danger" id="restoreStart">Restore selected backup</button></div></div></div>`:''}`;
     const run=async(path)=>{const out=body.querySelector('#backupOut');out.textContent='Working…';try{const r=await api(path,{body:{}});out.textContent=r.output;await backup(body);}catch(e){out.textContent=e.message;}};
     body.querySelector('#backupNow').onclick=()=>run('/api/backups/run');
     body.querySelector('#backupVerify').onclick=()=>run('/api/backups/verify');
+    body.querySelector('#restoreStart')?.addEventListener('click',()=>{
+      const name=body.querySelector('#restoreName').value;
+      modal({title:'Restore an earlier database?',body:`<p>This replaces current business data with <b>${esc(name)}</b>. A pre-restore emergency copy is made automatically.</p><label class="fld">Type RESTORE to continue</label><input class="inp mono" id="restoreConfirm" autocomplete="off">`,footer:'<button class="btn" data-no>Cancel</button><button class="btn danger" data-yes>Verify, restore & restart</button>'});
+      const ov=document.querySelector('#modalRoot .ov');ov.querySelector('[data-no]').onclick=closeModal;
+      ov.querySelector('[data-yes]').onclick=async()=>{try{const r=await api('/api/backups/restore',{body:{name,confirm:ov.querySelector('#restoreConfirm').value}});closeModal();toast(r.message,'ok');}catch(e){toast(e.message,'err');}};
+    });
   }
 
   return { integrations, printer, backup };

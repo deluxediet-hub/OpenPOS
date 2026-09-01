@@ -3,7 +3,7 @@
 /** Financial/operational reporting routes. Queries and response contracts remain unchanged. */
 module.exports = function register(app, {
   db, requireAuth, requireRole, todayLocal, dayBounds, dayEnd, getSettings,
-  setSetting, audit, broadcast
+  setSetting, isAllowedSetting, audit, broadcast
 }) {
   /* -------------------------------- reports ------------------------------- */
   app.get('/api/reports/summary', requireAuth, requireRole('manager', 'admin', 'cashier'), (req, res) => {
@@ -124,6 +124,8 @@ module.exports = function register(app, {
     const body=req.body||{};
     if(body.stock_count_close_policy!==undefined&&!['none','any','full'].includes(String(body.stock_count_close_policy)))
       return res.status(400).json({error:'Stock count close policy must be none, any or full'});
+    const unknown=Object.keys(body).filter((k)=>!isAllowedSetting(k));
+    if(unknown.length)return res.status(400).json({error:`Unknown setting: ${unknown.join(', ')}`});
     for (const [k, v] of Object.entries(body)) {
       if (typeof v === 'boolean') setSetting(k, v ? '1' : '0');
       else if (v !== undefined) setSetting(k, v);

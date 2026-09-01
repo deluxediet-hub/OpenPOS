@@ -283,6 +283,7 @@ const loadToday = async () => { TODAY = (await (await fetch(BASE + '/api/today')
 
   /* =================== LOYALTY & GIFT CARDS =================== */
   console.log('\nLOYALTY & GIFT CARDS');
+  await admin.put('/api/settings',{loyalty_enabled:'1'}); // retail defaults off; this suite explicitly exercises the optional capability
   r = await waiter.get('/api/customers?q=Wanjiru');
   ck('search customer', r.status === 200 && r.data.length === 1 && r.data[0].points === 250, 'points=' + (r.data[0] || {}).points);
   r = await waiter.post('/api/customers', { name: 'New Guest', phone: '0799888777' });
