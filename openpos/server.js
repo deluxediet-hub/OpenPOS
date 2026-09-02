@@ -158,6 +158,112 @@ function upsertStock(d, variantId, locationId, delta) {
   ).run(variantId, locationId, delta, delta);
 }
 
+// ---- Phase 4: stock ledger (R-S) ---------------------------------------------
+// R-S1: every quantity change is exactly one move, with a reason code + reference.
+const MOVE_TYPES = [
+  'opening', 'purchase', 'sale', 'return_in', 'return_out', 'transfer_in', 'transfer_out',
+  'adjustment', 'damage', 'expiry_writeoff', 'stocktake', 'conversion', 'refund', 'hold', 'release'
+];
+const MOVE_REASONS = {
+  opening: ['opening'],
+  purchase: ['purchase'],
+  sale: ['sale'],
+  return_in: ['return_in'],
+  return_out: ['return_out'],
+  transfer_in: ['transfer_in'],
+  transfer_out: ['transfer_out'],
+  adjustment: ['stocktake', 'damage', 'expired', 'other', 'integrity'],
+  damage: ['damage'],
+  expiry_writeoff: ['expired'],
+  stocktake: ['stocktake', 'integrity'],
+  conversion: ['conversion'],
+  refund: ['refund'],
+  hold: ['hold'],
+  release: ['hold']
+};
+const INBOUND_TYPES = new Set(['opening', 'purchase', 'return_in', 'transfer_in', 'release']);
+
+function httpError(status, message) {
+  const e = new Error(message);
+  e.status = status;
+  return e;
+}
+
+/**
+ * Apply one quantity change as ledger move(s). FeFO batch allocation may produce
+ * several move rows (one per batch consumed) — each is a complete, auditable change.
+ * R-S8: negative stock is impossible unless allowOversell (manager/owner) — which is
+ * recorded on the move and in the audit trail. Batch-tracked variants are strict.
+ * Throws httpError for validation failures. Returns { moveIds, newQty, oversell }.
+ */
+function writeMove(d, { product, variant, branchId, locationId, qty, type, reason, ref = '', batchId = null, serialId = null, unitCost = 0, userId = null, note = '', allowOversell = false }) {
+  if (!MOVE_TYPES.includes(type)) throw httpError(400, `unknown move type: ${type}`);
+  if (!MOVE_REASONS[type].includes(reason)) throw httpError(400, `invalid reason for ${type}: ${reason}`);
+  if (!Number.isFinite(qty) || qty === 0) throw httpError(400, 'qty must be non-zero');
+  const t = new Date().toISOString();
+  const cur = stockQty(d, variant.id, locationId);
+  const newQty = cur + qty;
+  const willOversell = newQty < -1e-9;
+  if (willOversell && !allowOversell) {
+    throw httpError(400, `insufficient stock: ${cur} on hand, move ${qty} (R-S8)`);
+  }
+  if (willOversell && product.track_batches) {
+    throw httpError(400, 'oversell not allowed for batch-tracked stock');
+  }
+  if (product.track_serials && !Number.isInteger(qty)) {
+    throw httpError(400, 'serial-tracked stock moves must be whole units');
+  }
+  if (serialId) {
+    const s = d.prepare('SELECT id, variant_id FROM serials WHERE id = ?').get(serialId);
+    if (!s || s.variant_id !== variant.id) throw httpError(400, 'serial does not belong to this variant');
+  }
+
+  // Batch allocation
+  const allocs = []; // { batchId, qty }
+  if (product.track_batches) {
+    if (qty > 0) {
+      if (!batchId) throw httpError(400, 'batch_id required for stock in on a batch-tracked product');
+      const b = d.prepare('SELECT * FROM batches WHERE id = ?').get(batchId);
+      if (!b || b.variant_id !== variant.id) throw httpError(400, 'batch does not belong to this variant');
+      allocs.push({ batchId, qty });
+    } else if (batchId) {
+      const b = d.prepare('SELECT * FROM batches WHERE id = ?').get(batchId);
+      if (!b || b.variant_id !== variant.id) throw httpError(400, 'batch does not belong to this variant');
+      if (b.qty + qty < -1e-9) throw httpError(400, `insufficient batch stock: ${b.qty} in batch`);
+      allocs.push({ batchId, qty });
+    } else {
+      // FEFO: earliest expiry first (no-expiry last), oldest batch id first
+      const lots = d
+        .prepare('SELECT * FROM batches WHERE variant_id = ? AND location_id = ? AND qty > 0 ORDER BY expiry_date IS NULL, expiry_date ASC, id ASC')
+        .all(variant.id, locationId);
+      const avail = lots.reduce((s, b) => s + b.qty, 0);
+      if (avail + qty < -1e-9) throw httpError(400, `insufficient batch stock: ${avail} across batches, move ${qty}`);
+      let remaining = -qty;
+      for (const b of lots) {
+        if (remaining <= 1e-9) break;
+        const take = Math.min(b.qty, remaining);
+        allocs.push({ batchId: b.id, qty: -take });
+        remaining -= take;
+      }
+    }
+  } else if (batchId) {
+    throw httpError(400, 'product does not track batches');
+  }
+
+  const insMove = d.prepare(
+    `INSERT INTO stock_moves (product_id, variant_id, branch_id, location_id, qty, type, reason, ref, batch_id, serial_id, unit_cost, user_id, note, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  const upsertBatch = d.prepare('UPDATE batches SET qty = qty + ? WHERE id = ?');
+  const moveIds = [];
+  for (const a of allocs.length ? allocs : [{ batchId: null, qty }]) {
+    moveIds.push(insMove.run(product.id, variant.id, branchId, locationId, a.qty, type, reason, ref, a.batchId, serialId, unitCost || 0, userId, note, t).lastInsertRowid);
+    if (a.batchId) upsertBatch.run(a.qty, a.batchId);
+  }
+  upsertStock(d, variant.id, locationId, qty);
+  return { moveIds, newQty, oversell: willOversell && allowOversell };
+}
+
 /** R-P3: one call resolves barcode → variant → location stock → price. */
 function resolveBarcode(d, user, barcode) {
   const row = d
@@ -277,7 +383,7 @@ function createApp(d) {
   app.use(express.static(path.join(__dirname, 'public')));
 
   // ---- health / status ------------------------------------------------------
-  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 3 }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 4 }));
 
   app.get('/api/setup/status', (req, res) => {
     res.json({
@@ -1091,17 +1197,428 @@ function createApp(d) {
       ? b.location_id : (locs[0] && locs[0].id);
     if (!locationId) return res.status(400).json({ error: 'no location' });
 
-    const run = d.transaction(() => {
-      upsertStock(d, variant.id, locationId, qty);
-      addStockMove(d, { product, variant, branchId, locationId, qty, type: 'adjustment', reason, ref: 'ADJ', userId: req.user.id, note: String(b.note || '') });
-      return stockQty(d, variant.id, locationId);
-    });
-    const newQty = run();
+    let out;
+    try {
+      out = d.transaction(() =>
+        writeMove(d, {
+          product, variant, branchId, locationId, qty, type: 'adjustment', reason,
+          ref: 'ADJ', userId: req.user.id, note: String(b.note || ''), allowOversell: false
+        })
+      )();
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
     dbm.audit(d, {
       userId: req.user.id, branchId, action: 'stock/adjust', entity: 'product', entityId: String(productId),
-      detail: { name: product.name, variant: variant.name || '(base)', qty, reason, newQty }
+      detail: { name: product.name, variant: variant.name || '(base)', qty, reason, newQty: out.newQty }
     });
-    res.json({ ok: true, newQty, variant_id: variant.id });
+    res.json({ ok: true, newQty: out.newQty, variant_id: variant.id });
+  });
+
+  // ---- Phase 4: stock ledger & inventory (R-S) ---------------------------------------------
+  const stockScope = (user, b = {}) => {
+    const branches = visibleBranches(d, user);
+    const branchId = (branches[0] && branches[0].id) || null;
+    const locs = branchId ? locationsOf(d, branchId) : [];
+    const locationId = numOrNull(b.location_id) && locs.some((l) => l.id === b.location_id)
+      ? b.location_id : (locs[0] && locs[0].id);
+    return { branchId, locationId, error: locationId ? null : 'no location' };
+  };
+
+  // Generic move — the one door through which every quantity change flows (R-S1).
+  app.post('/api/stock/moves', me, can('stock.adjust'), (req, res) => {
+    const b = req.body || {};
+    const qty = Number(b.qty);
+    const type = String(b.type || '');
+    const reason = String(b.reason || '').trim();
+    let variant = numOrNull(b.variant_id)
+      ? d.prepare('SELECT * FROM variants WHERE id = ? AND active = 1').get(numOrNull(b.variant_id))
+      : null;
+    let productId = numOrNull(b.product_id);
+    if (variant) productId = variant.product_id;
+    if (!variant && productId) {
+      const vs = activeVariantsOf(d, productId);
+      variant = vs.length === 1 ? vs[0] : null;
+      if (!variant) return res.status(400).json({ error: 'product has multiple variants — specify variant_id' });
+    }
+    if (!variant) return res.status(400).json({ error: 'no active variant' });
+    const product = productRow(d, productId);
+    if (!product || !product.active) return res.status(400).json({ error: 'unknown product' });
+    const { branchId, locationId, error } = stockScope(req.user, b);
+    if (error) return res.status(400).json({ error });
+
+    // R-S8: oversell is an explicit, audited manager/owner act — never a cashier's.
+    const allowOversell = b.oversell === true && ['owner', 'manager'].includes(req.user.role);
+
+    let out;
+    try {
+      out = d.transaction(() =>
+        writeMove(d, {
+          product, variant, branchId, locationId, qty, type, reason,
+          ref: String(b.ref || ''), batchId: numOrNull(b.batch_id), serialId: numOrNull(b.serial_id),
+          unitCost: intShillings(b.unit_cost) || 0, userId: req.user.id, note: String(b.note || ''),
+          allowOversell
+        })
+      )();
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
+    dbm.audit(d, {
+      userId: req.user.id, branchId, action: 'stock/move', entity: 'product', entityId: String(productId),
+      detail: { name: product.name, variant: variant.name || '(base)', type, reason, qty, ref: String(b.ref || ''), newQty: out.newQty, oversell: out.oversell || undefined }
+    });
+    res.json({ ok: true, move_ids: out.moveIds, newQty: out.newQty, oversell: out.oversell || undefined, variant_id: variant.id });
+  });
+
+  // Ledger query — who changed what, when, why, on what evidence.
+  app.get('/api/stock/moves', me, can('stock.view'), (req, res) => {
+    const q = req.query;
+    const where = [];
+    const args = [];
+    if (q.variant_id) { where.push('m.variant_id = ?'); args.push(numOrNull(q.variant_id)); }
+    if (q.product_id) { where.push('m.product_id = ?'); args.push(numOrNull(q.product_id)); }
+    if (q.location_id) { where.push('m.location_id = ?'); args.push(numOrNull(q.location_id)); }
+    if (q.type) { where.push('m.type = ?'); args.push(String(q.type)); }
+    if (q.from) { where.push('m.created_at >= ?'); args.push(String(q.from)); }
+    if (q.to) { where.push('m.created_at <= ?'); args.push(String(q.to)); }
+    const limit = Math.min(Math.max(Number(q.limit) || 200, 1), 1000);
+    const rows = d
+      .prepare(
+        `SELECT m.*, p.name AS product_name, v.name AS variant_name, b.batch_no, u.name AS user_name, l.name AS location_name
+           FROM stock_moves m
+           JOIN products p ON p.id = m.product_id
+           LEFT JOIN variants v ON v.id = m.variant_id
+           LEFT JOIN batches b ON b.id = m.batch_id
+           LEFT JOIN users u ON u.id = m.user_id
+           LEFT JOIN locations l ON l.id = m.location_id
+          ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+          ORDER BY m.id DESC LIMIT ?`
+      )
+      .all(...args, limit);
+    res.json(rows);
+  });
+
+  // Balances: materialized stock vs ledger view, per variant × location (R-S7 surface).
+  app.get('/api/stock/balances', me, can('stock.view'), (req, res) => {
+    const locId = numOrNull(req.query.location_id);
+    const materialized = d
+      .prepare(
+        `SELECT s.variant_id, s.location_id, s.qty, l.name AS location_name, l.branch_id,
+                COALESCE(lb.expected_qty, 0) AS expected, COALESCE(lb.last_moved_at, '') AS last_moved_at
+           FROM stock s
+           JOIN locations l ON l.id = s.location_id
+           LEFT JOIN stock_ledger_balances lb ON lb.variant_id = s.variant_id AND lb.location_id = s.location_id
+          ${locId ? 'WHERE s.location_id = ?' : ''}
+          ORDER BY l.id, s.variant_id`
+      )
+      .all(...(locId ? [locId] : []));
+    const out = new Map();
+    for (const r of materialized) {
+      const p = d.prepare('SELECT p.id, p.name, p.unit, p.sku, v.name AS variant_name FROM products p JOIN variants v ON v.id = ? WHERE p.id = v.product_id').get(r.variant_id);
+      if (!p) continue;
+      const key = r.variant_id;
+      if (!out.has(key)) out.set(key, { variant_id: r.variant_id, product_id: p.id, product_name: p.name, sku: p.sku, unit: p.unit, variant_name: p.variant_name || '(base)', total: 0, expected_total: 0, match: true, locations: [] });
+      const e = out.get(key);
+      e.total += r.qty;
+      e.expected_total += r.expected;
+      if (Math.abs(r.qty - r.expected) > 1e-9) e.match = false;
+      e.locations.push({ location_id: r.location_id, location_name: r.location_name, qty: r.qty, expected: r.expected, last_moved_at: r.last_moved_at });
+    }
+    res.json([...out.values()]);
+  });
+
+  // R-S7 integrity job: assert materialized == recomputed ledger. Mismatch = alert,
+  // never silent — repair is an explicit, audited act (owner/stocktake.approve).
+  app.post('/api/stock/integrity', me, can('stocktake.approve'), (req, res) => {
+    const repair = (req.body || {}).repair === true;
+    const scan = () => {
+      const materialized = d.prepare('SELECT variant_id, location_id, qty FROM stock').all();
+      const ledger = d.prepare('SELECT variant_id, location_id, expected_qty FROM stock_ledger_balances').all();
+      const keys = new Map();
+      for (const r of materialized) keys.set(r.variant_id + ':' + r.location_id, { qty: r.qty, expected: 0 });
+      for (const r of ledger) {
+        const k = r.variant_id + ':' + r.location_id;
+        const e = keys.get(k) || { qty: 0, expected: 0 };
+        e.expected = r.expected_qty;
+        keys.set(k, e);
+      }
+      const mismatches = [];
+      for (const [k, v] of keys) {
+        if (Math.abs(v.qty - v.expected) > 1e-9) {
+          const [variant_id, location_id] = k.split(':').map(Number);
+          mismatches.push({ variant_id, location_id, materialized: v.qty, expected: v.expected, product: (d.prepare('SELECT p.name FROM products p JOIN variants v ON v.product_id = p.id WHERE v.id = ?').get(variant_id) || {}).name || '?' });
+        }
+      }
+      return { checked: keys.size, mismatches };
+    };
+    const { checked, mismatches } = scan();
+    let afterRepair = null;
+    if (repair) {
+      d.transaction(() => {
+        for (const m of mismatches) {
+          d.prepare(
+            `INSERT INTO stock (variant_id, location_id, qty) VALUES (?, ?, ?)
+             ON CONFLICT(variant_id, location_id) DO UPDATE SET qty = excluded.qty`
+          ).run(m.variant_id, m.location_id, m.expected);
+        }
+      })();
+      for (const m of mismatches) {
+        dbm.audit(d, {
+          userId: req.user.id, action: 'stock/integrity_repair', entity: 'product', entityId: String(m.variant_id),
+          detail: { ...m, from: m.materialized, to: m.expected }
+        });
+      }
+      afterRepair = scan().mismatches;
+    }
+    res.json({ ok: true, checked, mismatches, repaired: repair, ...(afterRepair !== null ? { after_repair: afterRepair } : {}) });
+  });
+
+  // R-S2 — the five questions, one call: where from? who? why? where now? what should physically be there?
+  app.get('/api/stock/trace/:variantId', me, can('stock.view'), (req, res) => {
+    const v = d.prepare('SELECT * FROM variants WHERE id = ?').get(numOrNull(req.params.variantId));
+    if (!v) return res.status(404).json({ error: 'not found' });
+    const product = productRow(d, v.product_id);
+    const moves = d.prepare('SELECT * FROM stock_moves WHERE variant_id = ? ORDER BY id DESC LIMIT 500').all(v.id);
+    const userNames = new Map(d.prepare('SELECT id, name FROM users').all().map((u) => [u.id, u.name]));
+    const mapMove = (m) => ({
+      id: m.id, type: m.type, reason: m.reason, qty: m.qty, ref: m.ref,
+      at: m.created_at, user: userNames.get(m.user_id) || 'system',
+      batch: m.batch_id ? (d.prepare('SELECT batch_no, expiry_date FROM batches WHERE id = ?').get(m.batch_id) || {}).batch_no : null,
+      note: m.note
+    });
+    const byLoc = d
+      .prepare(
+        `SELECT s.location_id, l.name AS location_name, l.branch_id, s.qty,
+                COALESCE(lb.expected_qty, 0) AS expected
+           FROM stock s JOIN locations l ON l.id = s.location_id
+           LEFT JOIN stock_ledger_balances lb ON lb.variant_id = s.variant_id AND lb.location_id = s.location_id
+          WHERE s.variant_id = ? ORDER BY l.id`
+      )
+      .all(v.id);
+    const batches = d
+      .prepare(
+        `SELECT b.batch_no, b.expiry_date, b.qty, b.location_id, l.name AS location_name
+           FROM batches b LEFT JOIN locations l ON l.id = b.location_id
+          WHERE b.variant_id = ? AND b.qty > 0
+          ORDER BY b.expiry_date IS NULL, b.expiry_date ASC, b.id ASC`
+      )
+      .all(v.id);
+    res.json({
+      variant: { id: v.id, name: v.name || '(base)', axes: safeJson(v.axes) },
+      product: { id: product.id, name: product.name, unit: product.unit },
+      from: moves.filter((m) => INBOUND_TYPES.has(m.type)).reverse().map(mapMove).slice(-50).reverse(),
+      changes: moves.map(mapMove).slice(0, 100),
+      now: byLoc.map((r) => ({ location_id: r.location_id, location_name: r.location_name, branch_id: r.branch_id, qty: r.qty, expected: r.expected })),
+      expected: byLoc.reduce((s, r) => s + r.expected, 0),
+      batches
+    });
+  });
+
+  // Stock ageing: per variant × location, qty by batch age (or age since last inbound).
+  app.get('/api/stock/aging', me, can('stock.view'), (req, res) => {
+    const rows = d
+      .prepare(
+        `SELECT v.id AS variant_id, v.name AS variant_name, p.name AS product_name, p.track_batches,
+                s.location_id, l.name AS location_name, s.qty
+           FROM stock s
+           JOIN variants v ON v.id = s.variant_id
+           JOIN products p ON p.id = v.product_id
+           JOIN locations l ON l.id = s.location_id
+          WHERE s.qty > 0
+          ORDER BY l.id, v.id`
+      )
+      .all();
+    const out = [];
+    for (const r of rows) {
+      const buckets = { fresh: 0, maturing: 0, aging: 0 }; // ≤30d / 31–90d / >90d
+      let oldest = 0;
+      if (r.track_batches) {
+        const lots = d
+          .prepare(
+            `SELECT b.qty, CAST(julianday('now') - julianday(b.created_at) AS INTEGER) AS age_days
+               FROM batches b WHERE b.variant_id = ? AND b.location_id = ? AND b.qty > 0`
+          )
+          .all(r.variant_id, r.location_id);
+        for (const b of lots) {
+          const k = b.age_days <= 30 ? 'fresh' : b.age_days <= 90 ? 'maturing' : 'aging';
+          buckets[k] += b.qty;
+          oldest = Math.max(oldest, b.age_days);
+        }
+      } else {
+        const last = d
+          .prepare(
+            `SELECT MAX(created_at) AS at FROM stock_moves
+              WHERE variant_id = ? AND location_id = ? AND qty > 0`
+          )
+          .get(r.variant_id, r.location_id);
+        const age = last && last.at
+          ? Math.max(0, Math.round((Date.now() - new Date(last.at).getTime()) / 86400000))
+          : 0;
+        const k = age <= 30 ? 'fresh' : age <= 90 ? 'maturing' : 'aging';
+        buckets[k] = r.qty;
+        oldest = age;
+      }
+      out.push({ variant_id: r.variant_id, variant_name: r.variant_name || '(base)', product_name: r.product_name, location_id: r.location_id, location_name: r.location_name, qty: r.qty, buckets, oldest_age_days: oldest });
+    }
+    res.json(out);
+  });
+
+  // Dead stock: on hand but no consumption (negative move) in N days.
+  app.get('/api/stock/dead', me, can('stock.view'), (req, res) => {
+    const days = Math.min(Math.max(Number(req.query.days) || 90, 1), 3650);
+    const rows = d
+      .prepare(
+        `SELECT v.id AS variant_id, v.name AS variant_name, p.name AS product_name, p.sku, l.name AS location_name, s.qty,
+                (SELECT MAX(m.created_at) FROM stock_moves m
+                  WHERE m.variant_id = v.id AND m.location_id = s.location_id
+                    AND m.qty < 0 AND m.type NOT IN ('stocktake')) AS last_out
+           FROM stock s
+           JOIN variants v ON v.id = s.variant_id
+           JOIN products p ON p.id = v.product_id AND p.active = 1
+           JOIN locations l ON l.id = s.location_id
+          WHERE s.qty > 0
+          ORDER BY p.name`
+      )
+      .all();
+    const cutoff = Date.now() - days * 86400000;
+    res.json(
+      rows
+        .map((r) => ({ ...r, idle_days: r.last_out ? Math.max(0, Math.round((Date.now() - new Date(r.last_out).getTime()) / 86400000)) : null }))
+        .filter((r) => r.idle_days === null || r.idle_days >= days)
+    );
+  });
+
+  // ---- stocktakes (expected vs physical; variance is reportable, approved = stocktake moves) --
+  app.get('/api/stocktakes', me, can('stock.view'), (req, res) => {
+    const rows = d
+      .prepare(
+        `SELECT st.*, l.name AS location_name, u.name AS taken_by_name,
+                (SELECT COUNT(*) FROM stocktake_lines ln WHERE ln.stocktake_id = st.id) AS lines,
+                (SELECT COALESCE(SUM(ABS(COALESCE(ln.variance, 0))), 0) FROM stocktake_lines ln WHERE ln.stocktake_id = st.id) AS total_abs_variance
+           FROM stocktakes st
+           JOIN locations l ON l.id = st.location_id
+           LEFT JOIN users u ON u.id = st.taken_by
+          ORDER BY st.id DESC LIMIT 100`
+      )
+      .all();
+    res.json(rows);
+  });
+
+  app.post('/api/stocktakes', me, can('stocktake.manage'), (req, res) => {
+    const b = req.body || {};
+    const { branchId, locationId, error } = stockScope(req.user, b);
+    if (error) return res.status(400).json({ error });
+    const t = new Date().toISOString();
+    const id = d.prepare('INSERT INTO stocktakes (location_id, branch_id, status, taken_by, note, created_at) VALUES (?, ?, \'draft\', ?, ?, ?)').run(locationId, branchId, req.user.id, String(b.note || ''), t).lastInsertRowid;
+    // Snapshot: batch lines for batch-tracked variants (PPB-style), one line per variant otherwise.
+    const stock = d.prepare('SELECT * FROM stock WHERE location_id = ? AND qty > 0').all(locationId);
+    const insLine = d.prepare('INSERT INTO stocktake_lines (stocktake_id, variant_id, batch_id, expected_qty, physical_qty, variance, created_at) VALUES (?, ?, ?, ?, NULL, NULL, ?)');
+    d.transaction(() => {
+      for (const s of stock) {
+        const product = productRow(d, d.prepare('SELECT product_id FROM variants WHERE id = ?').get(s.variant_id).product_id);
+        if (product && product.track_batches) {
+          // Count each open lot (PPB-style); a residual variant line covers any stock
+          // not attributable to an open batch (legacy stock, partial write-offs).
+          const lots = d.prepare('SELECT id, qty FROM batches WHERE variant_id = ? AND location_id = ? AND qty > 0').all(s.variant_id, locationId);
+          let allocated = 0;
+          for (const lot of lots) { insLine.run(id, s.variant_id, lot.id, lot.qty, t); allocated += lot.qty; }
+          const residual = Math.round((s.qty - allocated) * 1e6) / 1e6;
+          if (residual > 1e-9) insLine.run(id, s.variant_id, null, residual, t);
+        } else {
+          insLine.run(id, s.variant_id, null, s.qty, t);
+        }
+      }
+    })();
+    dbm.audit(d, { userId: req.user.id, branchId, action: 'stocktake/create', entity: 'stocktake', entityId: String(id), detail: { location_id: locationId } });
+    res.json({ ok: true, id });
+  });
+
+  app.get('/api/stocktakes/:id', me, can('stock.view'), (req, res) => {
+    const st = d.prepare('SELECT * FROM stocktakes WHERE id = ?').get(numOrNull(req.params.id));
+    if (!st) return res.status(404).json({ error: 'not found' });
+    const lines = d
+      .prepare(
+        `SELECT ln.*, p.name AS product_name, p.sku, v.name AS variant_name, b.batch_no, b.expiry_date
+           FROM stocktake_lines ln
+           JOIN variants v ON v.id = ln.variant_id
+           JOIN products p ON p.id = v.product_id
+           LEFT JOIN batches b ON b.id = ln.batch_id
+          WHERE ln.stocktake_id = ? ORDER BY ln.id`
+      )
+      .all(st.id);
+    res.json({ ...st, lines });
+  });
+
+  app.put('/api/stocktakes/:id/lines/:lineId', me, can('stocktake.manage'), (req, res) => {
+    const st = d.prepare('SELECT * FROM stocktakes WHERE id = ?').get(numOrNull(req.params.id));
+    if (!st) return res.status(404).json({ error: 'not found' });
+    if (st.status !== 'draft') return res.status(400).json({ error: 'stocktake is not a draft' });
+    const line = d.prepare('SELECT * FROM stocktake_lines WHERE id = ? AND stocktake_id = ?').get(numOrNull(req.params.lineId), st.id);
+    if (!line) return res.status(404).json({ error: 'line not found' });
+    const physical = Number((req.body || {}).physical_qty);
+    if (!Number.isFinite(physical) || physical < 0) return res.status(400).json({ error: 'physical_qty must be >= 0' });
+    const variance = Math.round((physical - line.expected_qty) * 1e6) / 1e6;
+    d.prepare('UPDATE stocktake_lines SET physical_qty = ?, variance = ? WHERE id = ?').run(physical, variance, line.id);
+    res.json({ ok: true, variance });
+  });
+
+  app.post('/api/stocktakes/:id/approve', me, can('stocktake.approve'), (req, res) => {
+    const st = d.prepare('SELECT * FROM stocktakes WHERE id = ?').get(numOrNull(req.params.id));
+    if (!st) return res.status(404).json({ error: 'not found' });
+    if (st.status !== 'draft') return res.status(400).json({ error: 'stocktake is not a draft' });
+    const lines = d.prepare('SELECT * FROM stocktake_lines WHERE stocktake_id = ?').all(st.id).filter((l) => l.physical_qty !== null && Math.abs(l.variance) > 1e-9);
+    const t = new Date().toISOString();
+    try {
+      d.transaction(() => {
+        for (const l of lines) {
+          const variant = d.prepare('SELECT * FROM variants WHERE id = ?').get(l.variant_id);
+          const product = productRow(d, variant.product_id);
+          writeMove(d, {
+            product, variant, branchId: st.branch_id, locationId: st.location_id, qty: l.variance,
+            type: 'stocktake', reason: 'stocktake', ref: 'ST:' + st.id, batchId: l.batch_id,
+            userId: req.user.id, note: String((req.body || {}).note || '')
+          });
+        }
+        d.prepare("UPDATE stocktakes SET status = 'approved', approved_by = ?, approved_at = ? WHERE id = ?").run(req.user.id, t, st.id);
+      })();
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
+    dbm.audit(d, { userId: req.user.id, branchId: st.branch_id, action: 'stocktake/approve', entity: 'stocktake', entityId: String(st.id), detail: { lines: lines.length } });
+    res.json({ ok: true, lines: lines.length });
+  });
+
+  app.delete('/api/stocktakes/:id', me, can('stocktake.manage'), (req, res) => {
+    const st = d.prepare('SELECT * FROM stocktakes WHERE id = ?').get(numOrNull(req.params.id));
+    if (!st) return res.status(404).json({ error: 'not found' });
+    if (st.status !== 'draft') return res.status(400).json({ error: 'only drafts can be deleted' });
+    d.prepare('DELETE FROM stocktake_lines WHERE stocktake_id = ?').run(st.id);
+    d.prepare('DELETE FROM stocktakes WHERE id = ?').run(st.id);
+    res.json({ ok: true });
+  });
+
+  // Batch expiry write-off (chemist/supermarket FEFO hygiene)
+  app.post('/api/batches/:id/writeoff', me, can('stock.adjust'), (req, res) => {
+    const bRow = d.prepare('SELECT * FROM batches WHERE id = ?').get(numOrNull(req.params.id));
+    if (!bRow) return res.status(404).json({ error: 'not found' });
+    const qty = (req.body || {}).qty === undefined ? bRow.qty : Number(req.body.qty);
+    if (!Number.isFinite(qty) || qty <= 0 || qty > bRow.qty + 1e-9) return res.status(400).json({ error: `qty must be between 0 and ${bRow.qty}` });
+    const variant = d.prepare('SELECT * FROM variants WHERE id = ?').get(bRow.variant_id);
+    const product = productRow(d, variant.product_id);
+    if (!product) return res.status(400).json({ error: 'unknown product' });
+    try {
+      const out = d.transaction(() =>
+        writeMove(d, {
+          product, variant, branchId: bRow.branch_id, locationId: bRow.location_id, qty: -qty,
+          type: 'expiry_writeoff', reason: 'expired', ref: 'BATCH:' + bRow.id,
+          batchId: bRow.id, userId: req.user.id, note: String((req.body || {}).note || '')
+        })
+      )();
+      dbm.audit(d, { userId: req.user.id, branchId: bRow.branch_id, action: 'batch/writeoff', entity: 'batch', entityId: String(bRow.id), detail: { product: product.name, batchNo: bRow.batch_no, qty, newQty: out.newQty } });
+      res.json({ ok: true, newQty: out.newQty });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
   });
 
   // ---- variants (Phase 3 — R-P) --------------------------------------------------------------
@@ -1320,6 +1837,12 @@ function createApp(d) {
     if (q.variant_id) { where.push('b.variant_id = ?'); args.push(numOrNull(q.variant_id)); }
     else if (q.product_id) { where.push('b.product_id = ?'); args.push(numOrNull(q.product_id)); }
     else if (q.location_id) { where.push('b.location_id = ?'); args.push(numOrNull(q.location_id)); }
+    if (q.expiring) {
+      where.push("b.qty > 0 AND b.expiry_date IS NOT NULL AND date(b.expiry_date) <= date('now', '+' || ? || ' days')");
+      args.push(Math.min(Math.max(Number(q.expiring) || 30, 1), 3650));
+    } else if (q.open) {
+      where.push('b.qty > 0');
+    }
     const sql = `
       SELECT b.*, p.name AS product_name, v.name AS variant_name
         FROM batches b
@@ -1434,14 +1957,19 @@ function createApp(d) {
     const product = productRow(d, variant.product_id);
     const branches = visibleBranches(d, req.user);
     const branchId = (branches[0] && branches[0].id) || null;
-    const run = d.transaction(() => {
-      d.prepare("UPDATE serials SET status = 'writeoff' WHERE id = ?").run(s.id);
-      if (s.location_id) {
-        upsertStock(d, variant.id, s.location_id, -1);
-        addStockMove(d, { product, variant, branchId, locationId: s.location_id, qty: -1, type: 'adjustment', reason: 'other', ref: 'SERIAL', userId: req.user.id, note: `serial writeoff ${s.serial_no}` });
-      }
-    });
-    run();
+    if (!s.location_id) return res.status(400).json({ error: 'serial has no location' });
+    try {
+      d.transaction(() => {
+        d.prepare("UPDATE serials SET status = 'writeoff' WHERE id = ?").run(s.id);
+        writeMove(d, {
+          product, variant, branchId, locationId: s.location_id, qty: -1,
+          type: 'adjustment', reason: 'other', ref: 'SERIAL:' + s.id,
+          serialId: s.id, userId: req.user.id, note: `serial writeoff ${s.serial_no}`
+        });
+      })();
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
     dbm.audit(d, { userId: req.user.id, branchId, action: 'serial/writeoff', entity: 'serial', entityId: String(s.id), detail: { product: product.name, serialNo: s.serial_no, note: String((req.body || {}).note || '') } });
     res.json({ ok: true });
   });
@@ -1567,6 +2095,8 @@ function createApp(d) {
     const { rows } = require('./lib/csv').fromCsv(text);
     const now = new Date().toISOString();
     const summary = { products: 0, variants: 0, packs: 0, errors: [] };
+    // CSV fields are strings: parse flags numerically ("0" must NOT be truthy)
+    const yes = (v) => (Number(v) === 1 ? 1 : 0);
     const findProduct = (name, sku) =>
       sku ? d.prepare('SELECT * FROM products WHERE sku = ? ORDER BY active DESC LIMIT 1').get(sku)
         : d.prepare('SELECT * FROM products WHERE lower(name) = lower(?) ORDER BY active DESC LIMIT 1').get(name);
@@ -1600,10 +2130,10 @@ function createApp(d) {
             cost: Number(r.product_cost) || 0, price: Number(r.product_price) || 0,
             wholesale_price: Number(r.product_wholesale) || 0, member_price: Number(r.product_member) || 0,
             tax_type: r.product_tax || 'std', kra_item_code: r.product_kra || '',
-            age_min: r.product_age_min ? Number(r.product_age_min) : null,
-            requires_rx: r.product_requires_rx ? 1 : 0, is_controlled: r.product_controlled ? 1 : 0,
-            track_batches: r.product_track_batches ? 1 : 0, track_serials: r.product_track_serials ? 1 : 0,
-            open_priced: r.product_open_priced ? 1 : 0,
+            age_min: r.product_age_min !== '' && r.product_age_min != null ? Number(r.product_age_min) : null,
+            requires_rx: yes(r.product_requires_rx), is_controlled: yes(r.product_controlled),
+            track_batches: yes(r.product_track_batches), track_serials: yes(r.product_track_serials),
+            open_priced: yes(r.product_open_priced),
             supplier_id: sup ? sup.id : (cur && cur.supplier_id) || null,
             reorder_level: Number(r.reorder_level) || 0
           };
@@ -1746,7 +2276,7 @@ if (require.main === module) {
   auth.pruneSessions(db);
   app.listen(PORT, '0.0.0.0', () => {
     const s = dbm.getSetting(db, 'business', {});
-    console.log(`OpenPOS v2 (Phase 3)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
+    console.log(`OpenPOS v2 (Phase 4)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
   });
 }
 

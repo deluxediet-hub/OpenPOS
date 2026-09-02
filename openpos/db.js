@@ -762,6 +762,52 @@ function migrate(d) {
          AND v.axes_key = '{}' ORDER BY v.id LIMIT 1
      ) WHERE variant_id IS NULL`
   );
+
+  // ---- Phase 4: stock ledger (additive; R-S1 every change is a move) --------
+  addCol(d, 'stock_moves', 'serial_id', 'INTEGER');
+  addCol(d, 'stock_moves', 'unit_cost', 'INTEGER NOT NULL DEFAULT 0');
+  d.exec('CREATE INDEX IF NOT EXISTS idx_moves_variant ON stock_moves(variant_id, location_id, id)');
+  d.exec('CREATE INDEX IF NOT EXISTS idx_moves_type ON stock_moves(type, created_at)');
+
+  // R-S7: the ledger recomputed as a view — the integrity job asserts stock == this.
+  d.exec(
+    `DROP VIEW IF EXISTS stock_ledger_balances;
+     CREATE VIEW stock_ledger_balances AS
+     SELECT variant_id, location_id,
+            SUM(qty) AS expected_qty,
+            COUNT(*) AS move_count,
+            MAX(created_at) AS last_moved_at
+       FROM stock_moves
+      GROUP BY variant_id, location_id`
+  );
+
+  // Stocktakes: expected vs physical, variance reportable, approved = stocktake moves.
+  d.exec(
+    `CREATE TABLE IF NOT EXISTS stocktakes (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       location_id INTEGER NOT NULL,
+       branch_id INTEGER NOT NULL,
+       status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','approved','cancelled')),
+       taken_by INTEGER,
+       approved_by INTEGER,
+       note TEXT NOT NULL DEFAULT '',
+       created_at TEXT NOT NULL,
+       approved_at TEXT
+     )`
+  );
+  d.exec(
+    `CREATE TABLE IF NOT EXISTS stocktake_lines (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       stocktake_id INTEGER NOT NULL REFERENCES stocktakes(id),
+       variant_id INTEGER NOT NULL,
+       batch_id INTEGER,
+       expected_qty REAL NOT NULL DEFAULT 0,
+       physical_qty REAL,
+       variance REAL,
+       created_at TEXT NOT NULL
+     )`
+  );
+  d.exec('CREATE INDEX IF NOT EXISTS idx_st_lines ON stocktake_lines(stocktake_id)');
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

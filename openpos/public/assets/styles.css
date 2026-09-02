@@ -105,6 +105,8 @@ tr.clickable:hover { background: var(--green-soft); }
 .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #eef1ef; color: var(--muted); white-space: nowrap; }
 .pill.g { background: var(--green-soft); color: var(--green-dark); }
 .pill.r { background: #fdeae7; color: var(--red); }
+.neg { color: var(--red); }
+.pos { color: var(--green-dark); }
 
 /* ---- wizard ---- */
 .wizard { max-width: 640px; margin: 40px auto; }

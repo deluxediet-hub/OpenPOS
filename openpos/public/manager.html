@@ -98,6 +98,72 @@
       </div>
     </section>
 
+    <!-- ============ STOCK (ledger, stocktakes, integrity) ============ -->
+    <section id="tab-stock" class="hidden">
+      <div class="row wrap" style="margin-bottom:10px">
+        <span class="muted small" id="st-integrity-msg"></span>
+        <span class="spacer"></span>
+        <button class="btn small" id="st-integrity" data-i18n="integrity">Check integrity</button>
+        <button class="btn small hidden" id="st-repair">Repair</button>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <h3 data-i18n="stocktakes">Stocktakes</h3>
+        <div class="row wrap" style="margin-bottom:8px">
+          <select id="stk-loc" style="width:200px"></select>
+          <button class="btn small" id="stk-new" data-i18n="new_stocktake">New stocktake</button>
+          <div class="msg" id="stk-msg" style="margin:0"></div>
+        </div>
+        <div id="stk-active"></div>
+        <table style="margin-top:10px"><thead><tr>
+          <th>When</th><th data-i18n="location">Location</th><th>Lines</th><th data-i18n="variance">Variance (|Σ|)</th><th>Status</th>
+        </tr></thead><tbody id="stk-rows"></tbody></table>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <h3 data-i18n="balances">Balances <span class="muted small">— materialized vs ledger</span></h3>
+        <div style="overflow:auto">
+        <table><thead><tr>
+          <th data-i18n="name">Name</th><th data-i18n="location">Location</th>
+          <th data-i18n="stock">Stock</th><th data-i18n="expected">Expected</th>
+          <th data-i18n="match">Match</th><th data-i18n="last_moved">Last moved</th>
+        </tr></thead><tbody id="st-bal-rows"></tbody></table></div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:6px">
+          <h3 style="margin:0" data-i18n="ledger">Moves <span class="muted small">— who, why, on what evidence</span></h3>
+          <span class="spacer"></span>
+          <select id="st-move-type" style="width:160px"></select>
+        </div>
+        <div style="overflow:auto">
+        <table><thead><tr>
+          <th>When</th><th data-i18n="name">Item</th><th data-i18n="type">Type</th>
+          <th>Reason</th><th data-i18n="ref">Ref</th><th data-i18n="by">By</th><th>Qty</th>
+        </tr></thead><tbody id="st-move-rows"></tbody></table></div>
+      </div>
+
+      <div class="row wrap" style="align-items:start">
+        <div class="card" style="flex:1;min-width:320px">
+          <h3 data-i18n="aging">Stock ageing</h3>
+          <div style="overflow:auto">
+          <table><thead><tr>
+            <th data-i18n="name">Item</th><th data-i18n="stock">Qty</th>
+            <th data-i18n="fresh">Fresh ≤30d</th><th data-i18n="maturing">31–90d</th>
+            <th data-i18n="aging_bucket">&gt;90d</th><th>Oldest</th>
+          </tr></thead><tbody id="st-age-rows"></tbody></table></div>
+        </div>
+        <div class="card" style="flex:1;min-width:320px">
+          <h3 data-i18n="dead_stock">Dead stock <span class="muted small">— 90+ days without moving</span></h3>
+          <div style="overflow:auto">
+          <table><thead><tr>
+            <th data-i18n="name">Item</th><th data-i18n="location">Location</th>
+            <th data-i18n="stock">Qty</th><th>Idle</th>
+          </tr></thead><tbody id="st-dead-rows"></tbody></table></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ CATEGORIES ============ -->
     <section id="tab-categories" class="hidden">
       <div class="card" style="margin-bottom:14px">
@@ -322,6 +388,7 @@ function pills(p) {
 
 const TABS = [
   { id: 'products',   label: 'products',  always: true },
+  { id: 'stock',      label: 'stock_ledger', always: true },
   { id: 'categories', label: 'categories', always: true },
   { id: 'tills',      label: 'tills',     always: true },
   { id: 'customers',  label: 'customers', always: true, badge: 'Day 15' },
@@ -356,6 +423,7 @@ function selectTab(name) {
   if (name === 'audit') loadAudit();
   if (name === 'staff') loadStaff();
   if (name === 'layout') loadLayout();
+  if (name === 'stock') loadStock();
 }
 
 async function boot() {
@@ -748,6 +816,177 @@ $('#attr-add').onclick = async () => {
     loadAttrs();
   } catch (e) { toast($('#attr-msg'), e.message, false); }
 };
+
+// ---------- stock ledger (Phase 4: R-S) ----------
+const MOVE_TYPES_UI = ['opening','purchase','sale','return_in','return_out','transfer_in','transfer_out',
+  'adjustment','damage','expiry_writeoff','stocktake','conversion','refund','hold','release'];
+let STK_OPEN = null; // open stocktake draft being counted
+
+async function loadStock() {
+  $('#stk-loc').innerHTML = BOOT.locations.map((l) =>
+    `<option value="${l.id}">${esc(l.name)}${l.is_warehouse ? ' (warehouse)' : ''}</option>`).join('');
+  $('#st-move-type').innerHTML = '<option value="">all types</option>' +
+    MOVE_TYPES_UI.map((m) => `<option value="${m}">${m}</option>`).join('');
+  await Promise.all([loadStockBalances(), loadStockMoves(), loadStockInsight(), loadStocktakeHistory()]);
+  if (STK_OPEN) renderStocktake(STK_OPEN);
+}
+
+async function loadStockBalances() {
+  const rows = await api('/api/stock/balances');
+  $('#st-bal-rows').innerHTML = rows
+    .flatMap((b) => b.locations.map((l) => `\n    <tr>
+      <td>${esc(b.product_name)}${b.variant_name && b.variant_name !== '(base)' ? ` <span class="muted small">· ${esc(b.variant_name)}</span>` : ''}</td>
+      <td>${esc(l.location_name)}</td>
+      <td>${esc(String(l.qty))}</td>
+      <td>${esc(String(l.expected))}</td>
+      <td>${Math.abs(l.qty - l.expected) > 1e-9
+        ? '<span class="pill r">✗ ' + t('drift') + '</span>'
+        : '<span class="pill g">✓</span>'}</td>
+      <td class="muted small">${l.last_moved_at ? new Date(l.last_moved_at).toLocaleString() : '—'}</td>
+    </tr>`)).join('')
+    || `<tr><td colspan="6" class="muted">${t('no_rows')}</td></tr>`;
+}
+
+async function loadStockMoves() {
+  const type = $('#st-move-type').value;
+  const rows = await api(`/api/stock/moves?limit=80${type ? `&type=${type}` : ''}`);
+  $('#st-move-rows').innerHTML = rows.map((m) => `\n    <tr>
+      <td class="muted small">${new Date(m.created_at).toLocaleString()}</td>
+      <td>${esc(m.product_name)}${m.variant_name ? ` <span class="muted small">· ${esc(m.variant_name)}</span>` : ''}${m.batch_no ? ` <span class="pill">b:${esc(m.batch_no)}</span>` : ''}</td>
+      <td><span class="pill">${esc(m.type)}</span></td>
+      <td class="small muted">${esc(m.reason)}${m.note ? ` — ${esc(m.note)}` : ''}</td>
+      <td class="mono small muted">${esc(m.ref || '')}</td>
+      <td class="small">${esc(m.user_name || 'system')}</td>
+      <td class="${m.qty >= 0 ? '' : 'neg'}"><b>${m.qty > 0 ? '+' : ''}${esc(String(m.qty))}</b></td>
+    </tr>`).join('') || `<tr><td colspan="7" class="muted">${t('no_rows')}</td></tr>`;
+}
+
+async function loadStockInsight() {
+  const [aging, dead] = await Promise.all([api('/api/stock/aging'), api('/api/stock/dead?days=90')]);
+  const agePill = (v, cls) => v > 0 ? `<span class="pill ${cls}">${esc(String(v))}</span>` : '<span class="muted">0</span>';
+  $('#st-age-rows').innerHTML = aging.map((a) => `\n    <tr>
+      <td>${esc(a.product_name)}${a.variant_name !== '(base)' ? ` <span class="muted small">· ${esc(a.variant_name)}</span>` : ''} <span class="muted small">${esc(a.location_name)}</span></td>
+      <td>${esc(String(a.qty))}</td>
+      <td>${agePill(a.buckets.fresh, 'g')}</td><td>${agePill(a.buckets.maturing, '')}</td>
+      <td>${agePill(a.buckets.aging, 'r')}</td>
+      <td class="muted small">${a.oldest_age_days}d</td>
+    </tr>`).join('') || `<tr><td colspan="6" class="muted">${t('no_rows')}</td></tr>`;
+  $('#st-dead-rows').innerHTML = dead.map((r) => `\n    <tr>
+      <td>${esc(r.product_name)}${r.variant_name ? ` <span class="muted small">· ${esc(r.variant_name)}</span>` : ''}</td>
+      <td>${esc(r.location_name)}</td>
+      <td>${esc(String(r.qty))}</td>
+      <td>${r.idle_days === null ? '<span class="pill r">never sold</span>' : `${r.idle_days}d`}</td>
+    </tr>`).join('') || `<tr><td colspan="4" class="muted">${t('no_rows')}</td></tr>`;
+}
+
+async function loadStocktakeHistory() {
+  const rows = await api('/api/stocktakes');
+  $('#stk-rows').innerHTML = rows.map((s) => `\n    <tr>
+      <td class="muted small">${new Date(s.created_at).toLocaleString()}</td>
+      <td>${esc(s.location_name)}</td>
+      <td>${s.lines}</td>
+      <td>${Number(s.total_abs_variance) > 0 ? esc(String(s.total_abs_variance)) : '—'}</td>
+      <td><span class="pill ${s.status === 'approved' ? 'g' : ''}">${s.status}</span></td>
+    </tr>`).join('') || `<tr><td colspan="5" class="muted">${t('no_rows')}</td></tr>`;
+}
+
+$('#st-integrity').onclick = async () => {
+  const msg = $('#st-integrity-msg');
+  msg.textContent = '…'; msg.className = 'muted small';
+  try {
+    const r = await api('/api/stock/integrity', { method: 'POST', body: {} });
+    if (!r.mismatches.length) {
+      msg.textContent = `✓ ${t('match')}: ${r.checked} variant/location balances agree with the ledger`;
+      $('#st-repair').classList.add('hidden');
+    } else {
+      msg.textContent = `✗ ${r.mismatches.length} ${t('drift')} of ${r.checked} checked: ` +
+        r.mismatches.slice(0, 3).map((m) => `${m.product} (loc ${m.location_id}): ${m.materialized} vs ${m.expected}`).join(' · ');
+      $('#st-repair').classList.remove('hidden');
+    }
+    msg.className = 'small';
+  } catch (e) { msg.textContent = e.message; }
+};
+
+$('#st-repair').onclick = async () => {
+  try {
+    const r = await api('/api/stock/integrity', { method: 'POST', body: { repair: true } });
+    $('#st-integrity-msg').textContent = `Repaired ${r.mismatches.length} drift(s); ${r.after_repair.length} remain. (audited)`;
+    $('#st-repair').classList.add('hidden');
+    loadStockBalances();
+  } catch (e) { $('#st-integrity-msg').textContent = e.message; }
+};
+
+$('#st-move-type').onchange = loadStockMoves;
+
+$('#stk-new').onclick = async () => {
+  const msg = $('#stk-msg');
+  try {
+    const r = await api('/api/stocktakes', { method: 'POST', body: { location_id: Number($('#stk-loc').value) } });
+    STK_OPEN = r.id;
+    renderStocktake(STK_OPEN);
+  } catch (e) { toast(msg, e.message, false); }
+};
+
+async function renderStocktake(id) {
+  const box = $('#stk-active');
+  box.innerHTML = '<span class="muted small">Loading…</span>';
+  const st = await api(`/api/stocktakes/${id}`);
+  box.innerHTML = `\n    <div style="background:var(--green-soft);border-radius:8px;padding:10px">
+      <div class="row wrap" style="margin-bottom:6px">
+        <b>Stocktake #${st.id}</b> — ${esc(st.location_name || '')} <span class="pill">${st.status}</span>
+        <span class="muted small">Enter what you physically counted; leave a line empty to keep the expected value.</span>
+      </div>
+      <table><thead><tr>
+        <th data-i18n="name">Item</th><th>Batch</th><th data-i18n="expected">Expected</th>
+        <th data-i18n="physical">Counted</th><th data-i18n="variance">Variance</th>
+      </tr></thead><tbody>
+      ${st.lines.map((l) => `\n        <tr>
+          <td>${esc(l.product_name)}${l.variant_name ? ` <span class="muted small">· ${esc(l.variant_name)}</span>` : ''}</td>
+          <td class="mono small">${l.batch_no ? esc(l.batch_no) : '—'}${l.expiry_date ? ` <span class="muted">(${esc(l.expiry_date)})</span>` : ''}</td>
+          <td>${esc(String(l.expected_qty))}</td>
+          <td><input type="number" step="0.01" min="0" class="stk-ph" data-line="${l.id}" data-exp="${l.expected_qty}"
+                value="${l.physical_qty === null ? '' : l.physical_qty}" style="width:110px"></td>
+          <td class="stk-vr" data-line="${l.id}">${l.variance === null ? '<span class="muted">—</span>' : esc(String(l.variance))}</td>
+        </tr>`).join('')}
+      </tbody></table>
+      <div class="row wrap" style="margin-top:8px">
+        ${st.status === 'draft' ? `
+        <button class="btn small" id="stk-approve">${t('approve')}</button>
+        <button class="btn ghost small" id="stk-close">✕</button>` : '<span class="muted small">Approved stocktakes are kept as evidence.</span>'}
+      </div>
+    </div>`;
+  box.querySelectorAll('.stk-ph').forEach((inp) => {
+    inp.oninput = () => {
+      const v = inp.value === '' ? null : Number(inp.value);
+      const cell = box.querySelector(`.stk-vr[data-line="${inp.dataset.line}"]`);
+      cell.innerHTML = v === null ? '<span class="muted">—</span>' : esc(String(Math.round((v - Number(inp.dataset.exp)) * 1e6) / 1e6));
+    };
+  });
+  const approve = $('#stk-approve');
+  if (approve) approve.onclick = async () => {
+    try {
+      for (const inp of box.querySelectorAll('.stk-ph')) {
+        if (inp.value === '') continue;
+        await api(`/api/stocktakes/${st.id}/lines/${inp.dataset.line}`, { method: 'PUT', body: { physical_qty: Number(inp.value) } });
+      }
+      await api(`/api/stocktakes/${st.id}/approve`, { method: 'POST', body: {} });
+      STK_OPEN = null;
+      $('#stk-active').innerHTML = '';
+      toast($('#stk-msg'), 'Stocktake approved — variances written as moves.', true);
+      loadStock();
+    } catch (e) { toast($('#stk-msg'), e.message, false); }
+  };
+  const close = $('#stk-close');
+  if (close) close.onclick = async () => {
+    if (!confirm('Discard this draft stocktake?')) return;
+    try {
+      await api(`/api/stocktakes/${st.id}`, { method: 'DELETE' });
+      STK_OPEN = null;
+      $('#stk-active').innerHTML = '';
+      loadStocktakeHistory();
+    } catch (e) { toast($('#stk-msg'), e.message, false); }
+  };
+}
 
 // ---------- categories ----------
 async function loadCategories() {

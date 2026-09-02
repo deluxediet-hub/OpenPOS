@@ -773,6 +773,247 @@ function section(title) { console.log(`\n${title}`); }
     const packScan = await authJ('/api/scan/6009500000201');
     assert.strictEqual(packScan.status, 200, 'pack barcode resolves again');
     assert.strictEqual(packScan.body.type, 'pack');
+    // regression: import must not flip "0" flags to 1 (CSV fields are strings)
+    const flags = d.prepare('SELECT name, track_batches, track_serials FROM products WHERE name IN (?, ?)').all('Brown Sugar 1kg', 'Paracetamol 500mg');
+    assert.strictEqual(flags.find((f) => f.name === 'Brown Sugar 1kg').track_batches, 0, 'duka staple does not track batches');
+    assert.strictEqual(flags.find((f) => f.name === 'Brown Sugar 1kg').track_serials, 0);
+    assert.strictEqual(flags.find((f) => f.name === 'Paracetamol 500mg').track_batches, 1, 'batch flag survives the round-trip');
+  });
+
+  // ---------------- Phase 4: stock ledger & inventory ----------------
+  section('Phase 4 — stock ledger (R-S: moves, FEFO, integrity, trace, stocktakes)');
+
+  await test('moves: type/reason validation + ledger query', async () => {
+    const p = await authJ({ path: '/api/products', method: 'POST', body: { name: 'Dead Item', unit: 'pcs', cost: 10, price: 20 } });
+    assert.strictEqual(p.status, 200);
+    const pid = p.body.id;
+    const badType = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: pid, qty: 1, type: 'teleport', reason: 'other' } });
+    assert.strictEqual(badType.status, 400, 'unknown type rejected');
+    const badReason = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: pid, qty: 1, type: 'purchase', reason: 'vibes' } });
+    assert.strictEqual(badReason.status, 400, 'reason must fit the type');
+    const zero = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: pid, qty: 0, type: 'purchase', reason: 'purchase' } });
+    assert.strictEqual(zero.status, 400, 'zero qty rejected');
+    const ok = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: pid, qty: 10, type: 'purchase', reason: 'purchase', ref: 'PO:1', unit_cost: 10 } });
+    assert.strictEqual(ok.status, 200);
+    assert.strictEqual(ok.body.newQty, 10);
+    assert.strictEqual(ok.body.move_ids.length, 1);
+    const moves = (await authJ(`/api/stock/moves?product_id=${pid}`)).body;
+    assert.strictEqual(moves.length, 1);
+    assert.strictEqual(moves[0].type, 'purchase');
+    assert.strictEqual(moves[0].ref, 'PO:1');
+    assert.strictEqual(moves[0].unit_cost, 10);
+    assert.strictEqual(moves[0].user_name, 'Owner One');
+    assert.strictEqual(moves[0].product_name, 'Dead Item');
+  });
+
+  await test('FEFO: batch-tracked sale allocates earliest expiry first (per-batch moves)', async () => {
+    const pid = d.prepare("SELECT id FROM products WHERE name = 'Paracetamol 500mg'").get().id;
+    const vid = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(pid).id;
+    const b1 = d.prepare("SELECT id, qty FROM batches WHERE product_id = ? AND batch_no = 'B1'").get(pid); // expiry 2026-12-31, qty 10
+    const b2 = d.prepare("SELECT id, qty FROM batches WHERE product_id = ? AND batch_no = 'B2'").get(pid); // expiry 2026-10-31, qty 5
+    const r = await authJ({ path: '/api/stock/moves', method: 'POST', body: { variant_id: vid, qty: -7, type: 'sale', reason: 'sale', ref: 'SALE:TEST' } });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.newQty, 8, '15 - 7');
+    assert.strictEqual(r.body.move_ids.length, 2, 'split across two batches');
+    assert.strictEqual(d.prepare('SELECT qty FROM batches WHERE id = ?').get(b2.id).qty, 0, 'earliest expiry drained first');
+    assert.strictEqual(d.prepare('SELECT qty FROM batches WHERE id = ?').get(b1.id).qty, 8);
+    const allocs = d.prepare("SELECT * FROM stock_moves WHERE product_id = ? AND ref = 'SALE:TEST' ORDER BY id").all(pid);
+    assert.ok(allocs.every((m) => m.batch_id && m.qty < 0 && m.type === 'sale'));
+    assert.deepStrictEqual(allocs.map((m) => m.batch_id), [b2.id, b1.id], 'FEFO order on the ledger');
+  });
+
+  await test('batch guards: inbound needs a batch; outbound bounded by batch stock', async () => {
+    const pid = d.prepare("SELECT id FROM products WHERE name = 'Paracetamol 500mg'").get().id;
+    const vid = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(pid).id;
+    const noBatch = await authJ({ path: '/api/stock/moves', method: 'POST', body: { variant_id: vid, qty: 5, type: 'purchase', reason: 'purchase' } });
+    assert.strictEqual(noBatch.status, 400, 'stock in on tracked product requires batch_id');
+    const tooMuch = await authJ({ path: '/api/stock/moves', method: 'POST', body: { variant_id: vid, qty: -999, type: 'sale', reason: 'sale' } });
+    assert.strictEqual(tooMuch.status, 400, 'cannot sell more than batch stock holds');
+    const wrongProd = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: d.prepare("SELECT id FROM products WHERE name = 'Sugar'").get().id, qty: 1, type: 'purchase', reason: 'purchase', batch_id: 1 } });
+    assert.strictEqual(wrongProd.status, 400, 'non-batch product refuses batch_id');
+  });
+
+  await test('R-S8: negative stock impossible; oversell is an audited manager/owner act', async () => {
+    const p = await authJ({ path: '/api/products', method: 'POST', body: { name: 'Overstocked', unit: 'pcs', cost: 5, price: 9 } });
+    const pid = p.body.id;
+    await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: pid, qty: 10, type: 'purchase', reason: 'purchase' } });
+    const short = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: pid, qty: -100, type: 'sale', reason: 'sale' } });
+    assert.strictEqual(short.status, 400);
+    assert.ok(/insufficient stock/.test(short.body.error));
+    const oversell = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: pid, qty: -15, type: 'sale', reason: 'sale', ref: 'SALE:OS', oversell: true } });
+    assert.strictEqual(oversell.status, 200, 'owner may oversell explicitly');
+    assert.strictEqual(oversell.body.newQty, -5);
+    assert.strictEqual(oversell.body.oversell, true);
+    const audit = d.prepare("SELECT * FROM audit_log WHERE action = 'stock/move' ORDER BY id DESC LIMIT 1").get();
+    assert.strictEqual(JSON.parse(audit.detail).oversell, true, 'oversell leaves evidence');
+    // a cashier can never oversell, even with stock.adjust granted
+    const janeId = d.prepare("SELECT id FROM users WHERE name = 'Cashier Jane'").get().id;
+    await authJ({ path: `/api/staff/${janeId}/permissions`, method: 'POST', body: { permission: 'stock.adjust', allowed: true } });
+    const janeCookie = (await authJ({ path: '/api/login', method: 'POST', body: { name: 'Cashier Jane', pin: '5678' } })).headers.get('set-cookie').split(';')[0];
+    const jane = withCookie(janeCookie);
+    const jOversell = await jane({ path: '/api/stock/moves', method: 'POST', body: { product_id: pid, qty: -1, type: 'sale', reason: 'sale', oversell: true } });
+    assert.strictEqual(jOversell.status, 400, 'cashier oversell refused');
+    await authJ({ path: `/api/staff/${janeId}/permissions`, method: 'POST', body: { permission: 'stock.adjust', allowed: false } });
+    // restore
+    const back = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: pid, qty: 15, type: 'purchase', reason: 'purchase' } });
+    assert.strictEqual(back.body.newQty, 10);
+  });
+
+  await test('R-S7 integrity job: mismatch is an alert, repair is explicit + audited', async () => {
+    const sugarV = d.prepare("SELECT v.id FROM products p JOIN variants v ON v.product_id = p.id WHERE p.name = 'Sugar' AND v.axes_key = '{}'").get().id;
+    const expected = d.prepare('SELECT qty FROM stock WHERE variant_id = ?').get(sugarV).qty;
+    d.prepare('UPDATE stock SET qty = 9999 WHERE variant_id = ?').run(sugarV); // white-box corruption
+    const found = await authJ({ path: '/api/stock/integrity', method: 'POST', body: {} });
+    assert.strictEqual(found.status, 200);
+    assert.ok(found.body.mismatches.length >= 1, 'mismatch reported');
+    const m = found.body.mismatches.find((x) => x.variant_id === sugarV);
+    assert.strictEqual(m.materialized, 9999);
+    assert.strictEqual(m.expected, expected);
+    // repair only on demand — and it is audited
+    const fixed = await authJ({ path: '/api/stock/integrity', method: 'POST', body: { repair: true } });
+    assert.ok(fixed.body.mismatches.length >= 1, 'reports what it found');
+    assert.strictEqual(fixed.body.after_repair.length, 0, 'repaired to ledger truth');
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ?').get(sugarV).qty, expected);
+    const audit = d.prepare("SELECT * FROM audit_log WHERE action = 'stock/integrity_repair'").get();
+    assert.ok(audit, 'repair leaves evidence');
+    // cashier (no stocktake.approve) cannot run it
+    const janeCookie = (await authJ({ path: '/api/login', method: 'POST', body: { name: 'Cashier Jane', pin: '5678' } })).headers.get('set-cookie').split(';')[0];
+    const jane = withCookie(janeCookie);
+    const no = await jane({ path: '/api/stock/integrity', method: 'POST', body: { repair: true } });
+    assert.strictEqual(no.status, 403);
+  });
+
+  await test('10k moves: ledger recomputation == materialized balances', async () => {
+    const p = await authJ({ path: '/api/products', method: 'POST', body: { name: 'Stress Item', unit: 'pcs', cost: 1, price: 2 } });
+    const pid = p.body.id;
+    const vid = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(pid).id;
+    const insM = d.prepare('INSERT INTO stock_moves (product_id, variant_id, branch_id, location_id, qty, type, reason, ref, user_id, created_at) VALUES (?, ?, 1, 1, ?, ?, ?, ?, NULL, ?)');
+    const updS = d.prepare('INSERT INTO stock (variant_id, location_id, qty) VALUES (?, 1, ?) ON CONFLICT(variant_id, location_id) DO UPDATE SET qty = qty + ?');
+    const t0 = Date.now();
+    d.transaction(() => {
+      for (let i = 1; i <= 10000; i++) {
+        const q = i % 2 ? 3 : -3;
+        const type = i % 2 ? 'purchase' : 'sale';
+        insM.run(pid, vid, q, type, type, 'STRESS', new Date().toISOString());
+        updS.run(vid, q, q);
+      }
+    })();
+    const ms = Date.now() - t0;
+    assert.ok(ms < 30000, `10k moves took ${ms}ms`);
+    const drift = d.prepare(
+      `SELECT COUNT(*) AS n FROM stock s
+        LEFT JOIN stock_ledger_balances lb ON lb.variant_id = s.variant_id AND lb.location_id = s.location_id
+       WHERE ABS(COALESCE(s.qty, 0) - COALESCE(lb.expected_qty, 0)) > 1e-9`
+    ).get().n;
+    assert.strictEqual(drift, 0, 'no variant/location drifted from the ledger');
+    const bal = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = 1').get(vid).qty;
+    assert.strictEqual(bal, 0, '10k alternating moves net to zero');
+    const integrity = await authJ({ path: '/api/stock/integrity', method: 'POST', body: {} });
+    assert.strictEqual(integrity.body.mismatches.length, 0);
+  });
+
+  await test('R-S2 trace: five questions in one call (where from / who / why / where now / expected)', async () => {
+    const pid = d.prepare("SELECT id FROM products WHERE name = 'Paracetamol 500mg'").get().id;
+    const vid = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(pid).id;
+    const r = await authJ(`/api/stock/trace/${vid}`);
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.from.length, 2, 'two opening moves');
+    assert.ok(r.body.from.every((m) => m.type === 'opening' && m.user));
+    const sale = r.body.changes.find((m) => m.ref === 'SALE:TEST');
+    assert.ok(sale, 'sale move visible with who/why');
+    assert.strictEqual(sale.user, 'Owner One');
+    assert.strictEqual(sale.reason, 'sale');
+    assert.strictEqual(r.body.now.length, 1);
+    assert.strictEqual(r.body.now[0].qty, 8);
+    assert.strictEqual(r.body.expected, 8, 'what should physically be there');
+    assert.strictEqual(r.body.batches.length, 1, 'B2 drained, B1 open');
+    assert.strictEqual(r.body.batches[0].qty, 8);
+  });
+
+  await test('stocktake: draft snapshots expected, approve writes stocktake moves only for variance', async () => {
+    const mainLoc = d.prepare("SELECT id FROM locations WHERE name = 'Main Store' AND is_default = 1").get().id;
+    const sugarV = d.prepare("SELECT v.id FROM products p JOIN variants v ON v.product_id = p.id WHERE p.name = 'Sugar' AND v.axes_key = '{}'").get().id;
+    const before = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(sugarV, mainLoc).qty;
+    const st = await authJ({ path: '/api/stocktakes', method: 'POST', body: { location_id: mainLoc, note: 'weekend take' } });
+    assert.strictEqual(st.status, 200);
+    const detail = (await authJ(`/api/stocktakes/${st.body.id}`)).body;
+    assert.ok(detail.lines.length >= 5, 'snapshot covers stocked variants');
+    const line = detail.lines.find((l) => l.variant_id === sugarV && l.batch_id === null);
+    assert.strictEqual(line.expected_qty, before);
+    assert.strictEqual(line.physical_qty, null, 'not yet counted');
+    const put = await authJ({ path: `/api/stocktakes/${st.body.id}/lines/${line.id}`, method: 'PUT', body: { physical_qty: before - 2 } });
+    assert.strictEqual(put.body.variance, -2);
+    const mgr = (await authJ({ path: '/api/login', method: 'POST', body: { name: 'Mwenyeji M', pin: '2345' } })).headers.get('set-cookie').split(';')[0];
+    const approve = await withCookie(mgr)({ path: `/api/stocktakes/${st.body.id}/approve`, method: 'POST', body: {} });
+    assert.strictEqual(approve.status, 200, 'manager holds stocktake.approve');
+    assert.strictEqual(approve.body.lines, 1, 'only the variances became moves');
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(sugarV, mainLoc).qty, before - 2);
+    const move = d.prepare("SELECT * FROM stock_moves WHERE ref = ? ORDER BY id DESC LIMIT 1").get('ST:' + st.body.id);
+    assert.strictEqual(move.type, 'stocktake');
+    assert.strictEqual(move.qty, -2);
+    const again = await withCookie(mgr)({ path: `/api/stocktakes/${st.body.id}/approve`, method: 'POST', body: {} });
+    assert.strictEqual(again.status, 400, 'cannot approve twice');
+    const del = await authJ({ path: `/api/stocktakes/${st.body.id}`, method: 'DELETE' });
+    assert.strictEqual(del.status, 400, 'approved stocktakes are kept (evidence)');
+  });
+
+  await test('stock ageing: buckets by batch age; non-batch by last inbound', async () => {
+    const pid = d.prepare("SELECT id FROM products WHERE name = 'Paracetamol 500mg'").get().id;
+    const b1 = d.prepare("SELECT id, qty FROM batches WHERE product_id = ? AND batch_no = 'B1'").get(pid);
+    d.prepare("UPDATE batches SET created_at = date('now', '-200 days') WHERE id = ?").run(b1.id); // white-box age
+    const rows = (await authJ('/api/stock/aging')).body;
+    const para = rows.find((r) => r.product_name === 'Paracetamol 500mg');
+    assert.ok(para);
+    assert.strictEqual(para.buckets.aging, b1.qty, '200-day-old lot is "aging"');
+    assert.ok(para.oldest_age_days >= 200);
+    const sugar = rows.find((r) => r.product_name === 'Sugar');
+    assert.ok(sugar);
+    assert.strictEqual(sugar.buckets.fresh, sugar.qty, 'recent inbound = fresh');
+  });
+
+  await test('dead stock: on hand with no consumption in N days', async () => {
+    const rows = (await authJ('/api/stock/dead?days=1')).body;
+    const names = rows.map((r) => r.product_name);
+    assert.ok(names.includes('Dead Item'), 'never-sold item is dead');
+    assert.ok(!names.includes('Rice 2kg'), 'damaged rice had outbound movement');
+    assert.ok(!names.includes('Paracetamol 500mg'), 'sold paracetamol is not dead');
+  });
+
+  await test('batch expiry write-off: partial then remainder, bounded', async () => {
+    const pid = d.prepare("SELECT id FROM products WHERE name = 'Paracetamol 500mg'").get().id;
+    const vid = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(pid).id;
+    const b1 = d.prepare("SELECT id, qty FROM batches WHERE product_id = ? AND batch_no = 'B1'").get(pid);
+    const tooMuch = await authJ({ path: `/api/batches/${b1.id}/writeoff`, method: 'POST', body: { qty: 999 } });
+    assert.strictEqual(tooMuch.status, 400);
+    const partial = await authJ({ path: `/api/batches/${b1.id}/writeoff`, method: 'POST', body: { qty: 3, note: 'expired' } });
+    assert.strictEqual(partial.status, 200);
+    assert.strictEqual(d.prepare('SELECT qty FROM batches WHERE id = ?').get(b1.id).qty, b1.qty - 3);
+    const move = d.prepare("SELECT * FROM stock_moves WHERE type = 'expiry_writeoff' ORDER BY id DESC LIMIT 1").get();
+    assert.strictEqual(move.qty, -3);
+    assert.ok(move.batch_id);
+    const rest = await authJ({ path: `/api/batches/${b1.id}/writeoff`, method: 'POST', body: {} });
+    assert.strictEqual(rest.status, 200, 'default = write off remainder');
+    assert.strictEqual(d.prepare('SELECT qty FROM batches WHERE id = ?').get(b1.id).qty, 0);
+    const stock = d.prepare('SELECT qty FROM stock WHERE variant_id = ?').get(vid).qty;
+    assert.strictEqual(stock, 0, 'batches fully written off, stock conserved');
+    // expiring filter
+    const exp = (await authJ('/api/batches?expiring=400')).body;
+    assert.ok(exp.every((b) => b.qty > 0));
+  });
+
+  await test('transfers: atomic out+in pair under one ref (R-S5 shape)', async () => {
+    const pid = d.prepare("SELECT id FROM products WHERE name = 'Dead Item'").get().id;
+    const out = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: pid, qty: -2, type: 'transfer_out', reason: 'transfer_out', ref: 'TR:1' } });
+    assert.strictEqual(out.status, 200);
+    assert.strictEqual(out.body.newQty, 8);
+    const in1 = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: pid, qty: 2, type: 'transfer_in', reason: 'transfer_in', ref: 'TR:1' } });
+    assert.strictEqual(in1.status, 200);
+    assert.strictEqual(in1.body.newQty, 10, 'net zero at the source branch');
+    const pair = (await authJ('/api/stock/moves?product_id=' + pid)).body.filter((m) => m.ref === 'TR:1');
+    assert.strictEqual(pair.length, 2);
+    const bal = (await authJ('/api/stock/balances')).body.find((b) => b.product_name === 'Dead Item');
+    assert.strictEqual(bal.total, 10, 'balances agree after the pair');
+    assert.strictEqual(bal.match, true, 'materialized == ledger');
   });
 
   server.close();

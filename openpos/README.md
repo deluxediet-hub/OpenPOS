@@ -37,7 +37,7 @@ Optional sample products load for the chosen trade.
 ## Test
 
 ```bash
-npm test         # unit (money/VAT) + full API flow on a temp DB (48 tests)
+npm test         # unit (money/VAT) + full API flow on a temp DB (60 tests)
 ```
 
 ## Build status
@@ -53,7 +53,7 @@ adapters, branch isolation, auditability, offline rules, core vs modules) plus t
 | 1 | 1 | Product architecture & rules ✅ |
 | 2 | 2 | Business/tenancy foundation: **capability system**, locations, registers, warehouses, fine-grained permissions, solo-first onboarding v2 ✅ |
 | 3 | 3–4 | Universal product engine: **variants + axes, packs, multi-barcode, serials, industry attributes, CSV import/export, supplier link & reorder** ✅ |
-| 4 | 5–6 | Stock ledger & inventory (append-only moves, reason codes) |
+| 4 | 5–6 | Stock ledger & inventory: **append-only move engine, FEFO batch allocation, R-S8 oversell guard, integrity job, stocktakes, trace, ageing, dead stock** ✅ |
 | 5 | 7–8 | Purchasing & suppliers (POs, GR, discrepancies, suggested POs) |
 | 6 | 9 | Pricing engine (resolution chain, margin guards, history) |
 | 7 | 10–11 | POS / checkout engine |
@@ -102,3 +102,18 @@ adapters, branch isolation, auditability, offline rules, core vs modules) plus t
   product. Open-priced (sugar 1kg) and fractional base units work. **48 tests green**
   (was 35), all Phase-3 acceptance criteria passing (sugar 1kg open-priced, dress
   red/M variant barcode, Jameson bottle/case pack, paracetamol batch FEFO).
+- **Day 5–6** — the **stock ledger** (rules R-S): every quantity change flows through one
+  move engine with per-type reason codes (opening/purchase/sale/returns/transfers/damage/
+  expiry/stocktake/conversion/hold…). **FEFO batch allocation** splits an outbound move
+  into per-batch ledger rows (earliest expiry first); serials allocate per unit.
+  **R-S8:** negative stock is impossible — an oversell is an explicit, audited
+  owner/manager act (cashiers are refused). Balances are a materialized table checked by
+  an **integrity job** against a recomputed ledger view (R-S7): drift is an alert, repair
+  is explicit + audited. `GET /api/stock/trace/:variantId` answers the five questions
+  (where from? who? why? where now? what should physically be there?) in one call.
+  **Stocktakes** (per-batch counts + residual, variance-only moves on approve), stock
+  **ageing** buckets, **dead stock**, batch **expiry write-off**, and a manager **Stock**
+  tab (balances · moves · stocktake builder · integrity · ageing · dead). **60 tests green**
+  (was 48), including a 10k-move rebuild == balance proof. Also fixed a real bug the new
+  tests exposed: CSV import read the exported string `"0"` as true, silently flipping
+  batch/serial flags on every round-trip.

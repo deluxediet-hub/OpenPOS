@@ -1,7 +1,7 @@
 # OpenPOS v2 — Plan & Roadmap
 **"A POS for every Kenyan shop — any number of branches."**
 
-> Status: **Days 3–4 of 60 complete** (Phase 3 — universal product engine). Roadmap
+> Status: **Days 5–6 of 60 complete** (Phase 4 — stock ledger & inventory). Roadmap
 > restructured 2026-09-02 to the founder's 35-phase directive. The engineering contract is
 > **`openpos/ARCHITECTURE.md`** — every phase implements it; rule changes go through its
 > change log.
@@ -153,13 +153,26 @@ contradicts the doc without a change-log entry.**
   variants + packs. Supplier link + reorder level per product. UoM kept as unit label +
   open-priced flag; full multi-UoM conversion deferred to Phase 6 (pricing). 48 tests green.
 
-### Phase 4 — Stock Ledger & Inventory Engine · Days 5–6
+### Phase 4 — Stock Ledger & Inventory Engine · Days 5–6 ✅
 - Append-only moves with **reason codes**: purchase, sale, return in/out, damage, expiry,
   adjustment, stocktake, transfer, conversion, opening, refund
 - Batch & serial allocation per move; balances = view over ledger + **integrity job**
   (view vs recomputed); expected-vs-physical queries; stock ageing; dead stock
 - **Acceptance:** for any variant/branch the five questions (source? who? why? where now?
   what should physically be there?) answer via API; ledger rebuild == balance over 10k moves.
+- **Done (Day 5–6):** one move engine (`writeMove`) is the only door for quantity changes;
+  15 move types with per-type reason-code validation; FEFO batch allocation splits an
+  outbound move into per-batch ledger rows (earliest expiry first); serial allocation;
+  R-S8 negative stock impossible — oversell is an explicit, audited owner/manager act only.
+  `stock_ledger_balances` view = recomputed ledger; integrity job (manager+) compares
+  materialized vs view, reports mismatches, and repair is an explicit audited act (R-S7).
+  `GET /api/stock/trace/:variantId` answers the R-S2 five questions in one call. Stocktakes:
+  draft snapshots expected (per-batch lines for tracked products + residual), count, approve
+  writes stocktake moves only for variances; approved stocktakes kept as evidence. Stock
+  ageing buckets (≤30/31–90/>90 days by batch age) + dead stock (no consumption in N days).
+  Batch expiry write-off endpoint. 60 tests green (was 48), incl. 10k-move rebuild == balance.
+  Bonus fix: CSV import treated the string `"0"` as truthy — flags like track_batches were
+  flipped to 1 on every round-trip (regression test added).
 
 ### Phase 5 — Purchasing & Supplier System · Days 7–8
 - Suppliers (contacts, KRA PIN, terms), supplier price lists, POs (manual + **suggested from
@@ -571,3 +584,56 @@ tested against a v1 dev DB.
 **Notes:** UoM kept as a unit label + `open_priced` flag (full multi-UoM conversion — kg/L
 ↔ pcs — deferred to Phase 6 pricing). Product images deferred to Phase 34 (storage not yet
 designed). KRA item code per variant already on the variant row (used Phase 16).
+
+### Day 5–6 — Stock Ledger & Inventory Engine (Phase 4) ✅ (2026-09-02)
+**Backend (engines first):**
+- `db.js` — schema v4 (additive): `stock_moves` gains `serial_id` + `unit_cost`;
+  **`stock_ledger_balances` view** (recomputed ledger per variant × location — the R-S7
+  source of truth); `stocktakes` + `stocktake_lines` (expected vs physical, variance);
+  indexes on moves (variant, type).
+- `server.js` — **one move engine** (`writeMove`) is the only door for quantity changes:
+  15 move types (`opening · purchase · sale · return_in/out · transfer_in/out · adjustment ·
+  damage · expiry_writeoff · stocktake · conversion · refund · hold/release`) with
+  per-type reason-code validation; **FEFO batch allocation** splits an outbound move into
+  per-batch ledger rows (earliest expiry first, no-expiry last); batch guards (in needs a
+  batch, out bounded by batch stock); serial allocation; **R-S8** negative stock impossible
+  — oversell only as an explicit, audited owner/manager act (cashiers refused). Existing
+  adjust/serial endpoints rewired through the engine.
+- Ledger surface: `POST/GET /api/stock/moves` (filters: variant/product/location/type/
+  date, user+batch names joined), `GET /api/stock/balances` (materialized vs ledger per
+  variant × location with match flag), `POST /api/stock/integrity` (R-S7: reports drift,
+  `repair=true` reconciles to the ledger **and audits** — never silent), `GET
+  /api/stock/trace/:variantId` (R-S2 five questions: from / changes / now / expected /
+  batches), `GET /api/stock/aging` (≤30 / 31–90 / >90-day buckets by batch age), `GET
+  /api/stock/dead?days=N` (on hand, no consumption), `POST /api/batches/:id/writeoff`
+  (expiry write-off, bounded), `GET /api/batches?expiring=N`.
+- **Stocktakes**: `POST /api/stocktakes` (draft; snapshots expected per variant — per-
+  batch lines for tracked products + residual line), `PUT .../lines/:id` (count),
+  `POST .../approve` (stocktake moves only for variances; manager `stocktake.approve`),
+  `DELETE` (drafts only — approved stocktakes are kept as evidence).
+
+**UI (thin client over the engines):**
+- Manager **Stock** tab: balances (materialized vs ledger, drift pills), recent moves
+  ledger (type filter, who/why/ref/qty), stocktake builder (new → count → approve),
+  integrity check + explicit repair, stock ageing buckets, dead stock list. EN/SW strings.
+
+**Acceptance (all tested, 60 tests green, up from 48):**
+- **R-S2:** trace returns from/changes/now/expected for a real variant in one call.
+- **10k moves:** ledger recomputation == materialized balances, 0 drift, integrity clean.
+- **FEFO:** a -7 sale across two expiry dates splits into per-batch moves, earliest first.
+- **Batch guards + R-S8:** inbound w/o batch 400; oversize out 400; oversell = owner
+  audited move, cashier refused.
+- **R-S7:** corrupted balance reported as an alert; explicit repair restores it + audit
+  trail; cashiers cannot run integrity (403).
+- **Stocktake:** draft snapshots expected; only variances become moves on approve;
+  double-approve 400; approved stocktake not deletable.
+- **Ageing/dead:** 200-day-old lot lands in the >90d bucket; never-sold item is dead;
+  items with recent consumption are not.
+- **Expiry write-off:** partial + remainder, bounded by batch qty, stock conserved.
+- **Transfers (R-S5 shape):** out+in pair under one ref, net zero.
+
+**Notes:** `conversion`/`hold`/`release` types exist in the ledger for Phase 6 (UoM) and
+Phase 7 (checkout holds); actual sale/return moves land with the checkout engine (Phase 7)
+through this same door. **Bug found & fixed along the way:** CSV import parsed flags with
+`value ? 1 : 0`, so the exported string `"0"` read as true and every product silently
+gained batch/serial tracking after a round-trip — now parsed numerically + regression test.
