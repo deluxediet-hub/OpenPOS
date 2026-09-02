@@ -14,12 +14,13 @@ ARCHITECTURE.md §3.0).
 
 > The repo root holds **OpenPOS v1** (the white-label restaurant & lounge POS) — kept as the
 > reference implementation. **This folder is the new product.** See `../OPENPOS_PLAN.md` for
-> the full research, feature matrix and 24-day phased roadmap.
+> the full research, feature matrix and the 35-phase / 60-day roadmap.
 
 ## Stack
 
-Node 18+ · Express 5 · better-sqlite3 · plain-ES frontend — **no build step**.
-Everything the till needs runs locally; the cloud is only used when online (eTIMS, M-Pesa, SMS).
+Node 18+ · Express 5 · built-in `node:sqlite` (zero native deps) · plain-ES frontend —
+**no build step**. Everything the till needs runs locally; the cloud is only used when
+online (eTIMS, M-Pesa, SMS).
 
 ## Run
 
@@ -28,36 +29,39 @@ npm install
 npm start        # → http://localhost:3000
 ```
 
-First run shows the onboarding wizard: business name, trade, KRA PIN, VAT (16%),
-first branch, owner PIN, optional sample products for the chosen trade.
+First run shows the **solo-first onboarding** (v2): what do you sell → business name/phone →
+your name + PIN → done. KRA PIN/VAT are optional and deferrable to Settings. A solo business
+gets its one branch, "Main Store" location and first till invisibly — no ERP concepts.
+Optional sample products load for the chosen trade.
 
 ## Test
 
 ```bash
-npm test         # unit (money/VAT) + full API flow on a temp DB
+npm test         # unit (money/VAT) + full API flow on a temp DB (35 tests)
 ```
 
 ## Build status
 
 **Architecture contract:** [`ARCHITECTURE.md`](ARCHITECTURE.md) — entity hierarchy and
 universal rules (product/variant/pack/batch, pricing chain, stock-as-ledger, payment
-adapters, branch isolation, auditability, offline rules, core vs modules).
+adapters, branch isolation, auditability, offline rules, core vs modules) plus the
+**capability model (R-C)** that keeps a small shop from ever feeling like an ERP.
 **Roadmap:** `../OPENPOS_PLAN.md` — 35 phases / 60 days.
 
 | Phase | Days | What |
 |---|---|---|
 | 1 | 1 | Product architecture & rules ✅ |
-| 2 | 2 | Business/tenancy foundation: locations, registers, warehouses, permissions |
-| 3–4 | 3–4 | Universal product engine (variants, packs, barcodes, units) |
-| 5–6 | 5–6 | Stock ledger & inventory (append-only moves, reason codes) |
-| 7–8 | 7–8 | Purchasing & suppliers (POs, GR, discrepancies, suggested POs) |
-| 9 | 9 | Pricing engine (resolution chain, margin guards, history) |
-| 10–11 | 10–11 | POS / checkout engine |
-| 12 | 12 | Payment engine (adapters: cash/M-Pesa/card/bank/deni) |
-| 13 | 13 | Shifts & till control |
-| 14 | 14 | Sales lifecycle, returns & exchanges |
-| 15 | 15 | Customers & deni (credit) system |
-| 16–17 | 16–17 | Multi-branch OS (transfers, comparisons, role visibility) |
+| 2 | 2 | Business/tenancy foundation: **capability system**, locations, registers, warehouses, fine-grained permissions, solo-first onboarding v2 ✅ |
+| 3 | 3–4 | Universal product engine (variants, packs, barcodes, units) |
+| 4 | 5–6 | Stock ledger & inventory (append-only moves, reason codes) |
+| 5 | 7–8 | Purchasing & suppliers (POs, GR, discrepancies, suggested POs) |
+| 6 | 9 | Pricing engine (resolution chain, margin guards, history) |
+| 7 | 10–11 | POS / checkout engine |
+| 8 | 12 | Payment engine (adapters: cash/M-Pesa/card/bank/deni) |
+| 9 | 13 | Shifts & till control |
+| 10 | 14 | Sales lifecycle, returns & exchanges |
+| 11 | 15 | Customers & deni (credit) system |
+| 12 | 16–17 | Multi-branch OS (transfers, comparisons, role visibility) |
 | 13 | 18 | Stock-taking, shrinkage & reconciliation |
 | 14 | 19 | Expenses & business finance |
 | 15 | 20–21 | Reporting & BI (4 role dashboards) |
@@ -71,11 +75,19 @@ adapters, branch isolation, auditability, offline rules, core vs modules).
 | 27 | 39 | Hardware & peripheral layer |
 | 28 | 40 | Security, audit & fraud controls |
 | 29 | 41–42 | Owner intelligence |
+| 30 | later | AI business assistant (after real pilot data exists) |
 | 31 | 43–45 | Testing with real Kenyan businesses |
 | 32 | 46–48 | Performance, security & production hardening |
 | 33 | 49–50 | Deployment & SaaS layer |
-| 34 | 51–53 | Final UX / product polish |
+| 34 | 51–53 | Final UX / product polish + solo-mode ERP-leakage audit |
 | 35 | 54–60 | Pilot release (5 real businesses) |
 
-**Built so far:** foundation code (Day 0) — onboarding, secure PIN auth, schema v1, manager
-UI, dashboard, EN/SW core, 24 tests green — plus Day 1 architecture.
+**Built so far:**
+- **Day 1** — product architecture & universal rules (ARCHITECTURE.md, incl. the R-C
+  capability model) on top of the Day-0 foundation (onboarding, scrypt PIN auth, schema,
+  manager UI, dashboard, EN/SW core).
+- **Day 2** — capability system (18-capability registry + trade seeds + guided-growth
+  suggestions), tenancy foundation (branch → location → register, warehouses, departments,
+  `business_id` hook), 30-key permission matrix with per-user grants, solo-first onboarding
+  v2, capability-gated dashboard + manager back office, stock adjust with reason codes.
+  **35 tests green** (was 24).

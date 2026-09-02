@@ -8,7 +8,7 @@
 </head>
 <body>
 
-<!-- ============ VIEW: ONBOARDING (first run only) ============ -->
+<!-- ============ VIEW: ONBOARDING v2 (solo-first, R-C1) ============ -->
 <div id="view-onboard" class="wizard hidden">
   <div class="card">
     <div class="steps" id="steps"></div>
@@ -16,18 +16,18 @@
     <div class="sub" data-i18n="setup_sub">One-time setup — takes about two minutes.</div>
 
     <div id="w0">
+      <label class="f"><span data-i18n="trade">What do you sell?</span><select id="o-trade"></select></label>
       <label class="f"><span data-i18n="business_name">Business name</span>
         <input id="o-name" placeholder="e.g. Mama Njeri Traders" autocomplete="off"></label>
       <div class="grid cols-2">
         <label class="f"><span data-i18n="phone">Phone</span><input id="o-phone" placeholder="+254 7xx xxx xxx"></label>
-        <label class="f"><span data-i18n="trade">What do you sell?</span><select id="o-trade"></select></label>
+        <label class="f"><span data-i18n="address">Address</span><input id="o-address" placeholder="Street, town"></label>
       </div>
-      <label class="f"><span data-i18n="address">Address</span><input id="o-address" placeholder="Street, town"></label>
     </div>
 
     <div id="w1" class="hidden">
-      <label class="f"><span data-i18n="kra_pin">KRA PIN</span>
-        <input id="o-kra" placeholder="A12345678X" autocomplete="off"></label>
+      <p class="muted small" data-i18n="tax_optional">Optional — you can skip this and set it up later in Settings.</p>
+      <label class="f"><span>KRA PIN</span><input id="o-kra" placeholder="A12345678X" autocomplete="off"></label>
       <label class="check"><input type="checkbox" id="o-vatreg"> <span data-i18n="vat_registered">Registered for VAT?</span></label>
       <label class="f"><span data-i18n="vat_rate">VAT rate %</span><input id="o-vatrate" type="number" value="16" min="0" max="30"></label>
       <label class="f"><span data-i18n="receipt_footer">Receipt footer</span>
@@ -35,18 +35,12 @@
     </div>
 
     <div id="w2" class="hidden">
-      <label class="f"><span data-i18n="branch_name">Branch name</span>
-        <input id="o-branch" placeholder="Main Branch" value="Main Branch"></label>
-      <p class="muted small">You can add any number of branches later — each with its own stock,
-      staff and pricing, under one consolidated dashboard.</p>
-    </div>
-
-    <div id="w3" class="hidden">
       <label class="f"><span data-i18n="owner_name">Your name</span><input id="o-owner" autocomplete="off"></label>
       <div class="f"><span data-i18n="owner_pin">Create your PIN (4–8 digits)</span>
         <div id="o-pinpad"></div></div>
       <label class="check"><input type="checkbox" id="o-sample" checked>
         <span data-i18n="load_sample">Load sample products for this trade</span></label>
+      <p class="muted small" data-i18n="solo_note">You can add staff, more tills and more branches any time — the shop grows without changing systems.</p>
     </div>
 
     <div class="nav">
@@ -90,24 +84,22 @@
         <div class="num" id="d-sales">—</div><div class="sub" id="d-tx"></div></div>
       <div class="card stat"><h3 data-i18n="products">Products</h3>
         <div class="num" id="d-prods">—</div><div class="sub" id="d-prods-sub"></div></div>
-      <div class="card stat"><h3 data-i18n="branches">Branches</h3>
-        <div class="num" id="d-branches">—</div><div class="sub" id="d-branch-names"></div></div>
-      <div class="card stat"><h3 id="d-shift-h">Shift</h3>
+      <div class="card stat"><h3 id="d-tills-h" data-i18n="tills">Tills</h3>
+        <div class="num" id="d-tills">—</div><div class="sub" id="d-tills-sub"></div></div>
+      <div class="card stat"><h3 data-i18n="shift">Shift</h3>
         <div class="num" id="d-shift">—</div><div class="sub" id="d-shift-sub"></div></div>
     </div>
 
-    <div class="grid nav-cards" style="margin-bottom:14px">
-      <a class="nav-card" href="/pos.html"><div class="t" data-i18n="till">Till</div>
-        <div class="d">Barcode · cash · M-Pesa</div><span class="badge amber" id="d-till-badge">Day 3</span></a>
-      <a class="nav-card" href="/manager.html#products"><div class="t" data-i18n="products">Products</div>
-        <div class="d" data-i18n="categories">Categories</div></a>
-      <a class="nav-card" href="/manager.html#branches"><div class="t" data-i18n="branches">Branches</div>
-        <div class="d" data-i18n="staff">Staff</div></a>
-      <a class="nav-card" href="/reports.html"><div class="t" data-i18n="reports">Reports</div>
-        <div class="d">P&L · stock · VAT · eTIMS</div><span class="badge amber">Day 12</span></a>
+    <!-- Grow your shop (R-C5: suggests, never forces) -->
+    <div class="card grow hidden" id="d-grow" style="margin-bottom:14px">
+      <h3 data-i18n="grow">Grow your shop</h3>
+      <div id="d-grow-items"></div>
+      <div class="msg" id="d-grow-msg" style="margin:0"></div>
     </div>
 
-    <div class="card">
+    <div class="grid nav-cards" style="margin-bottom:14px" id="d-nav"></div>
+
+    <div class="card hidden" id="d-audit-card">
       <h3 data-i18n="recent_activity">Recent activity</h3>
       <table><tbody id="d-audit"></tbody></table>
     </div>
@@ -116,7 +108,7 @@
 
 <script src="/assets/app.js"></script>
 <script>
-const { t, setLang, api, fmt, esc, pinpad, toast, netBadge, I18N } = OP;
+const { t, setLang, api, fmt, esc, pinpad, toast, netBadge } = OP;
 const $ = (s) => document.querySelector(s);
 
 function show(view) {
@@ -124,11 +116,11 @@ function show(view) {
   $(`#${view}`).classList.remove('hidden');
 }
 
-// ---------------- onboarding wizard ----------------
+// ---------------- onboarding v2 (solo-first) ----------------
 let step = 0;
 let ownerPin = '';
 let trades = {};
-const STEP_KEYS = ['step_business', 'step_tax', 'step_branch', 'step_owner'];
+const STEP_KEYS = ['step_business', 'step_tax', 'step_owner'];
 
 function fillTrades() {
   const sel = $('#o-trade');
@@ -139,9 +131,9 @@ function fillTrades() {
 function drawSteps() {
   $('#steps').innerHTML = STEP_KEYS.map((k, i) =>
     `<div class="s ${i <= step ? 'on' : ''}" title="${esc(t(k))}"></div>`).join('');
-  for (let i = 0; i < 4; i++) $(`#w${i}`).classList.toggle('hidden', i !== step);
+  for (let i = 0; i < 3; i++) $(`#w${i}`).classList.toggle('hidden', i !== step);
   $('#w-back').style.visibility = step === 0 ? 'hidden' : 'visible';
-  $('#w-next').textContent = step === 3 ? t('start_trading') : t('next');
+  $('#w-next').textContent = step === 2 ? t('start_trading') : t('next');
 }
 
 async function initOnboard() {
@@ -155,11 +147,9 @@ async function initOnboard() {
   $('#w-back').onclick = () => { if (step > 0) { step--; drawSteps(); } };
   $('#w-next').onclick = async () => {
     const msg = $('#w-msg');
-    if (step === 0) {
-      if (!$('#o-name').value.trim()) return toast(msg, t('business_name') + ' ?', false);
-    }
-    if (step === 3 && !/^\d{4,8}$/.test(ownerPin)) return toast(msg, t('owner_pin'), false);
-    if (step < 3) { step++; drawSteps(); return; }
+    if (step === 0 && !$('#o-name').value.trim()) return toast(msg, t('business_name') + ' ?', false);
+    if (step === 2 && !/^\d{4,8}$/.test(ownerPin)) return toast(msg, t('owner_pin'), false);
+    if (step < 2) { step++; drawSteps(); return; }
     const body = {
       business: {
         name: $('#o-name').value.trim(),
@@ -171,7 +161,6 @@ async function initOnboard() {
         vatRate: Number($('#o-vatrate').value) || 16,
         receiptFooter: $('#o-footer').value.trim()
       },
-      branch: { name: $('#o-branch').value.trim() || 'Main Branch' },
       owner: { name: $('#o-owner').value.trim(), pin: ownerPin },
       sample: $('#o-sample').checked
     };
@@ -206,14 +195,35 @@ function initLogin(bizName) {
 }
 
 // ---------------- dashboard ----------------
+let BOOT = null;
+
+function navCard(href, title, sub, badge, badgeClass) {
+  return `<a class="nav-card" href="${href}"><div class="t">${esc(title)}</div>
+    <div class="d">${esc(sub)}</div>${badge ? `<span class="badge ${badgeClass || ''}">${esc(badge)}</span>` : ''}</a>`;
+}
+
+function drawNav(caps, me) {
+  const cards = [];
+  cards.push(navCard('/pos.html', t('till'), 'Barcode · cash · M-Pesa', 'Day 10', 'amber'));
+  cards.push(navCard('/manager.html#products', t('products'), t('categories'), null));
+  cards.push(navCard('/manager.html#tills', t('tills'), 'Printers · drawers', null));
+  cards.push(navCard('/manager.html#customers', 'Customers', t('deni_short'), 'Day 15', 'amber'));
+  if (caps.staff_roles) cards.push(navCard('/manager.html#staff', t('staff'), t('role'), null));
+  if (caps.multi_branch || caps.multi_location) cards.push(navCard('/manager.html#layout', t('layout'), t('locations'), null));
+  cards.push(navCard('/reports.html', t('reports'), 'P&L · stock · eTIMS', 'Day 20', 'amber'));
+  cards.push(navCard('/manager.html#settings', t('settings'), t('features'), null));
+  $('#d-nav').innerHTML = cards.join('');
+}
+
 async function loadDash(bizName) {
-  let boot, today, audit;
+  let today, audit;
   try {
-    [boot, today] = await Promise.all([
+    [BOOT, today] = await Promise.all([
       api('/api/bootstrap', { noRedirect: true }),
       api('/api/today', { noRedirect: true })
     ]);
-    audit = await api('/api/audit?limit=6').catch(() => []);
+    audit = (BOOT.me.role === 'owner' || BOOT.me.role === 'manager')
+      ? await api('/api/audit?limit=6').catch(() => []) : [];
   } catch {
     if (location.pathname !== '/') return;
     initLogin(bizName || '');
@@ -221,34 +231,64 @@ async function loadDash(bizName) {
   }
 
   show('view-dash');
-  const biz = (boot.settings && boot.settings.business) || {};
+  const biz = (BOOT.settings && BOOT.settings.business) || {};
   $('#d-biz').textContent = biz.name || '';
   netBadge($('#d-net'));
   $('#d-lang').textContent = OP.lang() === 'en' ? 'SW' : 'EN';
   $('#d-sales').textContent = fmt(today.total);
   $('#d-tx').textContent = `${today.n} ${t('transactions').toLowerCase()}`;
-  $('#d-prods').textContent = boot.products.length;
-  $('#d-prods-sub').textContent = `${boot.categories.length} ${t('categories').toLowerCase()}`;
-  $('#d-branches').textContent = boot.branches.length;
-  $('#d-branch-names').textContent = boot.branches.map((b) => b.name).join(', ');
-  const sh = boot.openShift;
+  $('#d-prods').textContent = BOOT.products.length;
+  $('#d-prods-sub').textContent = `${BOOT.categories.length} ${t('categories').toLowerCase()}`;
+  $('#d-tills').textContent = BOOT.registers.length;
+  $('#d-tills-sub').textContent = BOOT.locations.map((l) => l.name).join(', ');
+  const sh = BOOT.openShift;
   if (sh) {
     $('#d-shift').textContent = sh.userName || '—';
-    $('#d-shift-sub').textContent = `opened ${new Date(sh.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · float ${fmt(sh.float)}`;
+    $('#d-shift-sub').textContent = `opened ${new Date(sh.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${fmt(sh.float)}`;
   } else {
     $('#d-shift').textContent = '—';
-    $('#d-shift-sub').textContent = 'opens with the till (Day 3)';
+    $('#d-shift-sub').textContent = 'opens with the till (Day 13)';
   }
-  $('#d-audit').innerHTML = audit.length ? audit.map((a) => `
-    <tr><td class="mono muted small">${new Date(a.ts).toLocaleString()}</td>
-    <td>${esc(a.userName)}</td><td>${esc(a.action)}</td>
-    <td class="muted small">${esc(JSON.stringify(a.detail).slice(0, 80))}</td></tr>`).join('')
-    : `<tr><td class="muted">${t('no_rows')}</td></tr>`;
+
+  drawNav(BOOT.caps, BOOT.me);
+
+  // Grow your shop (R-C5)
+  if (BOOT.suggestions && BOOT.suggestions.length) {
+    $('#d-grow').classList.remove('hidden');
+    $('#d-grow-items').innerHTML = BOOT.suggestions.map((s, i) => `
+      <div class="row grow-item">
+        <div style="flex:1">
+          <div style="font-weight:600">${esc(OP.lang() === 'sw' ? s.reasonSw : s.reason)}</div>
+          <div class="muted small">${esc(s.capability)}</div>
+        </div>
+        <button class="btn small" data-grow="${esc(s.capability)}" data-i18n="enable">Enable</button>
+      </div>`).join('');
+    document.querySelectorAll('[data-grow]').forEach((b) => {
+      b.onclick = async () => {
+        try {
+          await api('/api/capabilities', { method: 'POST', body: { capability: b.dataset.grow, enabled: true } });
+          await loadDash(biz.name);
+        } catch (e) { toast($('#d-grow-msg'), e.message, false); }
+      };
+    });
+  } else {
+    $('#d-grow').classList.add('hidden');
+  }
+
+  // recent activity — owner/manager only (cashiers go to the till)
+  if (audit.length) {
+    $('#d-audit-card').classList.remove('hidden');
+    $('#d-audit').innerHTML = audit.map((a) => `
+      <tr><td class="mono muted small">${new Date(a.ts).toLocaleString()}</td>
+      <td>${esc(a.userName)}</td><td>${esc(a.action)}</td>
+      <td class="muted small">${esc(JSON.stringify(a.detail).slice(0, 80))}</td></tr>`).join('');
+  } else {
+    $('#d-audit-card').classList.add('hidden');
+  }
 
   $('#d-logout').onclick = async () => {
     try { await api('/api/logout', { method: 'POST' }); } catch {}
-    initLogin((boot.settings && boot.settings.business) || {});
-    $('#login-biz').textContent = (boot.settings && boot.settings.business && boot.settings.business.name) || '';
+    initLogin(biz.name);
   };
 }
 
@@ -260,17 +300,17 @@ async function loadDash(bizName) {
     await initOnboard();
   } else {
     try {
-      await api('/api/me', { noRedirect: true }); // session still alive?
+      await api('/api/me', { noRedirect: true });
       await loadDash(st.businessName);
     } catch {
       initLogin(st.businessName);
     }
   }
-  // language toggle
   window.addEventListener('click', (e) => {
     if (e.target && e.target.id === 'd-lang') {
       OP.setLang(OP.lang() === 'en' ? 'sw' : 'en');
       e.target.textContent = OP.lang() === 'en' ? 'SW' : 'EN';
+      if (BOOT) loadDash((BOOT.settings && BOOT.settings.business && BOOT.settings.business.name) || '');
     }
   });
 })();

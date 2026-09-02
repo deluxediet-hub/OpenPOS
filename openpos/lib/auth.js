@@ -61,9 +61,9 @@ function createSession(db, userId) {
 
 function userFromToken(db, token) {
   if (!token) return null;
-    const row = db
+  const row = db
     .prepare(
-      `SELECT u.id, u.name, u.role, u.branch_id, u.active, s.expires_at
+      `SELECT u.id, u.name, u.role, u.branch_id, u.location_id, u.register_id, u.active, s.expires_at
          FROM sessions s JOIN users u ON u.id = s.user_id
         WHERE s.token = ?`
     )
@@ -74,7 +74,10 @@ function userFromToken(db, token) {
     return null;
   }
   if (!row.active) return null;
-  return { id: row.id, name: row.name, role: row.role, branchId: row.branch_id };
+  return {
+    id: row.id, name: row.name, role: row.role,
+    branchId: row.branch_id, locationId: row.location_id, registerId: row.register_id
+  };
 }
 
 function destroySession(db, token) {

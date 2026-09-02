@@ -1,7 +1,7 @@
 # OpenPOS v2 — Plan & Roadmap
 **"A POS for every Kenyan shop — any number of branches."**
 
-> Status: **Day 1 of 60 complete.** Roadmap restructured 2026-09-02 to the founder's
+> Status: **Day 2 of 60 complete.** Roadmap restructured 2026-09-02 to the founder's
 > 35-phase directive. The engineering contract is **`openpos/ARCHITECTURE.md`** — every
 > phase implements it; rule changes go through its change log.
 
@@ -111,7 +111,7 @@ stock; how payments affect financial records; branch isolation; auditability; wh
 offline; core vs industry-specific. **Acceptance: every later phase cites rules; no phase
 contradicts the doc without a change-log entry.**
 
-### Phase 2 — Business & Tenancy Foundation + Capability System · Day 2
+### Phase 2 — Business & Tenancy Foundation + Capability System · Day 2 ✅
 - **Capability system (the meta feature, R-C):** `business_capabilities` (flags, per
   business); solo default (1 branch/1 location/1 register/1 owner, no warehouses/
   departments/price levels); capability-gated presentation everywhere (nav, screens,
@@ -417,6 +417,23 @@ first sale < 5 min unaided; documentation + DR drill done.
      capability-gated** (every screen checks the business capability set). Solo default;
      trade templates seed capabilities; guided growth suggests unlocks; onboarding becomes
      solo-first (Phase 2); solo-mode audit added to Phases 31 & 34. ARCHITECTURE.md v2.
+  10. **2026-09-02 (3) — Pilot = the founder's own shops.** No single-trade bias in module
+      depth; their exact trades still to be stated — **needed by Day 28 (Phases 18–19)** to
+      order which industry modules get built deepest.
+  11. **2026-09-02 (4) — Deployment at pilot = self-hosted per business** (each shop runs
+      OpenPOS on its own PC). The SaaS layer stays at Phase 33 (Days 49–50) and is pulled
+      forward only if a pilot actually needs it. The `business_id` tenancy hook (Phase 2)
+      keeps that option open at zero cost today.
+  12. **2026-09-02 (5) — M-Pesa & KRA paperwork is READY** (paybill/till + business
+      documents in hand). Action: submit the **production approval path the moment the
+      sandbox is green (Days 22–23)** — the 2–10-day approval window finishes well before
+      pilot, so production M-Pesa + eTIMS are live for the pilot week.
+
+- **Cut line (agreed 2026-09-02):** if the schedule slips, trim **omni-channel (Days
+  37–38) first**, then the **SaaS layer (Days 49–50)**. Non-negotiable: core engines,
+  M-Pesa/eTIMS, offline test matrix, and the 5-business pilot. Process: one day per
+  working session; each ends with a commit + live preview + acceptance criteria actually
+  tested (tightly-coupled phase pairs may ship as one increment behind a flag).
 
 ## 8. Build log
 
@@ -435,3 +452,63 @@ first sale < 5 min unaided; documentation + DR drill done.
   incredibly small and grows without the business ever changing systems.*
 - Roadmap restructured to 35 phases / 60 days (this document); Phase 2 now includes the
   capability system + solo-first onboarding v2.
+
+### Day 2 — Capability System + Tenancy Foundation ✅ (2026-09-02)
+**Backend (engines first):**
+- `lib/capabilities.js` — 18-capability registry (EN/SW labels + descriptions), trade
+  templates (`duka→deni`, `chemist→batches`, `spirits→packs`, boutiques→`variants`,
+  `hardware→open_priced`, `electronics→serials`, …), **guided-growth suggestion rules**
+  (2nd till in one location → multi_location · ≥3 out-of-stock products → purchasing ·
+  first credit-sale → deni), enable-seeds (warehouse → creates a "Store Room" location).
+- `lib/permissions.js` — 30-key permission matrix; roles = named sets (owner = all;
+  manager = all except `capabilities.manage` + `staff.permissions`; cashier/staff = narrow
+  till set); per-user **grants only ADD** (can never strip a role's base); `requirePerm`
+  middleware enforced on every admin route (R-B2).
+- `db.js` — schema v2: `locations` (branch→location→register, `is_warehouse`,
+  `is_default`), `registers` (renamed from `terminals`), `departments`,
+  `business_capabilities`, `user_permissions`; `business_id` tenant hook on all
+  top-level tables (Phase 33, zero cost today); **stock re-keyed per location**;
+  additive migrations for pre-Phase-2 dev DBs (terminals→registers, per-branch default
+  "Main Store", stock branch→location move).
+- `server.js` — full Phase-2 rewrite: **onboarding v2** (trade → name/phone → owner PIN;
+  KRA/VAT optional & deferrable; branch/location/till created invisibly; capability rows
+  + trade seeds); bootstrap returns caps/locations/registers/location-scoped stock +
+  suggestions; branches/locations/registers/departments CRUD with guards (default
+  location & branch undeletable; branch delete cascades registers/stock/locations, blocks
+  on users/sales); capabilities + suggestions endpoints (owner-only); staff CRUD with
+  branch/location/register assignment + per-user permission grants; **stock adjust with
+  reason codes** (stocktake/damage/expired/other → `stock_moves(type=adjustment)` +
+  audit); `/api/today` scoped by visible branches.
+
+**UI (thin client over the engines):**
+- Onboarding v2 (3 steps, solo-first — no branch/register questions, KRA step skippable).
+- Dashboard: capability-gated nav cards (Staff/Layout appear only when enabled) +
+  **"Grow your shop"** card rendering suggestions with one-tap Enable.
+- Manager back office reworked: Products (always; inline **Adjust stock** with reason),
+  Categories, **Tills** (register CRUD, always), Staff (gated `staff_roles`; location/till
+  assignment + per-user permission editor for owner), **Layout** (gated
+  `multi_location`/`multi_branch`: locations incl. warehouse flag + branches), Customers
+  (placeholder — Day 15), Settings (always; **Features** section = capability toggles,
+  owner-only), Audit (chain verify). EN/SW strings extended for all new vocabulary.
+
+**Acceptance (all tested, 35 tests green, up from 24):**
+- Solo duka: multi_branch/multi_location/staff_roles OFF, deni ON (trade seed); UI shows
+  no branch/warehouse/supplier/permissions concept.
+- Enable `multi_location` = flag flips, **zero rows migrated** (location count unchanged).
+- Fixture via API: 1 business / 3 branches / 6 locations (incl. 1 seeded warehouse) /
+  5 registers — verified.
+- 2nd till in one location → `multi_location` suggestion fires (EN+SW reasons).
+- Cashier assigned to BR02/Mall sees only BR02 branches/locations/registers; sample stock
+  at other locations reads 0 for her; `/api/today` scoped to her branch.
+- Cashier: product create 403 → owner grants `products.manage` → 200 → revoke → 403;
+  `stock.adjust` grant lets her adjust (move + audit written at her branch's default
+  location), revoke blocks again; manager cannot manage capabilities or grant
+  permissions (403 both).
+- Stock adjust writes append-only move with reason + hash-chained audit; reason
+  mandatory (R-S3).
+- Live smoke: spirits onboarding (packs seeded, 21+ products), grow-card suggestion,
+  warehouse seed, cashier scope — all verified against the running server.
+
+**Notes:** deni/purchasing suggestion *rules* are in place; their trigger data lands with
+Phase 11 (customer ledger) and Phase 4 (stock ageing). `terminals`→`registers` migration
+tested against a v1 dev DB.

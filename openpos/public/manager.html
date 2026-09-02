@@ -21,19 +21,12 @@
   </div>
 
   <div id="m-main" class="hidden">
-    <div class="tabbar" id="tabs">
-      <button data-tab="products" data-i18n="products">Products</button>
-      <button data-tab="categories" data-i18n="categories">Categories</button>
-      <button data-tab="branches" data-i18n="branches">Branches</button>
-      <button data-tab="staff" data-i18n="staff">Staff</button>
-      <button data-tab="settings" data-i18n="settings">Settings</button>
-      <button data-tab="audit" data-i18n="audit">Audit log</button>
-    </div>
+    <div class="tabbar" id="tabs"></div>
 
     <!-- ============ PRODUCTS ============ -->
     <section id="tab-products" class="hidden">
       <div class="row" style="margin-bottom:10px">
-        <input id="p-search" style="max-width:320px" data-i18n-placeholder="search" placeholder="Search…">
+        <input id="p-search" style="max-width:320px" placeholder="Search…">
         <span class="muted small" id="p-count"></span>
       </div>
       <div class="card" style="margin-bottom:14px;overflow:auto">
@@ -41,7 +34,7 @@
           <th data-i18n="name">Name</th><th data-i18n="category">Category</th>
           <th data-i18n="barcode">Barcode</th><th data-i18n="price">Price</th>
           <th data-i18n="cost">Cost</th><th data-i18n="tax_type">Tax</th>
-          <th>Stock</th><th></th><th></th>
+          <th data-i18n="stock">Stock</th><th></th><th></th>
         </tr></thead><tbody id="p-rows"></tbody></table>
       </div>
       <div class="card">
@@ -49,7 +42,7 @@
         <input type="hidden" id="p-id">
         <div class="grid cols-3">
           <label class="f" style="grid-column:span 2"><span data-i18n="name">Name</span><input id="p-name"></label>
-          <label class="f"><span data-i18n="name">Name (SW)</span><input id="p-namesw"></label>
+          <label class="f"><span>Name (SW)</span><input id="p-namesw"></label>
           <label class="f"><span data-i18n="category">Category</span><select id="p-cat"></select></label>
           <label class="f"><span data-i18n="barcode">Barcode</span><input id="p-barcode"></label>
           <label class="f"><span data-i18n="unit">Unit</span><input id="p-unit" value="pcs"></label>
@@ -58,10 +51,10 @@
           <label class="f"><span>Wholesale price</span><input id="p-wholesale" type="number" min="0" value="0"></label>
           <label class="f"><span data-i18n="tax_type">Tax type</span>
             <select id="p-tax"><option value="std">VAT 16%</option><option value="zero">VAT 0%</option><option value="exempt">Exempt</option></select></label>
-          <label class="f"><span data-i18n="kra_code">KRA item code</span><input id="p-kra" class="mono"></label>
+          <label class="f"><span>KRA item code</span><input id="p-kra" class="mono"></label>
           <label class="f"><span>Min age</span><input id="p-age" type="number" min="0" placeholder="—" value=""></label>
           <label class="f"><span>Brand</span><input id="p-brand"></label>
-          <label class="f"><span>Pack size (e.g. 6 per case)</span><input id="p-packsz" type="number" min="1" value="1"></label>
+          <label class="f"><span>Pack size (e.g. 12 per case)</span><input id="p-packsz" type="number" min="1" value="1"></label>
           <label class="f"><span>Pack name</span><input id="p-packname" placeholder="case, 6× …"></label>
         </div>
         <div class="row wrap">
@@ -81,9 +74,8 @@
     <!-- ============ CATEGORIES ============ -->
     <section id="tab-categories" class="hidden">
       <div class="card" style="margin-bottom:14px">
-        <table><thead><tr>
-          <th data-i18n="name">Name</th><th>Name (SW)</th><th>Flags</th><th></th>
-        </tr></thead><tbody id="c-rows"></tbody></table>
+        <table><thead><tr><th data-i18n="name">Name</th><th>Name (SW)</th><th>Flags</th><th></th></tr></thead>
+        <tbody id="c-rows"></tbody></table>
       </div>
       <div class="card">
         <h3 id="c-form-title" data-i18n="add">Add</h3>
@@ -104,39 +96,39 @@
       </div>
     </section>
 
-    <!-- ============ BRANCHES ============ -->
-    <section id="tab-branches" class="hidden">
+    <!-- ============ TILLS (registers) ============ -->
+    <section id="tab-tills" class="hidden">
       <div class="card" style="margin-bottom:14px">
         <table><thead><tr>
-          <th>Code</th><th data-i18n="name">Name</th><th data-i18n="address">Address</th>
-          <th>VAT</th><th>Default</th><th data-i18n="today">Today</th><th></th>
-        </tr></thead><tbody id="b-rows"></tbody></table>
+          <th data-i18n="name">Name</th><th data-i18n="location">Location</th>
+          <th>Printer</th><th>Width</th><th>Drawer</th><th></th>
+        </tr></thead><tbody id="t-rows"></tbody></table>
       </div>
       <div class="card">
-        <h3 id="b-form-title" data-i18n="add">Add</h3>
-        <input type="hidden" id="b-id">
+        <h3 id="t-form-title" data-i18n="add_till">Add till</h3>
+        <input type="hidden" id="t-id">
         <div class="grid cols-3">
-          <label class="f"><span data-i18n="name">Name</span><input id="b-name"></label>
-          <label class="f"><span data-i18n="address">Address</span><input id="b-address"></label>
-          <label class="f"><span data-i18n="phone">Phone</span><input id="b-phone"></label>
-          <label class="f"><span data-i18n="kra_pin">KRA PIN</span><input id="b-kra"></label>
-          <label class="check" style="align-self:end"><input type="checkbox" id="b-vat"> VAT registered</label>
-          <label class="check" style="align-self:end"><input type="checkbox" id="b-def"> Make default</label>
+          <label class="f"><span data-i18n="name">Name</span><input id="t-name" placeholder="Till 2"></label>
+          <label class="f"><span data-i18n="location">Location</span><select id="t-loc"></select></label>
+          <label class="f"><span>Printer IP</span><input id="t-printer" placeholder="192.168.1.50"></label>
+          <label class="f"><span>Receipt width</span>
+            <select id="t-width"><option value="80">80mm</option><option value="58">58mm</option></select></label>
+          <label class="check" style="align-self:end"><input type="checkbox" id="t-drawer"> Cash drawer kick</label>
         </div>
         <div class="row">
-          <button class="btn" id="b-save" data-i18n="save">Save</button>
-          <button class="btn ghost hidden" id="b-clear" data-i18n="cancel">Cancel</button>
-          <div class="msg" id="b-msg" style="margin:0"></div>
+          <button class="btn" id="t-save" data-i18n="save">Save</button>
+          <button class="btn ghost hidden" id="t-clear" data-i18n="cancel">Cancel</button>
+          <div class="msg" id="t-msg" style="margin:0"></div>
         </div>
       </div>
     </section>
 
-    <!-- ============ STAFF ============ -->
+    <!-- ============ STAFF (capability: staff_roles) ============ -->
     <section id="tab-staff" class="hidden">
       <div class="card" style="margin-bottom:14px">
         <table><thead><tr>
-          <th data-i18n="name">Name</th><th data-i18n="role">Role</th>
-          <th data-i18n="branches">Branch</th><th>Last login</th><th data-i18n="active">Active</th>
+          <th data-i18n="name">Name</th><th data-i18n="role">Role</th><th data-i18n="location">Location</th>
+          <th data-i18n="till">Till</th><th>Last login</th><th data-i18n="active">Active</th><th></th>
         </tr></thead><tbody id="s-rows"></tbody></table>
       </div>
       <div class="card">
@@ -147,10 +139,11 @@
           <label class="f"><span data-i18n="role">Role</span>
             <select id="s-role"><option value="cashier" data-i18n="cashier">Cashier</option>
             <option value="manager" data-i18n="manager">Manager</option>
-            <option value="staff" data-i18n="staff_r">Staff</option>
-            <option value="owner" data-i18n="owner">Owner</option></select></label>
+            <option value="staff" data-i18n="staff_r">Staff</option></select></label>
+          <label class="f"><span data-i18n="pin">PIN (4–8 digits)</span><input id="s-pin" inputmode="numeric" autocomplete="off"></label>
           <label class="f"><span data-i18n="branches">Branch</span><select id="s-branch"></select></label>
-          <label class="f"><span data-i18n="pin">PIN (4–8 digits, blank = keep)</span><input id="s-pin" inputmode="numeric" autocomplete="off"></label>
+          <label class="f"><span data-i18n="location">Location</span><select id="s-loc"></select></label>
+          <label class="f"><span data-i18n="till">Till</span><select id="s-till"></select></label>
           <label class="check" style="align-self:end"><input type="checkbox" id="s-active" checked> <span data-i18n="active">Active</span></label>
         </div>
         <div class="row">
@@ -159,6 +152,81 @@
           <div class="msg" id="s-msg" style="margin:0"></div>
         </div>
       </div>
+      <div class="card hidden" id="s-perm-card" style="margin-top:14px">
+        <h3 id="s-perm-title">Permissions</h3>
+        <p class="muted small">Extra permissions on top of the role. Owner can grant; revoking removes the extra.</p>
+        <div class="grid cols-3" id="s-perms"></div>
+        <div class="row"><button class="btn" id="s-perm-save">Save permissions</button>
+          <div class="msg" id="s-perm-msg" style="margin:0"></div></div>
+      </div>
+    </section>
+
+    <!-- ============ LAYOUT (capability: multi_location / multi_branch) ============ -->
+    <section id="tab-layout" class="hidden">
+      <div class="placeholder" id="lay-empty">
+        <h2>Layout</h2>
+        <p>Enable "Multiple locations" or "Multiple branches" under
+        <a href="#settings">Settings → Features</a>.</p>
+      </div>
+      <div id="lay-loc-wrap">
+        <div class="card" style="margin-bottom:14px">
+          <h3 data-i18n="locations">Locations</h3>
+          <table><thead><tr>
+            <th data-i18n="name">Name</th><th data-i18n="branches">Branch</th><th data-i18n="address">Address</th>
+            <th data-i18n="tills">Tills</th><th data-i18n="stock">Stock lines</th><th></th>
+          </tr></thead><tbody id="l-rows"></tbody></table>
+        </div>
+        <div class="card" style="margin-bottom:14px">
+          <h3 id="l-form-title" data-i18n="add_location">Add location</h3>
+          <input type="hidden" id="l-id">
+          <div class="grid cols-3">
+            <label class="f"><span data-i18n="name">Name</span><input id="l-name"></label>
+            <label class="f"><span data-i18n="address">Address</span><input id="l-address"></label>
+            <label class="f"><span data-i18n="phone">Phone</span><input id="l-phone"></label>
+            <label class="check" style="align-self:end"><input type="checkbox" id="l-wh"> <span data-i18n="warehouse">Warehouse / store room</span></label>
+          </div>
+          <div class="row">
+            <button class="btn" id="l-save" data-i18n="save">Save</button>
+            <button class="btn ghost hidden" id="l-clear" data-i18n="cancel">Cancel</button>
+            <div class="msg" id="l-msg" style="margin:0"></div>
+          </div>
+        </div>
+      </div>
+      <div id="lay-br-wrap">
+        <div class="card" style="margin-bottom:14px">
+          <h3 data-i18n="branches">Branches</h3>
+          <table><thead><tr>
+            <th>Code</th><th data-i18n="name">Name</th><th>VAT</th><th>Default</th><th data-i18n="today">Today</th><th></th>
+          </tr></thead><tbody id="b-rows"></tbody></table>
+        </div>
+        <div class="card">
+          <h3 id="b-form-title" data-i18n="add_branch">Add branch</h3>
+          <input type="hidden" id="b-id">
+          <div class="grid cols-3">
+            <label class="f"><span data-i18n="name">Name</span><input id="b-name"></label>
+            <label class="f"><span data-i18n="address">Address</span><input id="b-address"></label>
+            <label class="f"><span data-i18n="phone">Phone</span><input id="b-phone"></label>
+            <label class="f"><span>KRA PIN</span><input id="b-kra"></label>
+            <label class="check" style="align-self:end"><input type="checkbox" id="b-vat"> VAT registered</label>
+            <label class="check" style="align-self:end"><input type="checkbox" id="b-def"> Make default</label>
+          </div>
+          <div class="row">
+            <button class="btn" id="b-save" data-i18n="save">Save</button>
+            <button class="btn ghost hidden" id="b-clear" data-i18n="cancel">Cancel</button>
+            <div class="msg" id="b-msg" style="margin:0"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CUSTOMERS (Phase 11, Day 15) ============ -->
+    <section id="tab-customers" class="hidden">
+      <div class="placeholder">
+        <h2>Customers & deni</h2>
+        <p>Profiles, purchase history, credit limits, ledgers, statements, repayments.<br>
+        <b>Land: Day 15 (Phase 11).</b></p>
+        <p><a href="/">&larr; Back</a></p>
+      </div>
     </section>
 
     <!-- ============ SETTINGS ============ -->
@@ -166,16 +234,25 @@
       <div class="card">
         <h3 data-i18n="settings">Settings</h3>
         <div class="grid cols-2">
-          <label class="f"><span data-i18n="business_name">Business name</span><input id="st-name"></label>
+          <label class="f"><span>Business name</span><input id="st-name"></label>
           <label class="f"><span data-i18n="phone">Phone</span><input id="st-phone"></label>
           <label class="f"><span data-i18n="address">Address</span><input id="st-address"></label>
-          <label class="f"><span data-i18n="kra_pin">KRA PIN</span><input id="st-kra"></label>
-          <label class="f"><span data-i18n="vat_rate">VAT rate %</span><input id="st-vatrate" type="number" min="0" max="30"></label>
-          <label class="f"><span data-i18n="receipt_footer">Receipt footer</span><input id="st-footer"></label>
+          <label class="f"><span>KRA PIN</span><input id="st-kra"></label>
+          <label class="f"><span>Currency</span><input id="st-currency" value="KES"></label>
+          <label class="f"><span>Symbol</span><input id="st-symbol" value="Ksh"></label>
+          <label class="f"><span>VAT rate %</span><input id="st-vatrate" type="number" min="0" max="30"></label>
           <label class="check"><input type="checkbox" id="st-vatreg"> <span data-i18n="vat_registered">VAT registered</span></label>
+          <label class="f"><span data-i18n="receipt_footer">Receipt footer</span><input id="st-footer"></label>
+          <label class="f"><span>Receipt language</span>
+            <select id="st-lang"><option value="en">English</option><option value="sw">Kiswahili</option></select></label>
         </div>
         <div class="row"><button class="btn" id="st-save" data-i18n="save">Save</button>
           <div class="msg" id="st-msg" style="margin:0"></div></div>
+      </div>
+      <div class="card hidden" id="st-feat-card" style="margin-top:14px">
+        <h3 data-i18n="features">Features</h3>
+        <p class="muted small">Turn on the parts of OpenPOS your business uses. Turning one on is instant — no setup, no new system.</p>
+        <div id="st-feats"></div>
       </div>
     </section>
 
@@ -201,7 +278,7 @@
 const { t, setLang, api, fmt, esc, toast } = OP;
 const $ = (s) => document.querySelector(s);
 
-let ME = null, CATEGORIES = [], BRANCHES = [];
+let ME = null, BOOT = null, CATEGORIES = [];
 
 function roleKey(r) { return r === 'staff' ? 'staff_r' : r; }
 function pills(p) {
@@ -214,46 +291,71 @@ function pills(p) {
   return out.join(' ');
 }
 
+const TABS = [
+  { id: 'products',   label: 'products',  always: true },
+  { id: 'categories', label: 'categories', always: true },
+  { id: 'tills',      label: 'tills',     always: true },
+  { id: 'customers',  label: 'customers', always: true, badge: 'Day 15' },
+  { id: 'staff',      label: 'staff',     cap: 'staff_roles' },
+  { id: 'layout',     label: 'layout',    cap: ['multi_location', 'multi_branch'] },
+  { id: 'settings',   label: 'settings',  always: true },
+  { id: 'audit',      label: 'audit',     always: true }
+];
+
+function tabVisible(tb) {
+  if (tb.always) return true;
+  if (Array.isArray(tb.cap)) return tb.cap.some((c) => BOOT.caps[c]);
+  return !!BOOT.caps[tb.cap];
+}
+
+function drawTabs() {
+  const visible = TABS.filter(tabVisible);
+  $('#tabs').innerHTML = visible.map((tb) =>
+    `<button data-tab="${tb.id}">${esc(t(tb.label))}${tb.badge ? ` <span class="pill">${tb.badge}</span>` : ''}</button>`).join('');
+  document.querySelectorAll('#tabs button').forEach((b) => {
+    b.onclick = () => { selectTab(b.dataset.tab); location.hash = b.dataset.tab; };
+  });
+}
+
+function selectTab(name) {
+  const visible = TABS.filter(tabVisible).map((x) => x.id);
+  if (!visible.includes(name)) name = 'products';
+  document.querySelectorAll('#tabs button').forEach((b) =>
+    b.classList.toggle('on', b.dataset.tab === name));
+  TABS.forEach((tb) => $(`#tab-${tb.id}`).classList.toggle('hidden', tb.id !== name));
+  if (name === 'settings') loadSettings();
+  if (name === 'audit') loadAudit();
+  if (name === 'staff') loadStaff();
+  if (name === 'layout') loadLayout();
+}
+
 async function boot() {
   OP.setLang(OP.lang());
   try {
-    ME = await api('/api/me', { noRedirect: true });
+    ME = (await api('/api/me', { noRedirect: true })).user;
   } catch { location.href = '/'; return; }
-  if (ME.user.role !== 'owner' && ME.user.role !== 'manager') {
+  if (ME.role !== 'owner' && ME.role !== 'manager') {
     $('#m-restricted').classList.remove('hidden');
     return;
   }
   $('#m-main').classList.remove('hidden');
-  const boot = await api('/api/bootstrap').catch(() => null);
-  const biz = boot && boot.settings && boot.settings.business || {};
-  $('#m-biz').textContent = `${biz.name || ''} — ${ME.user.name} (${t(roleKey(ME.user.role))})`;
+  BOOT = await api('/api/bootstrap');
   CATEGORIES = (await api('/api/categories')).catch(() => []);
-  BRANCHES = (await api('/api/branches')).catch(() => []);
-  fillCatSelects();
-  await loadAll();
+  const biz = BOOT.settings.business || {};
+  $('#m-biz').textContent = `${biz.name || ''} — ${ME.name} (${t(roleKey(ME.role))})`;
+  drawTabs();
+  await Promise.all([loadProducts(), loadCategories(), loadTills()]);
+  if (tabVisible(TABS.find((x) => x.id === 'staff'))) loadStaff();
+  if (tabVisible(TABS.find((x) => x.id === 'layout'))) loadLayout();
   selectTab(location.hash.replace('#', '') || 'products');
   $('#m-lang').onclick = () => {
     OP.setLang(OP.lang() === 'en' ? 'sw' : 'en');
     $('#m-lang').textContent = OP.lang() === 'en' ? 'SW' : 'EN';
-    loadAll();
+    drawTabs();
   };
 }
 
-function selectTab(name) {
-  const tabs = ['products', 'categories', 'branches', 'staff', 'settings', 'audit'];
-  if (!tabs.includes(name)) name = 'products';
-  document.querySelectorAll('#tabs button').forEach((b) =>
-    b.classList.toggle('on', b.dataset.tab === name));
-  tabs.forEach((tb) => $(`#tab-${tb}`).classList.toggle('hidden', tb !== name));
-  if (name === 'settings') loadSettings();
-  if (name === 'audit') loadAudit();
-}
-
-async function loadAll() {
-  await Promise.all([loadProducts(), loadCategories(), loadBranches(), loadStaff()]);
-}
-
-// ---------- products ----------
+// ---------- products + stock adjust ----------
 async function loadProducts() {
   const rows = await api('/api/products');
   const catName = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.name]));
@@ -267,10 +369,27 @@ async function loadProducts() {
       <td class="mono small">${esc(p.barcode || '')}</td>
       <td>${fmt(p.price)}</td><td>${fmt(p.cost)}</td>
       <td><span class="pill ${p.tax_type === 'std' ? 'g' : ''}">${p.tax_type}</span></td>
-      <td>${p.active ? fmt(p.stock_qty ?? '—') : '<span class="muted">off</span>'}</td>
-      <td><button class="btn small" data-act="edit" data-id="${p.id}">✎</button></td>
-      <td><button class="btn danger" data-act="del" data-id="${p.id}" data-name="${esc(p.name)}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="9" class="muted">${t('no_rows')}</td></tr>`;
+      <td>${p.active ? esc(String(p.stock_qty ?? '—')) : '<span class="muted">off</span>'}</td>
+      <td><button class="btn small" data-act="adj" data-id="${p.id}" title="Adjust stock">±</button></td>
+      <td>
+        <button class="btn small" data-act="edit" data-id="${p.id}">✎</button>
+        <button class="btn danger" data-act="del" data-id="${p.id}" data-name="${esc(p.name)}">✕</button>
+      </td>
+    </tr>
+    <tr class="hidden" id="adj-${p.id}"><td colspan="9">
+      <div class="row wrap" style="background:var(--green-soft);border-radius:8px;padding:10px">
+        <span class="small">${esc(p.name)} — current ${esc(String(p.stock_qty ?? 0))}</span>
+        <input type="number" id="adjq-${p.id}" style="width:110px" placeholder="+/- qty">
+        <select id="adjr-${p.id}" style="width:150px">
+          <option value="stocktake">Stock take</option><option value="damage">Damage</option>
+          <option value="expired">Expired</option><option value="other">Other</option>
+        </select>
+        <input type="text" id="adjn-${p.id}" style="width:180px" placeholder="note (optional)">
+        <button class="btn small" data-adjsave="${p.id}">Save</button>
+        <button class="btn ghost small" data-adjcancel="${p.id}">✕</button>
+        <div class="msg" id="adjm-${p.id}" style="margin:0"></div>
+      </div>
+    </td></tr>`).join('') || `<tr><td colspan="9" class="muted">Nothing here yet.</td></tr>`;
   $('#p-search').oninput = loadProducts;
   document.querySelectorAll('#p-rows [data-act]').forEach((b) => {
     b.onclick = async (e) => {
@@ -280,9 +399,11 @@ async function loadProducts() {
         if (!confirm(`Delete "${b.dataset.name}"?`)) return;
         try {
           await api(`/api/products/${id}`, { method: 'DELETE' });
-          toast($('#p-msg'), t('delete') + ' ✓', true);
+          toast($('#p-msg'), 'Deleted.', true);
           loadProducts();
         } catch (err) { toast($('#p-msg'), err.message, false); }
+      } else if (b.dataset.act === 'adj') {
+        $(`#adj-${id}`).classList.toggle('hidden');
       } else {
         const p = rows.find((r) => r.id === id);
         if (!p) return;
@@ -302,6 +423,27 @@ async function loadProducts() {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     };
+  });
+  document.querySelectorAll('#p-rows [data-adjsave]').forEach((b) => {
+    b.onclick = async () => {
+      const id = Number(b.dataset.adjsave);
+      try {
+        await api('/api/stock/adjust', {
+          method: 'POST',
+          body: {
+            product_id: id,
+            qty: Number($(`#adjq-${id}`).value),
+            reason: $(`#adjr-${id}`).value,
+            note: $(`#adjn-${id}`).value
+          }
+        });
+        toast($(`#adjm-${id}`), 'Stock adjusted.', true);
+        loadProducts();
+      } catch (e) { toast($(`#adjm-${id}`), e.message, false); }
+    };
+  });
+  document.querySelectorAll('#p-rows [data-adjcancel]').forEach((b) => {
+    b.onclick = () => $(`#adj-${b.dataset.adjcancel}`).classList.add('hidden');
   });
 }
 
@@ -351,7 +493,7 @@ async function loadCategories() {
       <td>${esc(c.name)}</td><td>${esc(c.name_sw || '')}</td>
       <td>${c.age_restricted ? '<span class="pill r">Age</span> ' : ''}${c.requires_rx ? '<span class="pill">Rx</span>' : ''}</td>
       <td><button class="btn danger" data-del="${c.id}" data-name="${esc(c.name)}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="4" class="muted">${t('no_rows')}</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="4" class="muted">Nothing here yet.</td></tr>`;
   document.querySelectorAll('#c-rows tr[data-id]').forEach((tr) => {
     tr.onclick = () => {
       const c = rows.find((r) => r.id === Number(tr.dataset.id));
@@ -396,47 +538,270 @@ $('#c-save').onclick = async () => {
   } catch (e) { toast($('#c-msg'), e.message, false); }
 };
 
-// ---------- branches ----------
-async function loadBranches() {
-  const rows = await api('/api/branches');
-  BRANCHES = rows;
-  fillBranchSelects();
-  $('#b-rows').innerHTML = rows.map((b) => `
-    <tr class="clickable" data-id="${b.id}">
-      <td class="mono">${esc(b.code)}</td><td>${esc(b.name)}</td><td>${esc(b.address || '')}</td>
-      <td>${b.vat_registered ? '<span class="pill g">VAT</span>' : '—'}</td>
-      <td>${b.is_default ? '<span class="pill g">default</span>' : ''}</td>
-      <td>${fmt(b.salesToday.t)}</td>
-      <td>${b.is_default ? '' : `<button class="btn danger" data-del="${b.id}" data-name="${esc(b.name)}">✕</button>`}</td>
-    </tr>`).join('');
-  document.querySelectorAll('#b-rows tr[data-id]').forEach((tr) => {
+// ---------- tills ----------
+async function loadTills() {
+  const rows = await api('/api/registers');
+  $('#t-loc').innerHTML = BOOT.locations.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
+  $('#t-rows').innerHTML = rows.map((r) => `
+    <tr class="clickable" data-id="${r.id}">
+      <td>${esc(r.name)}</td><td>${esc(r.locationName)}</td>
+      <td class="mono small">${esc(r.printer_ip || '—')}</td>
+      <td>${r.printer_width}mm</td>
+      <td>${r.drawer ? '✓' : ''}</td>
+      <td><button class="btn danger" data-del="${r.id}" data-name="${esc(r.name)}">✕</button></td>
+    </tr>`).join('') || `<tr><td colspan="6" class="muted">No tills yet.</td></tr>`;
+  document.querySelectorAll('#t-rows tr[data-id]').forEach((tr) => {
     tr.onclick = () => {
-      const b = rows.find((r) => r.id === Number(tr.dataset.id));
-      if (!b) return;
-      $('#b-id').value = b.id; $('#b-name').value = b.name; $('#b-address').value = b.address || '';
-      $('#b-phone').value = b.phone || ''; $('#b-kra').value = b.kra_pin || '';
-      $('#b-vat').checked = !!b.vat_registered; $('#b-def').checked = !!b.is_default;
-      $('#b-form-title').textContent = t('save');
-      $('#b-clear').classList.remove('hidden');
+      const r = rows.find((x) => x.id === Number(tr.dataset.id));
+      if (!r) return;
+      $('#t-id').value = r.id; $('#t-name').value = r.name;
+      $('#t-loc').value = r.location_id || '';
+      $('#t-printer').value = r.printer_ip || '';
+      $('#t-width').value = r.printer_width;
+      $('#t-drawer').checked = !!r.drawer;
+      $('#t-form-title').textContent = t('save');
+      $('#t-clear').classList.remove('hidden');
     };
   });
-  document.querySelectorAll('#b-rows [data-del]').forEach((b) => {
+  document.querySelectorAll('#t-rows [data-del]').forEach((b) => {
     b.onclick = async (e) => {
       e.stopPropagation();
-      if (!confirm(`Delete branch "${b.dataset.name}"?`)) return;
+      if (!confirm(`Remove till "${b.dataset.name}"?`)) return;
       try {
-        await api(`/api/branches/${b.dataset.del}`, { method: 'DELETE' });
-        loadBranches();
-      } catch (err) { toast($('#b-msg'), err.message, false); }
+        await api(`/api/registers/${b.dataset.del}`, { method: 'DELETE' });
+        loadTills();
+      } catch (err) { toast($('#t-msg'), err.message, false); }
     };
   });
 }
+
+$('#t-clear').onclick = () => {
+  $('#t-id').value = ''; $('#t-name').value = ''; $('#t-printer').value = '';
+  $('#t-width').value = '80'; $('#t-drawer').checked = false;
+  $('#t-form-title').textContent = t('add_till');
+  $('#t-clear').classList.add('hidden');
+};
+
+$('#t-save').onclick = async () => {
+  const id = $('#t-id').value;
+  const body = {
+    name: $('#t-name').value,
+    location_id: $('#t-loc').value ? Number($('#t-loc').value) : null,
+    printerIp: $('#t-printer').value,
+    printerWidth: $('#t-width').value,
+    drawer: $('#t-drawer').checked
+  };
+  try {
+    if (id) await api(`/api/registers/${id}`, { method: 'PUT', body });
+    else await api('/api/registers', { method: 'POST', body });
+    toast($('#t-msg'), t('save_ok'), true);
+    $('#t-clear').onclick();
+    loadTills();
+  } catch (e) { toast($('#t-msg'), e.message, false); }
+};
+
+// ---------- staff ----------
+async function loadStaff() {
+  const rows = await api('/api/staff');
+  const brName = Object.fromEntries(BOOT.branches.map((b) => [b.id, b.name]));
+  $('#s-branch').innerHTML = `<option value="">All branches</option>` + BOOT.branches
+    .map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  $('#s-loc').innerHTML = `<option value="">Any</option>` + BOOT.locations
+    .map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
+  $('#s-till').innerHTML = `<option value="">Any</option>` + BOOT.registers
+    .map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join('');
+  $('#s-rows').innerHTML = rows.map((s) => `
+    <tr class="clickable" data-id="${s.id}">
+      <td>${esc(s.name)}</td>
+      <td><span class="pill ${s.role === 'owner' ? 'g' : ''}">${t(roleKey(s.role))}</span></td>
+      <td>${esc(s.location_name || '')}</td>
+      <td>${esc(s.register_name || '')}</td>
+      <td class="muted small">${s.last_login_at ? new Date(s.last_login_at).toLocaleString() : '—'}</td>
+      <td>${s.active ? '<span class="pill g">✓</span>' : '<span class="pill r">off</span>'}</td>
+      <td>${ME.role === 'owner' && s.role !== 'owner' ? `<button class="btn small" data-perm="${s.id}" data-name="${esc(s.name)}">Permissions</button>` : ''}</td>
+    </tr>`).join('');
+  document.querySelectorAll('#s-rows tr[data-id]').forEach((tr) => {
+    tr.onclick = () => {
+      const s = rows.find((r) => r.id === Number(tr.dataset.id));
+      if (!s) return;
+      $('#s-id').value = s.id; $('#s-name').value = s.name; $('#s-role').value = s.role;
+      $('#s-branch').value = s.branch_id || '';
+      $('#s-loc').value = s.location_id || '';
+      $('#s-till').value = s.register_id || '';
+      $('#s-pin').value = ''; $('#s-active').checked = !!s.active;
+      $('#s-form-title').textContent = t('save');
+      $('#s-clear').classList.remove('hidden');
+    };
+  });
+  document.querySelectorAll('#s-rows [data-perm]').forEach((b) => {
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      await openPermEditor(Number(b.dataset.perm), b.dataset.name);
+    };
+  });
+}
+
+async function openPermEditor(userId, userName) {
+  const card = $('#s-perm-card');
+  card.classList.remove('hidden');
+  $('#s-perm-title').textContent = `Permissions — ${userName}`;
+  const r = await api(`/api/staff/${userId}/permissions`);
+  const groups = [
+    ['Sales & discounts', ['sales.discount', 'sales.void', 'sales.refund', 'sales.age_override']],
+    ['Stock', ['stock.view', 'stock.adjust', 'stocktake.manage', 'stocktake.approve']],
+    ['Catalogue', ['products.manage', 'categories.manage']],
+    ['Money & finance', ['expenses.manage', 'reports.sensitive']],
+    ['People & structure', ['staff.manage', 'customers.manage', 'deni.approve', 'branches.manage', 'locations.manage', 'registers.manage']],
+    ['Insight', ['reports.view', 'audit.view']]
+  ];
+  const granted = new Set(r.perms);
+  const box = (perm) => `<label class="check"><input type="checkbox" class="permbox" value="${perm}" ${granted.has(perm) ? 'checked' : ''}> <span class="mono small">${perm}</span></label>`;
+  $('#s-perms').innerHTML = groups.map(([g, ps]) =>
+    `<div style="grid-column:span 3"><div class="muted small" style="margin-top:8px;font-weight:600">${g}</div>${ps.map(box).join('')}</div>`).join('');
+  $('#s-perm-save').onclick = async () => {
+    try {
+      for (const cb of document.querySelectorAll('.permbox')) {
+        await api(`/api/staff/${userId}/permissions`, {
+          method: 'POST', body: { permission: cb.value, allowed: cb.checked }
+        });
+      }
+      toast($('#s-perm-msg'), t('save_ok'), true);
+    } catch (e) { toast($('#s-perm-msg'), e.message, false); }
+  };
+  card.scrollIntoView({ behavior: 'smooth' });
+}
+
+$('#s-clear').onclick = () => {
+  $('#s-id').value = ''; $('#s-name').value = ''; $('#s-pin').value = '';
+  $('#s-role').value = 'cashier'; $('#s-branch').value = ''; $('#s-loc').value = ''; $('#s-till').value = '';
+  $('#s-active').checked = true;
+  $('#s-form-title').textContent = t('add');
+  $('#s-clear').classList.add('hidden');
+  $('#s-perm-card').classList.add('hidden');
+};
+
+$('#s-save').onclick = async () => {
+  const id = $('#s-id').value;
+  const body = {
+    name: $('#s-name').value, role: $('#s-role').value,
+    branch_id: $('#s-branch').value ? Number($('#s-branch').value) : null,
+    location_id: $('#s-loc').value ? Number($('#s-loc').value) : null,
+    register_id: $('#s-till').value ? Number($('#s-till').value) : null,
+    active: $('#s-active').checked
+  };
+  const pin = $('#s-pin').value.trim();
+  if (pin) body.pin = pin;
+  if (!id && !pin) return toast($('#s-msg'), 'PIN is required for a new user.', false);
+  try {
+    if (id) await api(`/api/staff/${id}`, { method: 'PUT', body });
+    else await api('/api/staff', { method: 'POST', body });
+    toast($('#s-msg'), t('save_ok'), true);
+    $('#s-clear').onclick();
+    loadStaff();
+  } catch (e) { toast($('#s-msg'), e.message, false); }
+};
+
+// ---------- layout: locations + branches ----------
+async function loadLayout() {
+  const showLoc = BOOT.caps.multi_location;
+  const showBr = BOOT.caps.multi_branch;
+  $('#lay-empty').style.display = (showLoc || showBr) ? 'none' : '';
+  $('#lay-loc-wrap').style.display = showLoc ? '' : 'none';
+  $('#lay-br-wrap').style.display = showBr ? '' : 'none';
+  if (!showLoc && !showBr) return;
+  if (showLoc) {
+    const rows = await api('/api/locations');
+    $('#l-rows').innerHTML = rows.map((l) => `
+      <tr class="clickable" data-id="${l.id}">
+        <td>${esc(l.name)} ${l.is_warehouse ? '<span class="pill">warehouse</span>' : ''} ${l.is_default ? '<span class="pill g">main</span>' : ''}</td>
+        <td>${esc(l.branchName)}</td><td>${esc(l.address || '')}</td>
+        <td>${l.registers}</td><td>${l.stockLines}</td>
+        <td>${l.is_default ? '' : `<button class="btn danger" data-del="${l.id}" data-name="${esc(l.name)}">✕</button>`}</td>
+      </tr>`).join('');
+    document.querySelectorAll('#l-rows tr[data-id]').forEach((tr) => {
+      tr.onclick = () => {
+        const l = rows.find((r) => r.id === Number(tr.dataset.id));
+        if (!l) return;
+        $('#l-id').value = l.id; $('#l-name').value = l.name;
+        $('#l-address').value = l.address || ''; $('#l-phone').value = l.phone || '';
+        $('#l-wh').checked = !!l.is_warehouse;
+        $('#l-form-title').textContent = t('save');
+        $('#l-clear').classList.remove('hidden');
+      };
+    });
+    document.querySelectorAll('#l-rows [data-del]').forEach((b) => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Delete "${b.dataset.name}"?`)) return;
+        try {
+          await api(`/api/locations/${b.dataset.del}`, { method: 'DELETE' });
+          loadLayout();
+        } catch (err) { toast($('#l-msg'), err.message, false); }
+      };
+    });
+  }
+  if (showBr) {
+    const rows = await api('/api/branches');
+    $('#b-rows').innerHTML = rows.map((b) => `
+      <tr class="clickable" data-id="${b.id}">
+        <td class="mono">${esc(b.code)}</td><td>${esc(b.name)}</td>
+        <td>${b.vat_registered ? '<span class="pill g">VAT</span>' : '—'}</td>
+        <td>${b.is_default ? '<span class="pill g">default</span>' : ''}</td>
+        <td>${fmt(b.salesToday.t)}</td>
+        <td>${b.is_default ? '' : `<button class="btn danger" data-del="${b.id}" data-name="${esc(b.name)}">✕</button>`}</td>
+      </tr>`).join('');
+    document.querySelectorAll('#b-rows tr[data-id]').forEach((tr) => {
+      tr.onclick = () => {
+        const b = rows.find((r) => r.id === Number(tr.dataset.id));
+        if (!b) return;
+        $('#b-id').value = b.id; $('#b-name').value = b.name; $('#b-address').value = b.address || '';
+        $('#b-phone').value = b.phone || ''; $('#b-kra').value = b.kra_pin || '';
+        $('#b-vat').checked = !!b.vat_registered; $('#b-def').checked = !!b.is_default;
+        $('#b-form-title').textContent = t('save');
+        $('#b-clear').classList.remove('hidden');
+      };
+    });
+    document.querySelectorAll('#b-rows [data-del]').forEach((b) => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Delete branch "${b.dataset.name}"?`)) return;
+        try {
+          await api(`/api/branches/${b.dataset.del}`, { method: 'DELETE' });
+          loadLayout();
+        } catch (err) { toast($('#b-msg'), err.message, false); }
+      };
+    });
+  }
+}
+
+$('#l-clear').onclick = () => {
+  $('#l-id').value = '';
+  ['l-name', 'l-address', 'l-phone'].forEach((id) => $(`#${id}`).value = '');
+  $('#l-wh').checked = false;
+  $('#l-form-title').textContent = t('add_location');
+  $('#l-clear').classList.add('hidden');
+};
+
+$('#l-save').onclick = async () => {
+  const id = $('#l-id').value;
+  const body = {
+    name: $('#l-name').value, address: $('#l-address').value,
+    phone: $('#l-phone').value, isWarehouse: $('#l-wh').checked
+  };
+  try {
+    if (id) await api(`/api/locations/${id}`, { method: 'PUT', body });
+    else await api('/api/locations', { method: 'POST', body });
+    toast($('#l-msg'), t('save_ok'), true);
+    $('#l-clear').onclick();
+    loadLayout();
+  } catch (e) { toast($('#l-msg'), e.message, false); }
+};
 
 $('#b-clear').onclick = () => {
   $('#b-id').value = '';
   ['b-name', 'b-address', 'b-phone', 'b-kra'].forEach((id) => $(`#${id}`).value = '');
   $('#b-vat').checked = false; $('#b-def').checked = false;
-  $('#b-form-title').textContent = t('add');
+  $('#b-form-title').textContent = t('add_branch');
   $('#b-clear').classList.add('hidden');
 };
 
@@ -451,67 +816,46 @@ $('#b-save').onclick = async () => {
     else await api('/api/branches', { method: 'POST', body });
     toast($('#b-msg'), t('save_ok'), true);
     $('#b-clear').onclick();
-    loadBranches();
+    loadLayout();
   } catch (e) { toast($('#b-msg'), e.message, false); }
 };
 
-// ---------- staff ----------
-async function loadStaff() {
-  const rows = await api('/api/staff');
-  const brName = Object.fromEntries(BRANCHES.map((b) => [b.id, b.name]));
-  $('#s-rows').innerHTML = rows.map((s) => `
-    <tr class="clickable" data-id="${s.id}">
-      <td>${esc(s.name)}</td><td><span class="pill ${s.role === 'owner' ? 'g' : ''}">${t(roleKey(s.role))}</span></td>
-      <td>${s.branch_id ? esc(brName[s.branch_id] || s.branch_name || '') : t('all_branches')}</td>
-      <td class="muted small">${s.last_login_at ? new Date(s.last_login_at).toLocaleString() : '—'}</td>
-      <td>${s.active ? '<span class="pill g">✓</span>' : '<span class="pill r">off</span>'}</td>
-    </tr>`).join('');
-  document.querySelectorAll('#s-rows tr[data-id]').forEach((tr) => {
-    tr.onclick = () => {
-      const s = rows.find((r) => r.id === Number(tr.dataset.id));
-      if (!s) return;
-      $('#s-id').value = s.id; $('#s-name').value = s.name; $('#s-role').value = s.role;
-      $('#s-branch').value = s.branch_id || '';
-      $('#s-pin').value = ''; $('#s-active').checked = !!s.active;
-      $('#s-form-title').textContent = t('save');
-      $('#s-clear').classList.remove('hidden');
-    };
-  });
-}
-
-$('#s-clear').onclick = () => {
-  $('#s-id').value = ''; $('#s-name').value = ''; $('#s-pin').value = '';
-  $('#s-role').value = 'cashier'; $('#s-branch').value = ''; $('#s-active').checked = true;
-  $('#s-form-title').textContent = t('add');
-  $('#s-clear').classList.add('hidden');
-};
-
-$('#s-save').onclick = async () => {
-  const id = $('#s-id').value;
-  const body = {
-    name: $('#s-name').value, role: $('#s-role').value,
-    branch_id: $('#s-branch').value ? Number($('#s-branch').value) : null,
-    active: $('#s-active').checked
-  };
-  const pin = $('#s-pin').value.trim();
-  if (pin) body.pin = pin;
-  try {
-    if (id) await api(`/api/staff/${id}`, { method: 'PUT', body });
-    else await api('/api/staff', { method: 'POST', body });
-    toast($('#s-msg'), t('save_ok'), true);
-    $('#s-clear').onclick();
-    loadStaff();
-  } catch (e) { toast($('#s-msg'), e.message, false); }
-};
-
-// ---------- settings ----------
+// ---------- settings + features ----------
 async function loadSettings() {
   const s = await api('/api/settings');
-  const b = s.business || {}, tx = s.tax || {};
+  const b = s.business || {}, tx = s.tax || {}, rc = s.receipt || {};
   $('#st-name').value = b.name || ''; $('#st-phone').value = b.phone || '';
   $('#st-address').value = b.address || ''; $('#st-kra').value = b.kraPin || '';
-  $('#st-vatrate').value = tx.vatRate ?? 16; $('#st-footer').value = b.receiptFooter || '';
-  $('#st-vatreg').checked = !!b.vatRegistered;
+  $('#st-currency').value = b.currency || 'KES'; $('#st-symbol').value = b.symbol || 'Ksh';
+  $('#st-vatrate').value = tx.vatRate ?? 16; $('#st-footer').value = rc.footer || '';
+  $('#st-vatreg').checked = !!tx.vatRegistered;
+  $('#st-lang').value = rc.language || 'en';
+  if (ME.role === 'owner') {
+    const feats = await api('/api/capabilities');
+    $('#st-feat-card').classList.remove('hidden');
+    $('#st-feats').innerHTML = feats.map((f) => `
+      <label class="check feat-row">
+        <input type="checkbox" data-feat="${f.id}" ${f.enabled ? 'checked' : ''}>
+        <span style="flex:1">
+          <b>${esc(OP.lang() === 'sw' ? f.sw : f.label)}</b>
+          <span class="muted small" style="display:block">${esc(OP.lang() === 'sw' ? f.swDesc : f.desc)}</span>
+        </span>
+      </label>`).join('');
+    document.querySelectorAll('[data-feat]').forEach((cb) => {
+      cb.onchange = async () => {
+        try {
+          await api('/api/capabilities', { method: 'POST', body: { capability: cb.dataset.feat, enabled: cb.checked } });
+          BOOT = await api('/api/bootstrap');
+          drawTabs();
+        } catch (e) {
+          cb.checked = !cb.checked;
+          alert(e.message);
+        }
+      };
+    });
+  } else {
+    $('#st-feat-card').classList.add('hidden');
+  }
 }
 
 $('#st-save').onclick = async () => {
@@ -522,9 +866,10 @@ $('#st-save').onclick = async () => {
         business: {
           name: $('#st-name').value, phone: $('#st-phone').value,
           address: $('#st-address').value, kraPin: $('#st-kra').value,
-          vatRegistered: $('#st-vatreg').checked, receiptFooter: $('#st-footer').value
+          currency: $('#st-currency').value, symbol: $('#st-symbol').value
         },
-        tax: { vatRate: Number($('#st-vatrate').value) || 16 }
+        tax: { vatRate: Number($('#st-vatrate').value) || 16, vatRegistered: $('#st-vatreg').checked },
+        receipt: { footer: $('#st-footer').value, language: $('#st-lang').value }
       }
     });
     toast($('#st-msg'), t('save_ok'), true);
@@ -539,7 +884,7 @@ async function loadAudit() {
     <td>${esc(a.userName)}</td><td class="mono small">${esc(a.action)}</td>
     <td class="small">${esc(a.entity)}${a.entity_id ? ' #' + esc(a.entity_id) : ''}</td>
     <td class="small muted">${esc(JSON.stringify(a.detail).slice(0, 100))}</td></tr>`).join('')
-    || `<tr><td colspan="5" class="muted">${t('no_rows')}</td></tr>`;
+    || `<tr><td colspan="5" class="muted">Nothing here yet.</td></tr>`;
 }
 
 $('#a-verify').onclick = async () => {
@@ -552,20 +897,11 @@ $('#a-verify').onclick = async () => {
   } catch (e) { toast(el, e.message, false); }
 };
 
-// ---------- shared selects ----------
 function fillCatSelects() {
-  const opts = `<option value="">—</option>` + CATEGORIES.map((c) =>
+  $('#p-cat').innerHTML = `<option value="">—</option>` + CATEGORIES.map((c) =>
     `<option value="${c.id}">${esc(c.name)}</option>`).join('');
-  $('#p-cat').innerHTML = opts;
-}
-function fillBranchSelects() {
-  $('#s-branch').innerHTML = `<option value="">${t('all_branches')}</option>` + BRANCHES
-    .map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
 }
 
-document.querySelectorAll('#tabs button').forEach((b) => {
-  b.onclick = () => { selectTab(b.dataset.tab); location.hash = b.dataset.tab; };
-});
 window.addEventListener('hashchange', () => selectTab(location.hash.replace('#', '')));
 
 boot();

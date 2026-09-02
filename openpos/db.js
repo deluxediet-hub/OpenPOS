@@ -24,6 +24,20 @@ function open() {
   return db;
 }
 
+function tableExists(d, name) {
+  return !!d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+}
+
+function colExists(d, table, col) {
+  return d.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col);
+}
+
+function addCol(d, table, col, def) {
+  if (tableExists(d, table) && !colExists(d, table, col)) {
+    d.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+  }
+}
+
 function migrate(d) {
   d.exec(`
   CREATE TABLE IF NOT EXISTS settings (
@@ -33,6 +47,7 @@ function migrate(d) {
 
   CREATE TABLE IF NOT EXISTS branches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
     code TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     address TEXT NOT NULL DEFAULT '',
@@ -41,14 +56,18 @@ function migrate(d) {
     vat_registered INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
     is_default INTEGER NOT NULL DEFAULT 0,
+    settings TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
     name TEXT NOT NULL UNIQUE,
     role TEXT NOT NULL CHECK(role IN ('owner','manager','cashier','staff')),
     branch_id INTEGER REFERENCES branches(id),
+    location_id INTEGER,
+    register_id INTEGER,
     pin_hash TEXT NOT NULL,
     salt TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
@@ -69,9 +88,25 @@ function migrate(d) {
     locked_until INTEGER NOT NULL DEFAULT 0
   );
 
-  CREATE TABLE IF NOT EXISTS terminals (
+  CREATE TABLE IF NOT EXISTS locations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
     branch_id INTEGER NOT NULL REFERENCES branches(id),
+    name TEXT NOT NULL,
+    address TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    is_warehouse INTEGER NOT NULL DEFAULT 0,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_locations_branch ON locations(branch_id);
+
+  CREATE TABLE IF NOT EXISTS registers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
+    branch_id INTEGER NOT NULL REFERENCES branches(id),
+    location_id INTEGER,
     name TEXT NOT NULL,
     printer_ip TEXT NOT NULL DEFAULT '',
     printer_width TEXT NOT NULL DEFAULT '80',
@@ -79,9 +114,38 @@ function migrate(d) {
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT ''
   );
+  CREATE INDEX IF NOT EXISTS idx_registers_branch ON registers(branch_id);
+
+  CREATE TABLE IF NOT EXISTS departments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
+    branch_id INTEGER NOT NULL REFERENCES branches(id),
+    name TEXT NOT NULL,
+    name_sw TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT ''
+  );
+
+  CREATE TABLE IF NOT EXISTS business_capabilities (
+    business_id INTEGER NOT NULL DEFAULT 1,
+    capability TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    enabled_at TEXT,
+    enabled_by INTEGER,
+    PRIMARY KEY (business_id, capability)
+  );
+
+  CREATE TABLE IF NOT EXISTS user_permissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    permission TEXT NOT NULL,
+    allowed INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(user_id, permission)
+  );
 
   CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
     branch_id INTEGER REFERENCES branches(id),
     parent_id INTEGER,
     name TEXT NOT NULL,
@@ -93,6 +157,7 @@ function migrate(d) {
 
   CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
     branch_id INTEGER REFERENCES branches(id),
     sku TEXT NOT NULL DEFAULT '',
     barcode TEXT NOT NULL DEFAULT '',
@@ -134,18 +199,20 @@ function migrate(d) {
 
   CREATE TABLE IF NOT EXISTS stock (
     product_id INTEGER NOT NULL,
-    branch_id INTEGER NOT NULL,
+    location_id INTEGER NOT NULL,
     qty REAL NOT NULL DEFAULT 0,
-    PRIMARY KEY (product_id, branch_id)
+    PRIMARY KEY (product_id, location_id)
   );
-  CREATE INDEX IF NOT EXISTS idx_stock_branch ON stock(branch_id);
+  CREATE INDEX IF NOT EXISTS idx_stock_branch ON stock(location_id);
 
   CREATE TABLE IF NOT EXISTS stock_moves (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     product_id INTEGER NOT NULL,
     branch_id INTEGER NOT NULL,
+    location_id INTEGER,
     qty REAL NOT NULL,
     type TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
     ref TEXT NOT NULL DEFAULT '',
     batch_id INTEGER,
     user_id INTEGER,
@@ -158,13 +225,14 @@ function migrate(d) {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     product_id INTEGER NOT NULL,
     branch_id INTEGER NOT NULL,
+    location_id INTEGER,
     batch_no TEXT NOT NULL DEFAULT '',
     expiry_date TEXT,
     qty REAL NOT NULL DEFAULT 0,
     cost INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
   );
-  CREATE INDEX IF NOT EXISTS idx_batches_fefo ON batches(product_id, branch_id, expiry_date);
+  CREATE INDEX IF NOT EXISTS idx_batches_fefo ON batches(product_id, location_id, expiry_date);
 
   CREATE TABLE IF NOT EXISTS transfers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -191,6 +259,7 @@ function migrate(d) {
 
   CREATE TABLE IF NOT EXISTS suppliers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
     branch_id INTEGER REFERENCES branches(id),
     name TEXT NOT NULL,
     phone TEXT NOT NULL DEFAULT '',
@@ -247,6 +316,8 @@ function migrate(d) {
   CREATE TABLE IF NOT EXISTS sales (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     branch_id INTEGER NOT NULL REFERENCES branches(id),
+    location_id INTEGER,
+    register_id INTEGER,
     terminal TEXT NOT NULL DEFAULT '',
     order_no INTEGER NOT NULL,
     invoice_no TEXT NOT NULL,
@@ -348,6 +419,7 @@ function migrate(d) {
 
   CREATE TABLE IF NOT EXISTS customers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
     branch_id INTEGER REFERENCES branches(id),
     name TEXT NOT NULL,
     phone TEXT NOT NULL DEFAULT '',
@@ -473,6 +545,78 @@ function migrate(d) {
     at TEXT NOT NULL
   );
   `);
+
+  // ---- additive migrations (pre-Phase-2 dev databases) ---------------------
+  // tenant hook columns (Phase 33 = many businesses in one DB)
+  for (const [t, col] of [
+    ['branches', 'business_id'], ['users', 'business_id'], ['categories', 'business_id'],
+    ['products', 'business_id'], ['suppliers', 'business_id'], ['customers', 'business_id'],
+    ['locations', 'business_id'], ['registers', 'business_id'], ['departments', 'business_id']
+  ]) addCol(d, t, col, 'INTEGER NOT NULL DEFAULT 1');
+  addCol(d, 'branches', 'settings', "TEXT NOT NULL DEFAULT '{}'");
+  addCol(d, 'users', 'location_id', 'INTEGER');
+  addCol(d, 'users', 'register_id', 'INTEGER');
+  addCol(d, 'stock_moves', 'location_id', 'INTEGER');
+  addCol(d, 'stock_moves', "reason", "TEXT NOT NULL DEFAULT ''");
+  addCol(d, 'sales', 'location_id', 'INTEGER');
+  addCol(d, 'sales', 'register_id', 'INTEGER');
+  addCol(d, 'batches', 'location_id', 'INTEGER');
+
+  // terminals → registers (Phase 2 vocabulary)
+  if (tableExists(d, 'terminals') && !tableExists(d, 'registers')) {
+    d.exec('ALTER TABLE terminals RENAME TO registers');
+  }
+  addCol(d, 'registers', 'location_id', 'INTEGER');
+
+  // every branch gets its default location ("Main Store")
+  const now = new Date().toISOString();
+  for (const b of d.prepare('SELECT id FROM branches').all()) {
+    const has = d.prepare('SELECT id FROM locations WHERE branch_id = ?').get(b.id);
+    if (!has) {
+      d.prepare(
+        `INSERT INTO locations (branch_id, name, is_warehouse, is_default, active, created_at)
+         VALUES (?, 'Main Store', 0, 1, 1, ?)`
+      ).run(b.id, now);
+    }
+  }
+  // bind orphan registers to their branch's default location
+  d.exec(
+    `UPDATE registers SET location_id = (
+       SELECT l.id FROM locations l WHERE l.branch_id = registers.branch_id AND l.is_default = 1 LIMIT 1
+     ) WHERE location_id IS NULL`
+  );
+
+  // stock: branch-scoped → location-scoped
+  if (tableExists(d, 'stock') && colExists(d, 'stock', 'branch_id')) {
+    d.exec('ALTER TABLE stock RENAME TO stock_old');
+    d.exec(
+      `CREATE TABLE stock (
+         product_id INTEGER NOT NULL,
+         location_id INTEGER NOT NULL,
+         qty REAL NOT NULL DEFAULT 0,
+         PRIMARY KEY (product_id, location_id)
+       )`
+    );
+    d.exec(
+      `INSERT INTO stock (product_id, location_id, qty)
+       SELECT product_id,
+              (SELECT l.id FROM locations l WHERE l.branch_id = stock_old.branch_id AND l.is_default = 1 LIMIT 1),
+              qty
+         FROM stock_old
+        WHERE (SELECT l.id FROM locations l WHERE l.branch_id = stock_old.branch_id AND l.is_default = 1 LIMIT 1) IS NOT NULL`
+    );
+    d.exec('DROP TABLE stock_old');
+  }
+  // backfill move location refs from branch defaults
+  d.exec(
+    `UPDATE stock_moves SET location_id = (
+       SELECT l.id FROM locations l WHERE l.branch_id = stock_moves.branch_id AND l.is_default = 1 LIMIT 1
+     ) WHERE location_id IS NULL`
+  );
+
+  // capability rows (R-C3: data, not deployment)
+  const caps = require('./lib/capabilities');
+  caps.ensureCapabilityRows(d);
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------
