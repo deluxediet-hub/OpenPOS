@@ -188,6 +188,86 @@ function migrate(d) {
   CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);
   CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
 
+  CREATE TABLE IF NOT EXISTS variants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    name TEXT NOT NULL DEFAULT '',
+    axes TEXT NOT NULL DEFAULT '{}',
+    axes_key TEXT NOT NULL DEFAULT '{}',
+    sku TEXT NOT NULL DEFAULT '',
+    price INTEGER,
+    cost INTEGER,
+    wholesale_price INTEGER,
+    member_price INTEGER,
+    tax_type TEXT,
+    kra_item_code TEXT,
+    meta TEXT NOT NULL DEFAULT '{}',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(product_id, axes_key)
+  );
+  CREATE INDEX IF NOT EXISTS idx_variants_product ON variants(product_id);
+
+  CREATE TABLE IF NOT EXISTS variant_barcodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
+    variant_id INTEGER NOT NULL REFERENCES variants(id),
+    barcode TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'unit' CHECK(kind IN ('unit','pack')),
+    pack_id INTEGER,
+    label TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(barcode)
+  );
+  CREATE INDEX IF NOT EXISTS idx_vbarcodes_variant ON variant_barcodes(variant_id);
+
+  CREATE TABLE IF NOT EXISTS packs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
+    variant_id INTEGER NOT NULL REFERENCES variants(id),
+    name TEXT NOT NULL,
+    multiple INTEGER NOT NULL DEFAULT 1,
+    unit TEXT NOT NULL DEFAULT '',
+    price INTEGER NOT NULL DEFAULT 0,
+    cost INTEGER NOT NULL DEFAULT 0,
+    description TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    UNIQUE(variant_id, name)
+  );
+  CREATE INDEX IF NOT EXISTS idx_packs_variant ON packs(variant_id);
+
+  CREATE TABLE IF NOT EXISTS serials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
+    variant_id INTEGER NOT NULL REFERENCES variants(id),
+    serial_no TEXT NOT NULL,
+    location_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'in_stock' CHECK(status IN ('in_stock','sold','returned','writeoff')),
+    sale_id INTEGER,
+    customer_id INTEGER,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE(variant_id, serial_no)
+  );
+  CREATE INDEX IF NOT EXISTS idx_serials_variant ON serials(variant_id, status);
+
+  CREATE TABLE IF NOT EXISTS attribute_defs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
+    key TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    label_sw TEXT NOT NULL DEFAULT '',
+    type TEXT NOT NULL DEFAULT 'text' CHECK(type IN ('text','number','select','boolean')),
+    options TEXT NOT NULL DEFAULT '',
+    applies_to TEXT NOT NULL DEFAULT 'variant' CHECK(applies_to IN ('product','variant')),
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    UNIQUE(business_id, key)
+  );
+
   CREATE TABLE IF NOT EXISTS price_overrides (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     product_id INTEGER NOT NULL REFERENCES products(id),
@@ -198,10 +278,10 @@ function migrate(d) {
   );
 
   CREATE TABLE IF NOT EXISTS stock (
-    product_id INTEGER NOT NULL,
+    variant_id INTEGER NOT NULL,
     location_id INTEGER NOT NULL,
     qty REAL NOT NULL DEFAULT 0,
-    PRIMARY KEY (product_id, location_id)
+    PRIMARY KEY (variant_id, location_id)
   );
   CREATE INDEX IF NOT EXISTS idx_stock_branch ON stock(location_id);
 
@@ -617,6 +697,71 @@ function migrate(d) {
   // capability rows (R-C3: data, not deployment)
   const caps = require('./lib/capabilities');
   caps.ensureCapabilityRows(d);
+
+  // ---- Phase 3: variants engine (additive; R-P1 stock lives on the variant) --
+  addCol(d, 'products', 'track_serials', 'INTEGER NOT NULL DEFAULT 0');
+  addCol(d, 'products', 'supplier_id', 'INTEGER');
+  addCol(d, 'products', 'reorder_level', 'INTEGER NOT NULL DEFAULT 0');
+  addCol(d, 'stock_moves', 'variant_id', 'INTEGER');
+  addCol(d, 'batches', 'variant_id', 'INTEGER');
+
+  // every product gets exactly one implicit variant (flat Day-1/2 products become these)
+  {
+    const now = new Date().toISOString();
+    const prods = d.prepare('SELECT id, sku, barcode, created_at FROM products').all();
+    const insV = d.prepare(
+      `INSERT OR IGNORE INTO variants (product_id, name, axes, axes_key, sku, active, created_at, updated_at)
+       VALUES (?, '', '{}', '{}', ?, 1, ?, ?)`
+    );
+    const insB = d.prepare(
+      `INSERT OR IGNORE INTO variant_barcodes (variant_id, barcode, kind, active) VALUES (?, ?, 'unit', 1)`
+    );
+    for (const p of prods) {
+      const created = d.prepare('SELECT id FROM variants WHERE product_id = ? AND axes_key = \'{}\'').get(p.id);
+      let vId = created && created.id;
+      if (!vId) {
+        vId = insV.run(p.id, p.sku || '', p.created_at || now, p.created_at || now).lastInsertRowid;
+      }
+      if (p.barcode) insB.run(vId, p.barcode);
+    }
+  }
+
+  // stock: product-scoped (pre-Phase-3 dev DBs) → variant-scoped
+  if (tableExists(d, 'stock') && colExists(d, 'stock', 'product_id')) {
+    d.exec('ALTER TABLE stock RENAME TO stock_old');
+    d.exec(
+      `CREATE TABLE stock (
+         variant_id INTEGER NOT NULL,
+         location_id INTEGER NOT NULL,
+         qty REAL NOT NULL DEFAULT 0,
+         PRIMARY KEY (variant_id, location_id)
+       )`
+    );
+    d.exec(
+      `INSERT INTO stock (variant_id, location_id, qty)
+       SELECT (SELECT v.id FROM variants v WHERE v.product_id = stock_old.product_id
+               AND v.axes_key = '{}' ORDER BY v.id LIMIT 1),
+              stock_old.location_id, stock_old.qty
+         FROM stock_old
+        WHERE (SELECT v.id FROM variants v WHERE v.product_id = stock_old.product_id
+               AND v.axes_key = '{}' ORDER BY v.id LIMIT 1) IS NOT NULL`
+    );
+    d.exec('DROP TABLE stock_old');
+  }
+
+  // backfill variant refs on moves & batches from the implicit variant
+  d.exec(
+    `UPDATE stock_moves SET variant_id = (
+       SELECT v.id FROM variants v WHERE v.product_id = stock_moves.product_id
+         AND v.axes_key = '{}' ORDER BY v.id LIMIT 1
+     ) WHERE variant_id IS NULL`
+  );
+  d.exec(
+    `UPDATE batches SET variant_id = (
+       SELECT v.id FROM variants v WHERE v.product_id = batches.product_id
+         AND v.axes_key = '{}' ORDER BY v.id LIMIT 1
+     ) WHERE variant_id IS NULL`
+  );
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

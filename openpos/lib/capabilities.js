@@ -122,8 +122,10 @@ function getSuggestions(d) {
   if (!caps.purchasing) {
     const n = d
       .prepare(
-        `SELECT COUNT(DISTINCT s.product_id) AS n
-           FROM stock s JOIN products p ON p.id = s.product_id
+        `SELECT COUNT(DISTINCT v.product_id) AS n
+           FROM stock s
+           JOIN variants v ON v.id = s.variant_id
+           JOIN products p ON p.id = v.product_id
           WHERE p.active = 1 AND s.qty <= 0`
       )
       .get().n;

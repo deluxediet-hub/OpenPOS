@@ -343,7 +343,7 @@ Hook points (core exposes these; modules plug in):
 | Business setup wizard, settings (business/tax) | ✓ Phase 2 extends (branch settings, receipt settings, departments, warehouses) |
 | Branches, terminals | ✓ becomes Branch → Location → Register (Day 2 migration: each branch auto-gets "Main Store", terminals bind to it) |
 | Users, 4 roles, PIN auth, lockout, sessions | ✓ Phase 2 adds fine-grained permission matrix + branch/location/register assignment |
-| Products (flat), categories | Phase 3 upgrades: variants, packs-as-model, multiple barcodes, UoM, attributes — additive migration (flat products → implicit variants) |
+| Products (flat), categories | ✓ **Phase 3 done (Day 3–4):** variants + canonical axes keys (flat product → implicit variant, additive migration), packs-as-model drawing from base stock, multiple barcodes per variant (unit/pack/custom), single `GET /api/scan/:barcode` resolving unit **and** pack (R-P3), serials, industry attribute defs in variant `meta` (R-C9), open-priced + fractional base units, CSV import/export, supplier link + reorder level. UoM kept simple (unit label + open-priced flag); full multi-UoM conversion deferred to Phase 6 pricing |
 | Stock + moves (opening/purchase/sale/adjust) | ✓ ledger pattern already correct; Phase 4 adds all move types, reason codes, batches per move, integrity job |
 | Audit hash chain + verify | ✓ R-A1/R-A4 done at core level |
 | Sales/payments schema | Phase 8 reshapes payments into the adapter engine (schema ready: `payments`, `mpesa_log`) |

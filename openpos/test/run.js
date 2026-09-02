@@ -344,7 +344,8 @@ function section(title) { console.log(`\n${title}`); }
 
   await test('stock adjust (owner): writes move + audit, updates location balance', async () => {
     const rice = d.prepare("SELECT p.id FROM products p WHERE p.name LIKE 'Rice%' AND p.active = 1").get();
-    const before = d.prepare('SELECT qty FROM stock WHERE product_id = ?').get(rice.id).qty;
+    const riv = d.prepare("SELECT v.id FROM variants v WHERE v.product_id = ? AND v.axes_key = '{}'").get(rice.id);
+    const before = d.prepare('SELECT qty FROM stock WHERE variant_id = ?').get(riv.id).qty;
     const r = await authJ({ path: '/api/stock/adjust', method: 'POST', body: { product_id: rice.id, qty: -4, reason: 'damage', note: 'burst bag' } });
     assert.strictEqual(r.status, 200);
     assert.strictEqual(r.body.newQty, before - 4);
@@ -414,7 +415,7 @@ function section(title) { console.log(`\n${title}`); }
     const del = await authJ({ path: `/api/products/${id}`, method: 'DELETE' });
     assert.strictEqual(del.status, 200);
     const after = await authJ('/api/products');
-    assert.strictEqual(after.body.find((x) => x.id === id && x.active === 1), undefined);
+    assert.strictEqual(after.body.find((x) => x.id === id), undefined); // soft-deleted products never listed
   });
 
   await test('branch CRUD (new branch auto-gets a Main Store location)', async () => {
@@ -497,6 +498,281 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(dbm.verifyAuditChain(d).ok, false);
     d.prepare('UPDATE audit_log SET detail = ? WHERE id = 1').run(orig);
     assert.strictEqual(dbm.verifyAuditChain(d).ok, true);
+  });
+
+  // ---------------- Phase 3: universal product engine ----------------
+  section('Phase 3 — product engine (variants, packs, barcodes, serials, batches, CSV)');
+
+  await test('migration: every product has an implicit variant; stock is variant-scoped', async () => {
+    const prods = d.prepare('SELECT id FROM products WHERE active = 1').all();
+    assert.ok(prods.length >= 10);
+    for (const p of prods) {
+      const v = d.prepare("SELECT * FROM variants WHERE product_id = ? AND axes_key = '{}'").get(p.id);
+      assert.ok(v, `product ${p.id} has implicit variant`);
+      assert.strictEqual(v.active, 1);
+    }
+    // sample stock (24 each) migrated intact — use a product no earlier test touched
+    const tea = d.prepare("SELECT p.id FROM products p WHERE p.name LIKE 'Black Tea%'").get();
+    const tv = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(tea.id).id;
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ?').get(tv).qty, 24);
+    const apiRows = (await authJ('/api/products')).body;
+    assert.strictEqual(apiRows.find((x) => x.id === tea.id).stock_qty, 24);
+  });
+
+  await test('scan: one call resolves barcode → variant → stock → price (R-P3)', async () => {
+    const rows = (await authJ('/api/products')).body;
+    const first = rows.find((x) => x.barcode);
+    const r = await authJ(`/api/scan/${first.barcode}`);
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.product.name, first.name);
+    assert.strictEqual(r.body.type, 'unit');
+    assert.strictEqual(r.body.stock_qty, first.stock_qty);
+    assert.strictEqual(r.body.price, first.price);
+    assert.ok(r.body.variant.id);
+    const miss = await authJ('/api/scan/0000000000000');
+    assert.strictEqual(miss.status, 404);
+  });
+
+  await test('dress: variants with own barcodes & per-variant stock', async () => {
+    const p = await authJ({
+      path: '/api/products', method: 'POST',
+      body: { name: 'Dress', unit: 'pcs', cost: 1500, price: 2500, tax_type: 'std' }
+    });
+    assert.strictEqual(p.status, 200);
+    const dressId = p.body.id;
+    const v1 = await authJ({
+      path: `/api/products/${dressId}/variants`, method: 'POST',
+      body: { name: 'Red / M', axes: 'colour: Red, size: M', barcode: '6009500000101', price: 2500 }
+    });
+    const v2 = await authJ({
+      path: `/api/products/${dressId}/variants`, method: 'POST',
+      body: { name: 'Blue / M', axes: 'colour: Blue, size: M', barcode: '6009500000102' }
+    });
+    assert.strictEqual(v1.status, 200);
+    assert.strictEqual(v2.status, 200);
+    // duplicate variant (same axes) is rejected
+    const dup = await authJ({
+      path: `/api/products/${dressId}/variants`, method: 'POST',
+      body: { name: 'Red / M again', axes: { size: 'M', colour: 'Red' } }
+    });
+    assert.strictEqual(dup.status, 409);
+    // per-variant stock
+    const a1 = await authJ({ path: '/api/stock/adjust', method: 'POST', body: { variant_id: v1.body.id, qty: 10, reason: 'stocktake' } });
+    const a2 = await authJ({ path: '/api/stock/adjust', method: 'POST', body: { variant_id: v2.body.id, qty: 5, reason: 'stocktake' } });
+    assert.strictEqual(a1.body.newQty, 10);
+    assert.strictEqual(a2.body.newQty, 5);
+    const s1 = await authJ('/api/scan/6009500000101');
+    assert.strictEqual(s1.body.variant.name, 'Red / M');
+    assert.strictEqual(s1.body.stock_qty, 10);
+    assert.deepStrictEqual(s1.body.variant.axes, { colour: 'Red', size: 'M' });
+    const s2 = await authJ('/api/scan/6009500000102');
+    assert.strictEqual(s2.body.variant.name, 'Blue / M');
+    assert.strictEqual(s2.body.stock_qty, 5);
+    // product-level view sums variants
+    const rows = (await authJ('/api/products')).body;
+    assert.strictEqual(rows.find((x) => x.id === dressId).stock_qty, 15);
+    // multi-variant product: product-only adjust must be explicit
+    const ambig = await authJ({ path: '/api/stock/adjust', method: 'POST', body: { product_id: dressId, qty: 1, reason: 'other' } });
+    assert.strictEqual(ambig.status, 400);
+    assert.ok(/variant/.test(ambig.body.error));
+  });
+
+  await test('multiple barcodes per variant; collision across variants is 409', async () => {
+    const dressId = d.prepare("SELECT id FROM products WHERE name = 'Dress'").get().id;
+    const red = d.prepare("SELECT id FROM variants WHERE product_id = ? AND name = 'Red / M'").get(dressId).id;
+    const blue = d.prepare("SELECT id FROM variants WHERE product_id = ? AND name = 'Blue / M'").get(dressId).id;
+    const extra = await authJ({ path: `/api/variants/${red}/barcodes`, method: 'POST', body: { barcode: '6009500000199', label: 'shelf' } });
+    assert.strictEqual(extra.status, 200);
+    const s = await authJ('/api/scan/6009500000199');
+    assert.strictEqual(s.body.variant.id, red, 'second barcode resolves to same variant');
+    const clash = await authJ({ path: `/api/variants/${blue}/barcodes`, method: 'POST', body: { barcode: '6009500000101' } });
+    assert.strictEqual(clash.status, 409, 'barcode used by another variant');
+  });
+
+  await test('variant price override + integer-shilling validation', async () => {
+    const dressId = d.prepare("SELECT id FROM products WHERE name = 'Dress'").get().id;
+    const bad = await authJ({
+      path: `/api/products/${dressId}/variants`, method: 'POST',
+      body: { name: 'X', axes: 'size: XL', price: 10.5 }
+    });
+    assert.strictEqual(bad.status, 400, 'fractional shillings rejected (R-P2)');
+    const prem = await authJ({
+      path: `/api/products/${dressId}/variants`, method: 'POST',
+      body: { name: 'Premium / L', axes: 'size: L', barcode: '6009500000103', price: 3000 }
+    });
+    assert.strictEqual(prem.status, 200);
+    const s = await authJ('/api/scan/6009500000103');
+    assert.strictEqual(s.body.price, 3000, 'override wins over product price');
+    // variant without override inherits product price
+    const blue = d.prepare("SELECT id, name FROM variants WHERE product_id = ? AND name = 'Blue / M'").get(dressId);
+    const s2 = await authJ('/api/scan/6009500000102');
+    assert.strictEqual(s2.body.price, 2500);
+  });
+
+  await test('sugar 1kg: open-priced product sells fractional base units', async () => {
+    const p = await authJ({
+      path: '/api/products', method: 'POST',
+      body: { name: 'Sugar', unit: 'kg', cost: 120, price: 150, open_priced: 1, barcode: '6009500000301' }
+    });
+    assert.strictEqual(p.status, 200);
+    const sugarId = p.body.id;
+    const in1 = await authJ({ path: '/api/stock/adjust', method: 'POST', body: { product_id: sugarId, qty: 30, reason: 'stocktake' } });
+    assert.strictEqual(in1.body.newQty, 30);
+    const out1 = await authJ({ path: '/api/stock/adjust', method: 'POST', body: { product_id: sugarId, qty: -2.25, reason: 'stocktake', note: 'weighed sale' } });
+    assert.strictEqual(out1.body.newQty, 27.75, 'REAL qty for open-priced goods');
+    const s = await authJ('/api/scan/6009500000301');
+    assert.strictEqual(s.body.product.open_priced, 1);
+    assert.strictEqual(s.body.stock_qty, 27.75);
+  });
+
+  await test('jameson: pack sells from same stock with own barcode + price', async () => {
+    const p = await authJ({
+      path: '/api/products', method: 'POST',
+      body: { name: 'Jameson 700ml', unit: 'btl', cost: 400, price: 550, age_min: 21, barcode: '6009500000200' }
+    });
+    assert.strictEqual(p.status, 200);
+    const jid = p.body.id;
+    const vid = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(jid).id;
+    await authJ({ path: '/api/stock/adjust', method: 'POST', body: { product_id: jid, qty: 24, reason: 'stocktake' } });
+    const pk = await authJ({
+      path: `/api/variants/${vid}/packs`, method: 'POST',
+      body: { name: 'Case (12)', multiple: 12, unit: 'case', barcode: '6009500000201', price: 5800 }
+    });
+    assert.strictEqual(pk.status, 200);
+    const s = await authJ('/api/scan/6009500000201');
+    assert.strictEqual(s.body.type, 'pack');
+    assert.strictEqual(s.body.pack.multiple, 12);
+    assert.strictEqual(s.body.pack.price, 5800);
+    assert.strictEqual(s.body.product.name, 'Jameson 700ml');
+    assert.strictEqual(s.body.stock_qty, 24, 'stock stays in base units');
+    assert.strictEqual(s.body.stock_in_packs, 2);
+    assert.notStrictEqual(s.body.pack.price, 12 * 550, 'pack price is independent (R-PR4)');
+    const dupBc = await authJ({
+      path: `/api/variants/${vid}/packs`, method: 'POST',
+      body: { name: 'Case (12) v2', multiple: 12, barcode: '6009500000201', price: 6000 }
+    });
+    assert.strictEqual(dupBc.status, 409, 'pack barcode collision');
+    const dupName = await authJ({
+      path: `/api/variants/${vid}/packs`, method: 'POST',
+      body: { name: 'Case (12)', multiple: 12, price: 6000 }
+    });
+    assert.strictEqual(dupName.status, 409, 'pack name unique per variant');
+  });
+
+  await test('paracetamol: batches create FEFO-ordered lots and open stock', async () => {
+    const p = await authJ({
+      path: '/api/products', method: 'POST',
+      body: { name: 'Paracetamol 500mg', unit: 'box', cost: 80, price: 100, track_batches: 1, barcode: '6009500000400' }
+    });
+    assert.strictEqual(p.status, 200);
+    const pid = p.body.id;
+    const b1 = await authJ({ path: '/api/batches', method: 'POST', body: { product_id: pid, batch_no: 'B1', expiry_date: '2026-12-31', qty: 10, cost: 80 } });
+    const b2 = await authJ({ path: '/api/batches', method: 'POST', body: { product_id: pid, batch_no: 'B2', expiry_date: '2026-10-31', qty: 5, cost: 80 } });
+    assert.strictEqual(b1.status, 200);
+    assert.strictEqual(b2.status, 200);
+    const list = await authJ(`/api/batches?product_id=${pid}`);
+    assert.strictEqual(list.body.length, 2);
+    assert.strictEqual(list.body[0].batch_no, 'B2', 'FEFO: earliest expiry first');
+    assert.strictEqual(list.body[1].batch_no, 'B1');
+    // batches opened stock through the ledger
+    const rows = (await authJ('/api/products')).body;
+    assert.strictEqual(rows.find((x) => x.id === pid).stock_qty, 15);
+    const moves = d.prepare("SELECT * FROM stock_moves WHERE product_id = ? ORDER BY id").all(pid);
+    const openings = moves.filter((m) => m.type === 'opening' && m.reason === 'opening');
+    assert.strictEqual(openings.length, 2);
+    assert.ok(openings.every((m) => m.batch_id));
+    // non-batch product refuses batches
+    const sugar = d.prepare("SELECT id FROM products WHERE name = 'Sugar'").get();
+    const nope = await authJ({ path: '/api/batches', method: 'POST', body: { product_id: sugar.id, batch_no: 'Z', qty: 1 } });
+    assert.strictEqual(nope.status, 400);
+  });
+
+  await test('serials: register duplicates & write-off move stock', async () => {
+    const p = await authJ({
+      path: '/api/products', method: 'POST',
+      body: { name: 'Phone X', unit: 'pcs', cost: 12000, price: 15000, track_serials: 1, barcode: '6009500000500' }
+    });
+    assert.strictEqual(p.status, 200);
+    const phId = p.body.id;
+    const r1 = await authJ({ path: '/api/serials', method: 'POST', body: { product_id: phId, serial_no: 'IMEI-001' } });
+    assert.strictEqual(r1.status, 200);
+    const dup = await authJ({ path: '/api/serials', method: 'POST', body: { product_id: phId, serial_no: 'IMEI-001' } });
+    assert.strictEqual(dup.status, 409);
+    const rows = (await authJ('/api/products')).body;
+    assert.strictEqual(rows.find((x) => x.id === phId).stock_qty, 1, 'serial registration opens stock');
+    const wrong = await authJ({ path: '/api/serials', method: 'POST', body: { product_id: d.prepare("SELECT id FROM products WHERE name = 'Sugar'").get().id, serial_no: 'X1' } });
+    assert.strictEqual(wrong.status, 400, 'non-serial product refuses serials');
+    const list = await authJ(`/api/serials?product_id=${phId}`);
+    assert.strictEqual(list.body.length, 1);
+    const w = await authJ({ path: `/api/serials/${list.body[0].id}/writeoff`, method: 'POST', body: {} });
+    assert.strictEqual(w.status, 200);
+    assert.strictEqual((await authJ('/api/products')).body.find((x) => x.id === phId).stock_qty, 0, 'write-off decrements');
+    const w2 = await authJ({ path: `/api/serials/${list.body[0].id}/writeoff`, method: 'POST', body: {} });
+    assert.strictEqual(w2.status, 400, 'cannot write off twice');
+  });
+
+  await test('deactivated variant stops resolving; product stock sums only active', async () => {
+    const dressId = d.prepare("SELECT id FROM products WHERE name = 'Dress'").get().id;
+    const blue = d.prepare("SELECT id FROM variants WHERE product_id = ? AND name = 'Blue / M'").get(dressId).id;
+    const del = await authJ({ path: `/api/variants/${blue}`, method: 'DELETE' });
+    assert.strictEqual(del.status, 200);
+    const s = await authJ('/api/scan/6009500000102');
+    assert.strictEqual(s.status, 404, 'barcode of inactive variant no longer resolves');
+    const rows = (await authJ('/api/products')).body;
+    // Red/M 10 + Premium/L 0 = 10 (Blue/M's 5 no longer counted)
+    assert.strictEqual(rows.find((x) => x.id === dressId).stock_qty, 10);
+  });
+
+  await test('attribute defs CRUD + values live on variant meta', async () => {
+    const a = await authJ({ path: '/api/attribute-defs', method: 'POST', body: { key: 'abv', label: 'ABV %', type: 'number' } });
+    assert.strictEqual(a.status, 200);
+    const dup = await authJ({ path: '/api/attribute-defs', method: 'POST', body: { key: 'abv' } });
+    assert.strictEqual(dup.status, 409);
+    const prem = d.prepare("SELECT id, product_id FROM variants WHERE name = 'Premium / L'").get();
+    const put = await authJ({ path: `/api/variants/${prem.id}`, method: 'PUT', body: { meta: { abv: 40 } } });
+    assert.strictEqual(put.status, 200);
+    const vs = (await authJ(`/api/products/${prem.product_id}/variants`)).body;
+    assert.strictEqual(vs.find((v) => v.id === prem.id).meta.abv, 40);
+    const u = await authJ({ path: `/api/attribute-defs/${a.body.id}`, method: 'PUT', body: { label: 'Alcohol %' } });
+    assert.strictEqual(u.status, 200);
+  });
+
+  await test('supplier link + reorder level on product', async () => {
+    const s = await authJ({ path: '/api/suppliers', method: 'POST', body: { name: 'KCC Depot', phone: '+254700999888' } });
+    assert.strictEqual(s.status, 200);
+    const p = await authJ({
+      path: '/api/products', method: 'POST',
+      body: { name: 'Milk 1L', unit: 'btl', cost: 90, price: 110, supplier_id: s.body.id, reorder_level: 5 }
+    });
+    assert.strictEqual(p.status, 200);
+    const rows = (await authJ('/api/products')).body;
+    const milk = rows.find((x) => x.id === p.body.id);
+    assert.strictEqual(milk.supplier_name, 'KCC Depot');
+    assert.strictEqual(milk.reorder_level, 5);
+    const bad = await authJ({ path: '/api/products', method: 'POST', body: { name: 'X2', price: 10, supplier_id: 99999 } });
+    assert.strictEqual(bad.status, 400, 'unknown supplier rejected');
+  });
+
+  await test('CSV round-trip: export → delete → import restores product + variant + pack', async () => {
+    const jid = d.prepare("SELECT id FROM products WHERE name = 'Jameson 700ml'").get().id;
+    const csv = await fetch(`http://127.0.0.1:${server.address().port}/api/csv/export`, { headers: { cookie } });
+    const text = await csv.text();
+    assert.ok(text.includes('Jameson 700ml'), 'product row present');
+    assert.ok(text.includes('Case (12)'), 'pack row present');
+    assert.ok(text.includes('6009500000201'), 'pack barcode present');
+    // delete, then re-import
+    const del = await authJ({ path: `/api/products/${jid}`, method: 'DELETE' });
+    assert.strictEqual(del.status, 200);
+    let miss = await authJ('/api/scan/6009500000201');
+    assert.strictEqual(miss.status, 404, 'deleted product does not resolve');
+    const imp = await authJ({ path: '/api/csv/import', method: 'POST', body: { csv: text } });
+    assert.strictEqual(imp.status, 200);
+    assert.strictEqual(imp.body.errors.length, 0, `import errors: ${imp.body.errors.join('; ')}`);
+    miss = await authJ('/api/scan/6009500000200');
+    assert.strictEqual(miss.status, 200, 'product barcodes resolve again');
+    const packScan = await authJ('/api/scan/6009500000201');
+    assert.strictEqual(packScan.status, 200, 'pack barcode resolves again');
+    assert.strictEqual(packScan.body.type, 'pack');
   });
 
   server.close();

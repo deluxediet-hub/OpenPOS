@@ -37,7 +37,7 @@ Optional sample products load for the chosen trade.
 ## Test
 
 ```bash
-npm test         # unit (money/VAT) + full API flow on a temp DB (35 tests)
+npm test         # unit (money/VAT) + full API flow on a temp DB (48 tests)
 ```
 
 ## Build status
@@ -52,7 +52,7 @@ adapters, branch isolation, auditability, offline rules, core vs modules) plus t
 |---|---|---|
 | 1 | 1 | Product architecture & rules ✅ |
 | 2 | 2 | Business/tenancy foundation: **capability system**, locations, registers, warehouses, fine-grained permissions, solo-first onboarding v2 ✅ |
-| 3 | 3–4 | Universal product engine (variants, packs, barcodes, units) |
+| 3 | 3–4 | Universal product engine: **variants + axes, packs, multi-barcode, serials, industry attributes, CSV import/export, supplier link & reorder** ✅ |
 | 4 | 5–6 | Stock ledger & inventory (append-only moves, reason codes) |
 | 5 | 7–8 | Purchasing & suppliers (POs, GR, discrepancies, suggested POs) |
 | 6 | 9 | Pricing engine (resolution chain, margin guards, history) |
@@ -91,3 +91,14 @@ adapters, branch isolation, auditability, offline rules, core vs modules) plus t
   `business_id` hook), 30-key permission matrix with per-user grants, solo-first onboarding
   v2, capability-gated dashboard + manager back office, stock adjust with reason codes.
   **35 tests green** (was 24).
+- **Day 3–4** — the **universal product engine** (rules R-P): every product gets an implicit
+  single variant (axes `{}`), so flat products, dress colour/size matrices, and
+  **packs** (Jameson case = 12 bottles, own barcode + price, draws from the same stock)
+  all live in one model. Multi-barcode per variant (unit + case + custom), a single
+  `GET /api/scan/:barcode` resolving unit **and** pack (R-P3), **serials** (register /
+  write-off move stock), **industry attribute defs** stored as variant `meta` (ABV, size,
+  expiry) so the core never learns a trade's fields, **CSV import/export** (products +
+  variants + packs round-trips cleanly), and **supplier link + reorder level** on the
+  product. Open-priced (sugar 1kg) and fractional base units work. **48 tests green**
+  (was 35), all Phase-3 acceptance criteria passing (sugar 1kg open-priced, dress
+  red/M variant barcode, Jameson bottle/case pack, paracetamol batch FEFO).

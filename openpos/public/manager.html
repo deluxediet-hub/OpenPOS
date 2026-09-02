@@ -25,16 +25,20 @@
 
     <!-- ============ PRODUCTS ============ -->
     <section id="tab-products" class="hidden">
-      <div class="row" style="margin-bottom:10px">
-        <input id="p-search" style="max-width:320px" placeholder="Search…">
+      <div class="row wrap" style="margin-bottom:10px">
+        <input id="p-search" style="max-width:280px" placeholder="Search…">
         <span class="muted small" id="p-count"></span>
+        <span class="spacer"></span>
+        <a class="btn small" id="p-export" href="/api/csv/export" data-i18n="export_csv">Export CSV</a>
+        <label class="btn small" id="p-import-btn">Import CSV <input type="file" id="p-import" accept=".csv,text/csv" style="display:none"></label>
       </div>
       <div class="card" style="margin-bottom:14px;overflow:auto">
         <table><thead><tr>
           <th data-i18n="name">Name</th><th data-i18n="category">Category</th>
           <th data-i18n="barcode">Barcode</th><th data-i18n="price">Price</th>
           <th data-i18n="cost">Cost</th><th data-i18n="tax_type">Tax</th>
-          <th data-i18n="stock">Stock</th><th></th><th></th>
+          <th data-i18n="variants">Variants</th>
+          <th data-i18n="stock">Stock</th><th></th><th></th><th></th>
         </tr></thead><tbody id="p-rows"></tbody></table>
       </div>
       <div class="card">
@@ -54,19 +58,42 @@
           <label class="f"><span>KRA item code</span><input id="p-kra" class="mono"></label>
           <label class="f"><span>Min age</span><input id="p-age" type="number" min="0" placeholder="—" value=""></label>
           <label class="f"><span>Brand</span><input id="p-brand"></label>
-          <label class="f"><span>Pack size (e.g. 12 per case)</span><input id="p-packsz" type="number" min="1" value="1"></label>
-          <label class="f"><span>Pack name</span><input id="p-packname" placeholder="case, 6× …"></label>
+          <label class="f"><span>Supplier</span><select id="p-supplier"><option value="">—</option></select></label>
+          <label class="f"><span>Reorder level</span><input id="p-reorder" type="number" min="0" value="0"></label>
+          <label class="f"><span>Image URL</span><input id="p-image" placeholder="https://… (optional)"></label>
         </div>
         <div class="row wrap">
           <label class="check"><input type="checkbox" id="p-rx"> Requires prescription</label>
           <label class="check"><input type="checkbox" id="p-controlled"> Controlled drug</label>
           <label class="check"><input type="checkbox" id="p-batches"> Track batches/expiry</label>
+          <label class="check"><input type="checkbox" id="p-serials"> Track serials (IMEI)</label>
           <label class="check"><input type="checkbox" id="p-openprice"> Open price (weigh at till)</label>
         </div>
         <div class="row" style="margin-top:10px">
           <button class="btn" id="p-save" data-i18n="save">Save</button>
           <button class="btn ghost hidden" id="p-clear" data-i18n="cancel">Cancel</button>
           <div class="msg" id="p-msg" style="margin:0"></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3 data-i18n="attributes">Custom attributes</h3>
+        <p class="muted small">Extra fields shown per product/variant (e.g. abv%, fabric, warranty).</p>
+        <table><thead><tr>
+          <th>Key</th><th data-i18n="name">Name</th><th>Type</th><th>Applies to</th><th></th>
+        </tr></thead><tbody id="attr-rows"></tbody></table>
+        <div class="row wrap" style="margin-top:8px">
+          <input id="attr-key" style="width:130px" placeholder="key (e.g. abv)">
+          <input id="attr-label" style="width:160px" placeholder="label (e.g. ABV %)">
+          <select id="attr-type" style="width:110px">
+            <option value="text">text</option><option value="number">number</option>
+            <option value="select">select</option><option value="boolean">bool</option>
+          </select>
+          <input id="attr-options" style="width:170px" placeholder="options (select only)">
+          <select id="attr-applies" style="width:100px">
+            <option value="variant">variant</option><option value="product">product</option>
+          </select>
+          <button class="btn small" id="attr-add" data-i18n="add">Add</button>
+          <div class="msg" id="attr-msg" style="margin:0"></div>
         </div>
       </div>
     </section>
@@ -287,7 +314,9 @@ function pills(p) {
   if (p.requires_rx) out.push('<span class="pill">Rx</span>');
   if (p.is_controlled) out.push('<span class="pill r">Ctl</span>');
   if (p.track_batches) out.push('<span class="pill">Batch</span>');
+  if (p.track_serials) out.push('<span class="pill">IMEI</span>');
   if (p.open_priced) out.push('<span class="pill">Open</span>');
+  if (p.reorder_level > 0) out.push(`<span class="pill">re@${p.reorder_level}</span>`);
   return out.join(' ');
 }
 
@@ -344,7 +373,7 @@ async function boot() {
   const biz = BOOT.settings.business || {};
   $('#m-biz').textContent = `${biz.name || ''} — ${ME.name} (${t(roleKey(ME.role))})`;
   drawTabs();
-  await Promise.all([loadProducts(), loadCategories(), loadTills()]);
+  await Promise.all([loadProducts(), loadCategories(), loadTills(), loadSuppliers(), loadAttrs()]);
   if (tabVisible(TABS.find((x) => x.id === 'staff'))) loadStaff();
   if (tabVisible(TABS.find((x) => x.id === 'layout'))) loadLayout();
   selectTab(location.hash.replace('#', '') || 'products');
@@ -356,30 +385,50 @@ async function boot() {
 }
 
 // ---------- products + stock adjust ----------
+let SUPPLIERS = [];
+async function loadSuppliers() {
+  SUPPLIERS = await api('/api/suppliers').catch(() => []);
+  $('#p-supplier').innerHTML = '<option value="">—</option>' + SUPPLIERS
+    .map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+}
+
+function axesText(axes) {
+  if (!axes || typeof axes !== 'object') return '';
+  return Object.entries(axes).map(([k, v]) => `${k}: ${v}`).join(', ');
+}
+
 async function loadProducts() {
   const rows = await api('/api/products');
   const catName = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.name]));
   const q = ($('#p-search').value || '').toLowerCase();
   const filtered = rows.filter((p) => !q || p.name.toLowerCase().includes(q) || (p.barcode || '').includes(q));
   $('#p-count').textContent = `${filtered.length} / ${rows.length}`;
-  $('#p-rows').innerHTML = filtered.map((p) => `
+  $('#p-rows').innerHTML = filtered.map((p) => {
+    const low = p.reorder_level > 0 && (p.stock_qty ?? 0) <= p.reorder_level;
+    return `
     <tr class="clickable" data-id="${p.id}">
       <td>${esc(p.name)} ${pills(p)}</td>
       <td>${esc(catName[p.category_id] || '')}</td>
       <td class="mono small">${esc(p.barcode || '')}</td>
       <td>${fmt(p.price)}</td><td>${fmt(p.cost)}</td>
       <td><span class="pill ${p.tax_type === 'std' ? 'g' : ''}">${p.tax_type}</span></td>
-      <td>${p.active ? esc(String(p.stock_qty ?? '—')) : '<span class="muted">off</span>'}</td>
+      <td>${p.variant_count > 1 ? `<span class="pill g">${p.variant_count}</span>` : '<span class="muted">1</span>'}</td>
+      <td>${p.active
+        ? esc(String(p.stock_qty ?? '—')) + (low ? ' <span class="pill r">low</span>' : '')
+        : '<span class="muted">off</span>'}</td>
+      <td><button class="btn small" data-act="vp" data-id="${p.id}" title="Variants, packs, serials">⇄</button></td>
       <td><button class="btn small" data-act="adj" data-id="${p.id}" title="Adjust stock">±</button></td>
       <td>
         <button class="btn small" data-act="edit" data-id="${p.id}">✎</button>
         <button class="btn danger" data-act="del" data-id="${p.id}" data-name="${esc(p.name)}">✕</button>
       </td>
     </tr>
-    <tr class="hidden" id="adj-${p.id}"><td colspan="9">
+    <tr class="hidden" id="vp-${p.id}"><td colspan="11" style="background:var(--green-soft)"></td></tr>
+    <tr class="hidden" id="adj-${p.id}"><td colspan="11">
       <div class="row wrap" style="background:var(--green-soft);border-radius:8px;padding:10px">
         <span class="small">${esc(p.name)} — current ${esc(String(p.stock_qty ?? 0))}</span>
-        <input type="number" id="adjq-${p.id}" style="width:110px" placeholder="+/- qty">
+        <select id="adjv-${p.id}" style="width:170px"></select>
+        <input type="number" step="0.01" id="adjq-${p.id}" style="width:110px" placeholder="+/- qty">
         <select id="adjr-${p.id}" style="width:150px">
           <option value="stocktake">Stock take</option><option value="damage">Damage</option>
           <option value="expired">Expired</option><option value="other">Other</option>
@@ -389,8 +438,10 @@ async function loadProducts() {
         <button class="btn ghost small" data-adjcancel="${p.id}">✕</button>
         <div class="msg" id="adjm-${p.id}" style="margin:0"></div>
       </div>
-    </td></tr>`).join('') || `<tr><td colspan="9" class="muted">Nothing here yet.</td></tr>`;
+    </td></tr>`;
+  }).join('') || `<tr><td colspan="11" class="muted">Nothing here yet.</td></tr>`;
   $('#p-search').oninput = loadProducts;
+
   document.querySelectorAll('#p-rows [data-act]').forEach((b) => {
     b.onclick = async (e) => {
       e.stopPropagation();
@@ -402,8 +453,12 @@ async function loadProducts() {
           toast($('#p-msg'), 'Deleted.', true);
           loadProducts();
         } catch (err) { toast($('#p-msg'), err.message, false); }
+      } else if (b.dataset.act === 'vp') {
+        await toggleVariantPanel(id);
       } else if (b.dataset.act === 'adj') {
-        $(`#adj-${id}`).classList.toggle('hidden');
+        const panel = $(`#adj-${id}`);
+        panel.classList.toggle('hidden');
+        if (!panel.classList.contains('hidden')) fillAdjVariants(id);
       } else {
         const p = rows.find((r) => r.id === id);
         if (!p) return;
@@ -415,15 +470,19 @@ async function loadProducts() {
         $('#p-wholesale').value = p.wholesale_price || 0;
         $('#p-tax').value = p.tax_type; $('#p-kra').value = p.kra_item_code || '';
         $('#p-age').value = p.age_min || ''; $('#p-brand').value = p.brand || '';
-        $('#p-packsz').value = p.pack_size || 1; $('#p-packname').value = p.pack_name || '';
+        $('#p-supplier').value = p.supplier_id || '';
+        $('#p-reorder').value = p.reorder_level || 0;
+        $('#p-image').value = p.image || '';
         $('#p-rx').checked = !!p.requires_rx; $('#p-controlled').checked = !!p.is_controlled;
-        $('#p-batches').checked = !!p.track_batches; $('#p-openprice').checked = !!p.open_priced;
+        $('#p-batches').checked = !!p.track_batches; $('#p-serials').checked = !!p.track_serials;
+        $('#p-openprice').checked = !!p.open_priced;
         $('#p-form-title').textContent = t('save');
         $('#p-clear').classList.remove('hidden');
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     };
   });
+
   document.querySelectorAll('#p-rows [data-adjsave]').forEach((b) => {
     b.onclick = async () => {
       const id = Number(b.dataset.adjsave);
@@ -432,6 +491,7 @@ async function loadProducts() {
           method: 'POST',
           body: {
             product_id: id,
+            variant_id: $(`#adjv-${id}`).value ? Number($(`#adjv-${id}`).value) : undefined,
             qty: Number($(`#adjq-${id}`).value),
             reason: $(`#adjr-${id}`).value,
             note: $(`#adjn-${id}`).value
@@ -447,13 +507,170 @@ async function loadProducts() {
   });
 }
 
+// variant list for the adjust-stock row (matters once a product has variants)
+async function fillAdjVariants(productId) {
+  const sel = $(`#adjv-${productId}`);
+  try {
+    const vs = await api(`/api/products/${productId}/variants`);
+    const active = vs.filter((v) => v.active);
+    if (active.length <= 1) { sel.innerHTML = ''; return; }
+    sel.innerHTML = active.map((v) => `<option value="${v.id}">${esc(v.name || axesText(v.axes) || 'base')}</option>`).join('');
+  } catch { sel.innerHTML = ''; }
+}
+
+// ---- variants / packs / barcodes / serials panel ---------------------------------------------
+async function toggleVariantPanel(productId) {
+  const panel = $(`#vp-${productId}`);
+  if (!panel.classList.contains('hidden')) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  const cell = panel.querySelector('td');
+  cell.innerHTML = '<span class="muted small">Loading…</span>';
+  let vs = [];
+  try { vs = await api(`/api/products/${productId}/variants`); } catch (e) { cell.innerHTML = `<span class="msg err" style="margin:0">${esc(e.message)}</span>`; return; }
+  const vRow = (v) => {
+    const isBase = v.axes_key === '{}' || Object.keys(v.axes).length === 0;
+    const bcs = v.barcodes.filter((b) => b.active).map((b) =>
+      `<span class="pill mono">${esc(b.barcode)}${b.kind === 'pack' ? ' ·pack' : ''}</span>`).join(' ');
+    const packs = v.packs.map((pk) =>
+      `<span class="pill g">${esc(pk.name)} = ${pk.multiple}× ${esc(pk.unit || '')} @ ${fmt(pk.price)}</span>`).join(' ');
+    return `
+      <div class="row wrap" style="padding:6px 0;border-top:1px solid var(--line)">
+        <b>${esc(v.name || (isBase ? 'base' : axesText(v.axes)))}</b>
+        ${isBase ? '<span class="muted small">base</span>' : ''}
+        ${v.active ? '' : '<span class="pill r">off</span>'}
+        <span class="small">${fmt(v.price)}${v.price !== null && v.product ? ' <span class="muted">(override)</span>' : ''}</span>
+        <span class="small muted">${bcs}</span>
+        <span class="small">${packs}</span>
+        <span class="spacer"></span>
+        ${v.active && !isBase ? `<button class="btn ghost small" data-vdel="${v.id}" data-vname="${esc(v.name || axesText(v.axes))}">✕</button>` : ''}
+      </div>`;
+  };
+  cell.innerHTML = `
+    <div style="padding:4px 2px">
+      <b>${t('variants')}</b>
+      ${vs.map(vRow).join('')}
+      <div class="row wrap" style="margin-top:8px;background:#fff;border-radius:8px;padding:8px">
+        <input id="nv-name-${productId}" style="width:130px" placeholder="${t('variant')} (e.g. Red / M)">
+        <input id="nv-axes-${productId}" style="width:200px" placeholder="axes: size: M, colour: Red">
+        <input id="nv-bc-${productId}" style="width:140px" placeholder="barcode" class="mono">
+        <input id="nv-price-${productId}" style="width:100px" type="number" min="0" placeholder="price">
+        <input id="nv-cost-${productId}" style="width:100px" type="number" min="0" placeholder="cost">
+        <button class="btn small" data-nvadd="${productId}">${t('add')}</button>
+        <div class="msg" id="nvm-${productId}" style="margin:0"></div>
+      </div>
+      <div class="row wrap" style="margin-top:6px">
+        <span class="muted small">${t('packs')}:</span>
+        <input id="np-name-${productId}" style="width:130px" placeholder="e.g. Case (12)">
+        <input id="np-mul-${productId}" style="width:70px" type="number" min="1" placeholder="×">
+        <input id="np-unit-${productId}" style="width:80px" placeholder="case">
+        <input id="np-bc-${productId}" style="width:140px" placeholder="barcode" class="mono">
+        <input id="np-price-${productId}" style="width:100px" type="number" min="0" placeholder="price">
+        <select id="np-variant-${productId}" style="width:150px">
+          ${vs.filter((v) => v.active).map((v) => `<option value="${v.id}">${esc(v.name || axesText(v.axes) || 'base')}</option>`).join('')}
+        </select>
+        <button class="btn small" data-npack="${productId}">${t('add')}</button>
+        <div class="msg" id="npm-${productId}" style="margin:0"></div>
+      </div>
+      ${vs.some((v) => v.product && v.product.track_serials) || vs.some((v) => v.stock_in_stock) ? `
+      <div class="row wrap" style="margin-top:6px">
+        <span class="muted small">${t('serials')}:</span>
+        <span class="small" id="ser-count-${productId}"></span>
+        <input id="ns-no-${productId}" style="width:160px" placeholder="${t('register_serial')}">
+        <button class="btn small" data-nsadd="${productId}">${t('add')}</button>
+        <div class="msg" id="nsm-${productId}" style="margin:0"></div>
+      </div>
+      <div id="ser-list-${productId}"></div>` : ''}
+    </div>`;
+  await renderSerialList(productId);
+
+  const nv = $(`[data-nvadd="${productId}"]`);
+  if (nv) nv.onclick = async () => {
+    try {
+      await api(`/api/products/${productId}/variants`, {
+        method: 'POST',
+        body: {
+          name: $(`#nv-name-${productId}`).value,
+          axes: $(`#nv-axes-${productId}`).value,
+          barcode: $(`#nv-bc-${productId}`).value,
+          price: $(`#nv-price-${productId}`).value,
+          cost: $(`#nv-cost-${productId}`).value
+        }
+      });
+      toast($(`#nvm-${productId}`), t('save_ok'), true);
+      toggleVariantPanel(productId); await toggleVariantPanel(productId);
+    } catch (e) { toast($(`#nvm-${productId}`), e.message, false); }
+  };
+  const np = $(`[data-npack="${productId}"]`);
+  if (np) np.onclick = async () => {
+    try {
+      await api(`/api/variants/${$(`#np-variant-${productId}`).value}/packs`, {
+        method: 'POST',
+        body: {
+          name: $(`#np-name-${productId}`).value,
+          multiple: Number($(`#np-mul-${productId}`).value),
+          unit: $(`#np-unit-${productId}`).value,
+          barcode: $(`#np-bc-${productId}`).value,
+          price: Number($(`#np-price-${productId}`).value)
+        }
+      });
+      toast($(`#npm-${productId}`), t('save_ok'), true);
+      toggleVariantPanel(productId); await toggleVariantPanel(productId);
+    } catch (e) { toast($(`#npm-${productId}`), e.message, false); }
+  };
+  const ns = $(`[data-nsadd="${productId}"]`);
+  if (ns) ns.onclick = async () => {
+    try {
+      await api('/api/serials', { method: 'POST', body: { product_id: productId, serial_no: $(`#ns-no-${productId}`).value } });
+      toast($(`#nsm-${productId}`), t('save_ok'), true);
+      renderSerialList(productId);
+      $(`#ns-no-${productId}`).value = '';
+    } catch (e) { toast($(`#nsm-${productId}`), e.message, false); }
+  };
+  document.querySelectorAll(`#vp-${productId} [data-vdel]`).forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm(`Remove variant "${b.dataset.vname}"?`)) return;
+      try {
+        await api(`/api/variants/${b.dataset.vdel}`, { method: 'DELETE' });
+        toggleVariantPanel(productId); await toggleVariantPanel(productId);
+        loadProducts();
+      } catch (e) { toast($('#p-msg'), e.message, false); }
+    };
+  });
+}
+
+async function renderSerialList(productId) {
+  const box = $(`#ser-list-${productId}`);
+  const cnt = $(`#ser-count-${productId}`);
+  if (!box) return;
+  try {
+    const rows = await api(`/api/serials?product_id=${productId}&status=in_stock`);
+    cnt.textContent = `${rows.length} ${t('in_stock')}`;
+    box.innerHTML = rows.slice(0, 8).map((s) => `
+      <div class="row" style="margin-top:2px">
+        <span class="mono small">${esc(s.serial_no)}</span>
+        <span class="muted small">${esc(s.product_name || '')} ${esc(s.variant_name || '')}</span>
+        <span class="spacer"></span>
+        <button class="btn ghost small" data-soff="${s.id}">write off</button>
+      </div>`).join('');
+    box.querySelectorAll('[data-soff]').forEach((b) => {
+      b.onclick = async () => {
+        if (!confirm('Write off this serial (stock -1)?')) return;
+        try {
+          await api(`/api/serials/${b.dataset.soff}/writeoff`, { method: 'POST', body: {} });
+          renderSerialList(productId); loadProducts();
+        } catch (e) { alert(e.message); }
+      };
+    });
+  } catch { box.innerHTML = ''; }
+}
+
 function resetProductForm() {
   $('#p-id').value = '';
-  ['p-name','p-namesw','p-barcode','p-cost','p-price','p-wholesale','p-kra','p-age','p-brand','p-packname']
+  ['p-name','p-namesw','p-barcode','p-cost','p-price','p-wholesale','p-kra','p-age','p-brand','p-image','p-reorder']
     .forEach((id) => $(`#${id}`).value = '');
   $('#p-cat').value = ''; $('#p-unit').value = 'pcs'; $('#p-tax').value = 'std';
-  $('#p-packsz').value = 1;
-  ['#p-rx', '#p-controlled', '#p-batches', '#p-openprice'].forEach((id) => $(id).checked = false);
+  $('#p-supplier').value = '';
+  ['#p-rx', '#p-controlled', '#p-batches', '#p-serials', '#p-openprice'].forEach((id) => $(id).checked = false);
   $('#p-form-title').textContent = t('add');
   $('#p-clear').classList.add('hidden');
 }
@@ -470,9 +687,12 @@ $('#p-save').onclick = async () => {
     tax_type: $('#p-tax').value, kra_item_code: $('#p-kra').value,
     age_min: $('#p-age').value ? Number($('#p-age').value) : null,
     brand: $('#p-brand').value,
-    pack_size: Number($('#p-packsz').value) || 1, pack_name: $('#p-packname').value,
+    supplier_id: $('#p-supplier').value ? Number($('#p-supplier').value) : null,
+    reorder_level: Number($('#p-reorder').value) || 0,
+    image: $('#p-image').value,
     requires_rx: $('#p-rx').checked ? 1 : 0, is_controlled: $('#p-controlled').checked ? 1 : 0,
-    track_batches: $('#p-batches').checked ? 1 : 0, open_priced: $('#p-openprice').checked ? 1 : 0
+    track_batches: $('#p-batches').checked ? 1 : 0, track_serials: $('#p-serials').checked ? 1 : 0,
+    open_priced: $('#p-openprice').checked ? 1 : 0
   };
   try {
     if (id) await api(`/api/products/${id}`, { method: 'PUT', body });
@@ -481,6 +701,52 @@ $('#p-save').onclick = async () => {
     resetProductForm();
     loadProducts();
   } catch (e) { toast($('#p-msg'), e.message, false); }
+};
+
+// ---- CSV import/export --------------------------------------------------------------------------
+$('#p-import').onchange = async () => {
+  const f = $('#p-import').files[0];
+  if (!f) return;
+  const text = await f.text();
+  try {
+    const r = await api('/api/csv/import', { method: 'POST', body: { csv: text } });
+    toast($('#p-msg'), `Imported: ${r.products} products, ${r.variants} variants, ${r.packs} packs` +
+      (r.errors.length ? ` · ${r.errors.length} errors: ${r.errors[0]}` : ''), r.errors.length === 0);
+    if (r.errors.length) console.warn('CSV import errors', r.errors);
+    loadProducts();
+  } catch (e) { toast($('#p-msg'), e.message, false); }
+  $('#p-import').value = '';
+};
+
+// ---- custom attribute definitions ------------------------------------------------------------------
+async function loadAttrs() {
+  const rows = await api('/api/attribute-defs').catch(() => []);
+  $('#attr-rows').innerHTML = rows.map((a) => `
+    <tr><td class="mono small">${esc(a.key)}</td><td>${esc(a.label)}</td>
+    <td class="small muted">${a.type}</td><td class="small muted">${a.applies_to}</td>
+    <td><button class="btn danger small" data-attrdel="${a.id}">✕</button></td></tr>`).join('')
+    || `<tr><td colspan="5" class="muted">Nothing here yet.</td></tr>`;
+  document.querySelectorAll('[data-attrdel]').forEach((b) => {
+    b.onclick = async () => {
+      try { await api(`/api/attribute-defs/${b.dataset.attrdel}`, { method: 'DELETE' }); loadAttrs(); }
+      catch (e) { toast($('#attr-msg'), e.message, false); }
+    };
+  });
+}
+$('#attr-add').onclick = async () => {
+  try {
+    await api('/api/attribute-defs', {
+      method: 'POST',
+      body: {
+        key: $('#attr-key').value, label: $('#attr-label').value,
+        type: $('#attr-type').value, options: $('#attr-options').value,
+        applies_to: $('#attr-applies').value
+      }
+    });
+    $('#attr-key').value = ''; $('#attr-label').value = ''; $('#attr-options').value = '';
+    toast($('#attr-msg'), t('save_ok'), true);
+    loadAttrs();
+  } catch (e) { toast($('#attr-msg'), e.message, false); }
 };
 
 // ---------- categories ----------

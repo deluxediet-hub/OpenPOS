@@ -1,9 +1,10 @@
 # OpenPOS v2 — Plan & Roadmap
 **"A POS for every Kenyan shop — any number of branches."**
 
-> Status: **Day 2 of 60 complete.** Roadmap restructured 2026-09-02 to the founder's
-> 35-phase directive. The engineering contract is **`openpos/ARCHITECTURE.md`** — every
-> phase implements it; rule changes go through its change log.
+> Status: **Days 3–4 of 60 complete** (Phase 3 — universal product engine). Roadmap
+> restructured 2026-09-02 to the founder's 35-phase directive. The engineering contract is
+> **`openpos/ARCHITECTURE.md`** — every phase implements it; rule changes go through its
+> change log.
 
 ---
 
@@ -134,7 +135,7 @@ contradicts the doc without a change-log entry.**
   2 locations / 2 registers / 1 warehouse created and verified via API; a cashier on one
   register sees only that location's data; 1→100 branches needs no architectural change.
 
-### Phase 3 — Universal Product Engine · Days 3–4
+### Phase 3 — Universal Product Engine · Days 3–4 ✅
 - Variants + axes (size/colour/shade/custom); multiple barcodes per variant; UoM
   (pcs/kg/L/m/roll/job); **packs/cases/cartons with own barcode + price**; cost; price
   levels (retail/wholesale/member); tax category; supplier link; reorder fields; images;
@@ -143,6 +144,14 @@ contradicts the doc without a change-log entry.**
 - **Acceptance:** sugar 1kg (open price) · dress red/M (variant barcodes) · Jameson
   bottle/case (pack) · paracetamol batch — all in ONE engine, sellable, stockable,
   barcodable.
+- **Done (Day 3–4):** all four acceptance products pass in the test suite. Variant identity
+  = (product_id, canonical axes_key); stock re-keyed (variant_id, location_id). `GET
+  /api/scan/:barcode` resolves unit **and** pack in one call (R-P3). Packs draw N base units
+  from the same stock. Serials register/write-off move stock. Industry attribute defs
+  (ABV, size, expiry…) live in variant `meta` — the core never learns a trade's fields
+  (R-C9). Open-priced + fractional base units (sugar 1kg). CSV round-trips products +
+  variants + packs. Supplier link + reorder level per product. UoM kept as unit label +
+  open-priced flag; full multi-UoM conversion deferred to Phase 6 (pricing). 48 tests green.
 
 ### Phase 4 — Stock Ledger & Inventory Engine · Days 5–6
 - Append-only moves with **reason codes**: purchase, sale, return in/out, damage, expiry,
@@ -512,3 +521,53 @@ first sale < 5 min unaided; documentation + DR drill done.
 **Notes:** deni/purchasing suggestion *rules* are in place; their trigger data lands with
 Phase 11 (customer ledger) and Phase 4 (stock ageing). `terminals`→`registers` migration
 tested against a v1 dev DB.
+
+### Day 3–4 — Universal Product Engine (Phase 3) ✅ (2026-09-02)
+**Backend (engines first):**
+- `db.js` — schema v3: `variants` (product_id + canonical `axes_key`, own sku/price/cost/
+  wholesale/member/tax/kra, `active`, `meta` JSON), `variant_barcodes` (globally unique
+  while active; `kind` unit/pack/custom; `pack_id`), `packs` (named multiple of base units,
+  own price/barcode — **no separate stock**, draws N base units), `serials`,
+  `attribute_defs` (industry keys → stored in variant `meta`), `suppliers`; **stock
+  re-keyed (variant_id, location_id)** (was product_id, location_id). Additive migration:
+  every existing product → one implicit variant (axes `{}`), its barcodes + stock moved —
+  no data loss.
+- `server.js` — product engine: variant CRUD (canonical axes, own-barcode assignment,
+  multi-barcode per variant, 409 on cross-variant barcode clash), pack CRUD, **`GET
+  /api/scan/:barcode` resolving unit AND pack in one call (R-P3)** returning
+  {type, product, variant, location, stock_qty, effective price, pack?}, serials
+  register/write-off (move stock), attribute-def CRUD, supplier CRUD + product
+  supplier-link + reorder level, **CSV import/export** (products + variants + packs in one
+  file; round-trips cleanly). Prices validated integer-shilling (R-P2); `null` variant
+  price/cost = inherit from product (`eff()`). Open-priced + fractional base units
+  (sugar 1kg). Deactivated variant stops resolving; product stock = sum of active variants.
+- `lib/csv.js` — toCsv/fromCsv (no deps).
+- `lib/capabilities.js` — fixed `getSuggestions` to join through variants (stock no longer
+  has product_id).
+
+**UI (thin client over the engines):**
+- Manager **Products** tab reworked: inline **variant panel** (add/edit axes + own
+  barcode/price, multi-barcode list), **pack** builder (name × multiple, own price +
+  barcode), **serials** register/write-off, **CSV import/export** buttons, per-variant
+  industry **attribute** editor (driven by `attribute_defs` → `meta`), supplier + reorder
+  level on the product row, IMEI/serial + reorder pills. EN/SW strings added.
+
+**Acceptance (all tested, 48 tests green, up from 35):**
+- **Migration:** every flat product → implicit variant; stock intact and variant-scoped.
+- **R-P3 scan:** one call resolves barcode → variant → stock → price; unknown barcode 404.
+- **Dress red/M:** two variant barcodes, per-variant stock, dup-axes 409, ambiguous adjust
+  400.
+- **Multi-barcode:** unit + custom per variant; cross-variant clash 409.
+- **Price override + integer-shilling:** variant price wins; fractional shilling 400.
+- **Sugar 1kg:** open-priced, sells fractional base units.
+- **Jameson bottle/case:** pack has own barcode + price ≠ 12×unit, draws same stock.
+- **Paracetamol:** batches create FEFO-ordered lots; non-batch product 400.
+- **Serials:** register/dup 409/write-off/double-write 400, all move stock.
+- **Deactivated variant** stops resolving; product stock sums only active.
+- **Attribute defs** CRUD + values live on variant `meta` (ABV).
+- **Supplier link + reorder level** on product.
+- **CSV round-trip:** export → delete → import restores product + variant + pack.
+
+**Notes:** UoM kept as a unit label + `open_priced` flag (full multi-UoM conversion — kg/L
+↔ pcs — deferred to Phase 6 pricing). Product images deferred to Phase 34 (storage not yet
+designed). KRA item code per variant already on the variant row (used Phase 16).
