@@ -9,10 +9,20 @@
 
 ## 1. Vision
 
+**A configurable retail operating system that can start incredibly small and grow into a
+sophisticated multi-branch business platform without the business ever having to change
+systems.**
+
 One system that runs **1 branch or 100**, in **any trade** (duka, wines & spirits, boutique,
 chemist, hardware, electronics, cosmetics, footwear, mini-mart…), with the Kenyan compliance
 layer (KRA **eTIMS** + **M-Pesa**) built in as adapters, offline-first by design, and a
 **module framework** so the next industry costs ≤ 1 build-day to add.
+
+**The dividing line (agreed 2026-09-02):** a *POS with lots of features* shows everything to
+everyone; *this* system checks the **business capability set** before every screen renders.
+A single-till duka never meets the words "branch", "warehouse", "supplier" or "price level";
+a 10-branch chain never meets a second system. The engine is complete from day one — what
+changes with the business is what the application shows (rules **R-C**, ARCHITECTURE.md §3.0).
 
 The build philosophy (agreed 2026-09-02):
 
@@ -101,16 +111,28 @@ stock; how payments affect financial records; branch isolation; auditability; wh
 offline; core vs industry-specific. **Acceptance: every later phase cites rules; no phase
 contradicts the doc without a change-log entry.**
 
-### Phase 2 — Business & Tenancy Foundation · Day 2
+### Phase 2 — Business & Tenancy Foundation + Capability System · Day 2
+- **Capability system (the meta feature, R-C):** `business_capabilities` (flags, per
+  business); solo default (1 branch/1 location/1 register/1 owner, no warehouses/
+  departments/price levels); capability-gated presentation everywhere (nav, screens,
+  reports, settings, dashboard cards); one-tap unlocks (flag + optional seed — no
+  migration); **guided-growth suggestions** (2nd till → location? · first deni → credit
+  setup? · low stock → suppliers?); scaling vocabulary (shop vs branch)
+- **Onboarding v2 (solo-first):** trade → name/phone → your name + PIN → done. KRA PIN/VAT
+  optional + deferrable to settings; **no branch/register questions for a solo business**
+  (the Day-0 wizard is replaced, not extended)
 - Schema: business (tenant, `business_id` hook) → branch → **location** → **register**;
   warehouses (location flag); departments; migration of Day-1 branches/terminals
 - Users, roles, **fine-grained permission matrix** (30+ permissions; role = named set;
   per-user override), assignment to branch/location/register
 - Business settings · branch settings · tax settings (VAT, classes) · receipt settings ·
   currency
-- **Acceptance:** create 1 business / 3 branches / 2 locations / 2 registers / 1 warehouse;
-  a cashier on one register sees only that location's data (tested via API); 1→100 branches
-  needs no architectural change.
+- **Acceptance:** a solo business sees **only** Till · Products · Customers · Sales ·
+  Settings — no branch/warehouse/supplier/permissions concept anywhere (checked
+  screen-by-screen); enabling multi_location unlocks the location UI instantly (flag, no
+  migration); guided suggestions fire on 2nd register + first deni; 1 business / 3 branches /
+  2 locations / 2 registers / 1 warehouse created and verified via API; a cashier on one
+  register sees only that location's data; 1→100 branches needs no architectural change.
 
 ### Phase 3 — Universal Product Engine · Days 3–4
 - Variants + axes (size/colour/shade/custom); multiple barcodes per variant; UoM
@@ -326,7 +348,8 @@ count · cash shortage · M-Pesa mismatch · transfer not received · price chan
 product returned · expired batch · variant sold from another branch · device dies mid-
 transaction.
 - **Acceptance:** breakage matrix passes or yields filed, severity-rated defects; 3 real
-  businesses run live transactions in test mode.
+  businesses run live transactions in test mode; **a brand-new solo shop owner onboards and
+  trades without ever meeting an ERP concept** (observed, not assumed — R-C1/R-C2).
 
 ### Phase 32 — Performance, Security & Production Hardening · Days 46–48
 DB optimisation + query perf (100k rows / 10k moves), API perf budgets, offline sync stress,
@@ -344,8 +367,10 @@ auto-updates, backups.
 
 ### Phase 34 — Final UX / Product Polish · Days 51–53
 Only after functionality works: cashier speed (keyboard-first, shortcuts), responsive +
-tablet, search speed, onboarding v2, empty states, error messages, **receipt design per
-trade**, dashboards, accessibility, full EN/SW coverage (UI + receipts).
+tablet, search speed, onboarding v2 polish, empty states, error messages, **receipt design
+per trade**, dashboards, accessibility, full EN/SW coverage (UI + receipts), and a **solo-mode
+audit**: every screen in a solo business walked for ERP leakage (R-C2) — anything that makes a
+one-till owner pause is cut or hidden.
 
 ### Phase 35 — Pilot Release · Days 54–60
 Deploy to **five** real businesses: 1 general shop · 1 wines & spirits · 1 boutique ·
@@ -387,6 +412,11 @@ first sale < 5 min unaided; documentation + DR drill done.
   6. Industries become a **module framework** (Phase 18) with per-industry modules 19–23.
   7. **Multi-tenant hook** (`business_id`) from Day 2; SaaS layer Day 49–50.
   8. Real-business testing (43–45) precedes polish (51–53) and pilot (54–60).
+  9. **2026-09-02 (2) — Capability model adopted (R-C):** "the POS must not feel like an
+     ERP". The engine stays complete and capability-agnostic; **presentation is
+     capability-gated** (every screen checks the business capability set). Solo default;
+     trade templates seed capabilities; guided growth suggests unlocks; onboarding becomes
+     solo-first (Phase 2); solo-mode audit added to Phases 31 & 34. ARCHITECTURE.md v2.
 
 ## 8. Build log
 
@@ -400,4 +430,8 @@ first sale < 5 min unaided; documentation + DR drill done.
 ### Day 1 — Product Architecture & Rules ✅ (2026-09-02)
 - ARCHITECTURE.md v1: entity hierarchy (Business→Branch→Location→Register), universal rules
   R-P/R-PR/R-S/R-PAY/R-B/R-A/R-O/R-M, module framework shape, tenancy hook, open questions.
-- Roadmap restructured to 35 phases / 60 days (this document).
+- **ARCHITECTURE.md v2 (same day):** capability & progressive-disclosure model added
+  (R-C §3.0) + product thesis — *a configurable retail operating system that starts
+  incredibly small and grows without the business ever changing systems.*
+- Roadmap restructured to 35 phases / 60 days (this document); Phase 2 now includes the
+  capability system + solo-first onboarding v2.

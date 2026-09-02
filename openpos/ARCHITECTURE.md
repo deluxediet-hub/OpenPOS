@@ -8,11 +8,21 @@
 
 ## 1. What the system is
 
+**The product thesis (agreed 2026-09-02):** a *configurable retail operating system* that can
+start incredibly small and grow into a sophisticated multi-branch business platform **without
+the business ever having to change systems.**
+
+A single-till duka must never meet the words "branch", "warehouse", "supplier" or "price
+level". A 10-branch chain must never meet a second system. The engine is complete from day
+one (that is the "never change systems" guarantee); what changes with the business is **what
+the application shows** — every part of the application checks the **business capability set**
+rather than assuming every business has everything (rules R-C, §3.0).
+
 A **single offline-first system** that runs a Kenyan business — 1 branch or 100 — across any
 trade. One SQLite deployment per business (today); the schema carries a `business_id` tenant
 hook so the same code becomes multi-tenant SaaS (Phase 33) without a redesign.
 
-Two structural commitments from day one:
+Three structural commitments from day one:
 
 1. **Engines before UI.** Product, stock, pricing, payments, shifts and finance are serverside
    engines with APIs; the UI is a thin client over them. Fancy reports (Phase 15) must be
@@ -20,6 +30,8 @@ Two structural commitments from day one:
 2. **Core + modules.** The core never knows it is a pharmacy or a wine shop. Industry behaviour
    is activated by a module (Phase 18 framework) that adds fields, checkout gates, stock rules,
    reports and permissions — it never forks the core.
+3. **Capabilities, not features.** Presentation is capability-gated (R-C): the system starts
+   solo and unlocks concepts as the business grows — data changes, never deployments.
 
 ## 2. Entity hierarchy
 
@@ -55,6 +67,78 @@ Business (tenant)                     name, KRA PIN, currency, base tax, trade, 
   overrides (price, active state).
 
 ## 3. Universal rules
+
+### 3.0 Capabilities & progressive disclosure (R-C) — *the meta rule*
+
+**A POS must not feel like an ERP.** Every part of the application checks the business
+capability set before rendering a concept — it never assumes every business has everything.
+The engine and API stay capability-agnostic and complete; **gating is a presentation and
+workflow concern**, so any later unlock is instant (a flag, not a migration).
+
+- **R-C1 — Solo default.** A new business starts as: 1 branch · 1 location · 1 register ·
+  1 owner · no warehouses · no departments · one price level · no staff roles. In the UI this
+  is simply "my shop" — the words *branch / location / register* never appear for a solo
+  business.
+- **R-C2 — Capability-gated presentation.** Every nav item, screen, tab, report, settings
+  group, dashboard card and onboarding step checks the capability set before rendering. A
+  concept is shown only when its capability is enabled.
+- **R-C3 — Capabilities are data, not deployment.** Enabling = flag + (optionally) a small
+  setup/seed. No migration, no reinstall, no "upgrade path". 1 → 10 branches happens inside
+  the same installation.
+- **R-C4 — Trade templates set initial capabilities** (chosen at onboarding; owner may toggle
+  any of them on/off later):
+
+  | Trade | Enables |
+  |---|---|
+  | Duka / general shop | deni, barcodes, optional open-price |
+  | Wines & spirits | age gate, packs, high-value flags, weekend view |
+  | Boutique / fashion | variants, markdowns, season/collection |
+  | Pharmacy | batches/expiry/FEFO, Rx, controlled, insurance claims |
+  | Hardware | open units (m/kg/roll) |
+  | Electronics | serials/IMEI, warranties |
+  | Mini-mart | open-price, PLU, promotions |
+  | Cosmetics / footwear | variants (shade/size/width) |
+
+- **R-C5 — Guided growth.** The system watches the shape of the business and *proposes*
+  unlocks with one-tap confirmation — suggests, never forces, never silently enables:
+  "You added a second till — make it a separate location?" · "First deni sale — want a credit
+  limit and automatic statements?" · "12 products below reorder — set up your suppliers?"
+- **R-C6 — Vocabulary scales.** Solo business hears "products · stock · customers · till";
+  multi-location hears "locations · transfers"; multi-branch hears "branches · comparison".
+  Same engine, named at the business's level.
+- **R-C7 — Complexity budget.** The till is a fixed set of concepts: scan/search → cart →
+  pay → done. Any extra concept on the till must earn its place via a capability or a trade
+  module. The complexity belongs behind the scenes.
+- **R-C8 — Reports & dashboards are functions of capabilities.** Solo owner dashboard:
+  Today · Stock · Customers · Sales. "Branch comparison" requires multi_branch; "supplier
+  balances" requires purchasing; "shrinkage" requires a stocktake; "expiry report" requires
+  batches.
+- **R-C9 — Never retrain.** A business that grows 1 → 10 branches keeps the **same till**.
+  What unlocks is the back office — not the counter.
+
+**Capability list (v1)**
+
+*Core (always on, mostly invisible):* products & selling, stock levels, sales history &
+receipts, owner account, business/tax/receipt settings, simple stock adjust ("counting your
+stock is not a feature — it's housekeeping").
+
+*Progressive (off until unlocked):*
+
+| Capability | Unlock moment | What appears |
+|---|---|---|
+| `staff_roles` | second user added | staff list, roles, PIN escalation, timeclock |
+| `multi_location` | second till / shop | location picker, location transfers |
+| `multi_branch` | second branch created | branch dashboards, branch pricing/staff, comparison |
+| `warehouse` | non-selling storage needed | warehouse location, warehouse movements |
+| `departments` | organisational slicing needed | department field + department reports |
+| `purchasing` | first supplier | suppliers, POs, goods received, supplier balances |
+| `deni` (credit) | first credit sale | credit limits, ledger, statements, aging |
+| `price_levels` | wholesale/member trade | level picker at checkout |
+| `promotions` / `loyalty` | retention program started | promos, coupons, points, tiers |
+| `variants` / `packs` / `batches` / `serials` / `open_priced` | trade template or per-product need | matching product & checkout UI |
+| `expenses` | money-out tracking wanted | expenses, petty cash, P&L-lite |
+| `stocktake_pro` | first blind count | blind counts, shrinkage analytics |
+| `comms` / `online` | WhatsApp / social selling | receipts, statements, order capture, unified stock |
 
 ### 3.1 Product model (R-P)
 
@@ -269,7 +353,8 @@ Hook points (core exposes these; modules plug in):
 
 ## 7. What must be true for the pilot (Day 60)
 
-- Any business onboards in < 15 minutes (wizard + template data).
+- Any business onboards in < 15 minutes (wizard + template data) — and a **solo shop never
+  sees an ERP concept** (R-C1/R-C2, checked screen-by-screen).
 - A cashier completes a first sale unaided in < 5 minutes (Phase-7 acceptance).
 - eTIMS + M-Pesa live (production where approvals landed; sandbox + manual mode always works).
 - The offline test matrix (Phase 17) and the break-it matrix (Phase 31) are green.
@@ -288,6 +373,14 @@ Hook points (core exposes these; modules plug in):
 
 ## 9. Change log
 
+- **2026-09-02 (v2)** — **Capabilities & progressive disclosure model added (R-C, §3.0)**
+  per founder direction: "the POS should not feel like an ERP". Product thesis adopted
+  (§1): a configurable retail operating system that starts incredibly small and grows into a
+  sophisticated multi-branch platform without the business ever changing systems. Solo
+  default (R-C1), capability-gated presentation (R-C2), capabilities are data not deployment
+  (R-C3), trade templates seed capabilities (R-C4), guided growth (R-C5), scaling vocabulary
+  (R-C6), till complexity budget (R-C7), capability-shaped reports (R-C8), never retrain
+  (R-C9). Capability list v1 defined. Onboarding becomes solo-first (v2) in Phase 2.
 - **2026-09-02 (v1)** — Initial architecture written from the founder's 35-phase directive.
   Introduces: Branch → **Location** → Register hierarchy; `business_id` tenant hook; payment
   **adapter** architecture (R-PAY); stock-as-ledger with reason codes (R-S); pricing resolution

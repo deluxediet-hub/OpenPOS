@@ -7,6 +7,11 @@ chemist/pharmacy, wines & spirits, boutique, hardware** — with KRA **eTIMS** a
 (Daraja)** compliance built in, English + Swahili UI, and one consolidated owner dashboard
 across unlimited branches.
 
+**Starts incredibly small, grows without changing systems.** A single-till shop sees a POS —
+never "branches, warehouses, suppliers". Every screen checks the business **capability set**
+before showing a concept; the full multi-branch engine is underneath from day one (rules R-C,
+ARCHITECTURE.md §3.0).
+
 > The repo root holds **OpenPOS v1** (the white-label restaurant & lounge POS) — kept as the
 > reference implementation. **This folder is the new product.** See `../OPENPOS_PLAN.md` for
 > the full research, feature matrix and 24-day phased roadmap.
