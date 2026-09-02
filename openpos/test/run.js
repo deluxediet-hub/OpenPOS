@@ -1708,6 +1708,51 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(again.status, 400, 'double void refused');
   });
 
+  await test('quote → invoice: converts with payment, stock moves exactly once', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const before = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.A.vid, pos.loc).qty;
+    const withPay = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], kind: 'quote', payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(withPay.status, 400, `quote with payment: ${JSON.stringify(withPay.body)}`);
+    const q = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], kind: 'quote' } });
+    assert.strictEqual(q.status, 200, JSON.stringify(q.body));
+    assert.strictEqual(q.body.sale.status, 'suspended');
+    assert.strictEqual(q.body.sale.kind, 'quote');
+    assert.strictEqual(q.body.payments.length, 0);
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.A.vid, pos.loc).qty, before, 'quote must not touch stock');
+    assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM stock_moves WHERE ref = ?").get(q.body.sale.invoice_no).n, 0);
+    const payOnQuote = await asA({ path: `/api/sales/${q.body.sale.id}/pay`, method: 'POST', body: { payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(payOnQuote.status, 400, `pay on quote: ${JSON.stringify(payOnQuote.body)}`);
+    assert.match(payOnQuote.body.error, /convert/);
+    // convert a normal held sale → refused
+    const convOnSale = await asA({ path: `/api/sales/${pos.sale1}/convert`, method: 'POST', body: { payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(convOnSale.status, 400, JSON.stringify(convOnSale.body));
+    // convert the quote
+    const c = await asA({ path: `/api/sales/${q.body.sale.id}/convert`, method: 'POST', body: { payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(c.status, 200, JSON.stringify(c.body));
+    assert.strictEqual(c.body.sale.kind, 'invoice', `kind after convert: ${c.body.sale.kind}`);
+    assert.strictEqual(c.body.sale.status, 'paid');
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.A.vid, pos.loc).qty, before - 1);
+    assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM stock_moves WHERE ref = ? AND type = 'sale'").get(c.body.sale.invoice_no).n, 1, 'stock moved exactly once');
+    const again = await asA({ path: `/api/sales/${c.body.sale.id}/convert`, method: 'POST', body: { payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(again.status, 400, 'double-convert refused');
+    const audit = d.prepare("SELECT * FROM audit_log WHERE action = 'sale/convert' ORDER BY id DESC LIMIT 1").get();
+    assert.ok(audit, 'conversion audited');
+  });
+
+  await test('quote re-validation: deactivated item blocks conversion until restored', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const q = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.E.vid, qty: 1 }], kind: 'quote' } });
+    assert.strictEqual(q.status, 200, JSON.stringify(q.body));
+    d.prepare('UPDATE products SET active = 0 WHERE id = ?').run(pos.E.id);
+    const blocked = await asA({ path: `/api/sales/${q.body.sale.id}/convert`, method: 'POST', body: { payment: { method: 'cash', amount: 200 } } });
+    assert.strictEqual(blocked.status, 409, JSON.stringify(blocked.body));
+    assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM stock_moves WHERE ref = ?").get(q.body.sale.invoice_no).n, 0, 'no stock move on failed conversion');
+    d.prepare('UPDATE products SET active = 1 WHERE id = ?').run(pos.E.id);
+    const ok = await asA({ path: `/api/sales/${q.body.sale.id}/convert`, method: 'POST', body: { payment: { method: 'cash', amount: 200 } } });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.strictEqual(ok.body.sale.kind, 'invoice');
+  });
+
   await test('sales list + detail (receipt reprint)', async () => {
     const list = await authJ({ path: '/api/sales?limit=50' });
     assert.strictEqual(list.status, 200);

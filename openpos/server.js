@@ -386,7 +386,7 @@ function createApp(d) {
   app.use(express.static(path.join(__dirname, 'public')));
 
   // ---- health / status ------------------------------------------------------
-  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 6 }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 7 }));
 
   app.get('/api/setup/status', (req, res) => {
     res.json({
@@ -3103,7 +3103,11 @@ function createApp(d) {
   app.post('/api/sales', me, (req, res) => {
     try {
       const b = req.body || {};
-      const hold = b.hold === true;
+      const kind = b.kind === 'quote' ? 'quote' : 'sale';
+      if (kind === 'quote' && b.payment) {
+        return res.status(400).json({ error: 'quotes are held, not paid — convert the quote when the customer is ready' });
+      }
+      const hold = b.hold === true || kind === 'quote';
       const approver = b.override_pin ? supervisorFromPin(b.override_pin) : null;
       if (b.oversell && !['owner', 'manager'].includes(req.user.role)) {
         return res.status(403).json({ error: 'overselling stock is a manager/owner act (R-S8)' });
@@ -3127,13 +3131,13 @@ function createApp(d) {
         const id = d
           .prepare(
             `INSERT INTO sales (branch_id, location_id, register_id, terminal, order_no, invoice_no, customer_id, user_id, status,
-               subtotal, discount, net, tax, gross, tender, note, etims_status, discount_by, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)`
+               subtotal, discount, net, tax, gross, tender, note, etims_status, discount_by, kind, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)`
           )
           .run(ctx.branchId, ctx.locationId, ctx.register ? ctx.register.id : null, ctx.register ? ctx.register.name : '',
             orderNo, invoiceNo, customer ? customer.id : null, req.user.id, hold ? 'suspended' : 'open',
             totals.subtotal, totals.discount, totals.net, totals.tax, totals.gross,
-            String(b.note || '').trim(), biz.kraPin ? 'pending' : 'exempt', discountBy, t)
+            String(b.note || '').trim(), biz.kraPin ? 'pending' : 'exempt', discountBy, kind, t)
           .lastInsertRowid;
         if (!hold) {
           moveStockForSale(d, { user: req.user, ctx, lines, ref: invoiceNo, allowOversell: b.oversell === true });
@@ -3169,41 +3173,48 @@ function createApp(d) {
     }
   });
 
-  // Resume a held sale: re-validate (variant/product still active), then the single
-  // stock-mutating step — FEFO at the paying register, paid in the same transaction.
+  // Shared resume step: re-validate (variant/product still active) → the single
+  // stock-mutating step (FEFO at the paying register) → payment, one transaction.
+  function resumeHeldSale(d, { sale, user, b, approver, markInvoice = false }) {
+    if (b.oversell && !['owner', 'manager'].includes(user.role)) {
+      throw httpError(403, 'overselling stock is a manager/owner act (R-S8)');
+    }
+    const rows = d.prepare('SELECT * FROM sale_items WHERE sale_id = ? ORDER BY id').all(sale.id);
+    const lines = rows.map((row) => {
+      const variant = d.prepare('SELECT * FROM variants WHERE id = ? AND active = 1').get(row.variant_id);
+      if (!variant) throw httpError(409, `held item no longer available (variant ${row.variant_id} deactivated)`);
+      const product = d.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(variant.product_id);
+      if (!product) throw httpError(409, `held item no longer available (${row.name} deactivated)`);
+      return {
+        variant, product, qty: row.qty, unitPrice: row.unit_price || 0, source: 'frozen',
+        disc: row.line_discount, net: row.net, tax: row.tax, gross: row.gross,
+        taxType: row.tax_type, kra: row.kra_item_code, age: row.age_verified, batchId: null, note: row.line_note, _rowId: row.id
+      };
+    });
+    const ctx = saleContext(d, user);
+    if (!ctx.branchId || !ctx.locationId) throw httpError(400, 'no selling location for this user');
+    if (ctx.branchId !== sale.branch_id) throw httpError(400, 'held sales can only be paid at the same branch');
+    const run = d.transaction(() => {
+      moveStockForSale(d, { user, ctx, lines, ref: sale.invoice_no, allowOversell: b.oversell === true });
+      const fresh = d.prepare('SELECT * FROM sales WHERE id = ?').get(sale.id);
+      applyPayment(d, { user, saleId: sale.id, sale: fresh, payment: b.payment, discountBy: approver ? approver.id : null });
+      if (markInvoice) d.prepare("UPDATE sales SET kind = 'invoice' WHERE id = ?").run(sale.id);
+      const upd = d.prepare('UPDATE sale_items SET batch_id = ? WHERE id = ?');
+      for (const L of lines) upd.run(L.batchId, L._rowId);
+    });
+    run();
+  }
+
+  // Resume a held sale (kind 'sale'): stock moves exactly once, here.
   app.post('/api/sales/:id/pay', me, (req, res) => {
     try {
       const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(req.params.id));
       if (!sale) return res.status(404).json({ error: 'not found' });
       if (sale.status !== 'suspended') return res.status(400).json({ error: `sale is ${sale.status}, not held` });
+      if (sale.kind === 'quote') return res.status(400).json({ error: 'quotes convert via POST /api/sales/:id/convert' });
       const b = req.body || {};
       const approver = b.override_pin ? supervisorFromPin(b.override_pin) : null;
-      if (b.oversell && !['owner', 'manager'].includes(req.user.role)) {
-        return res.status(403).json({ error: 'overselling stock is a manager/owner act (R-S8)' });
-      }
-      const rows = d.prepare('SELECT * FROM sale_items WHERE sale_id = ? ORDER BY id').all(sale.id);
-      const lines = rows.map((row) => {
-        const variant = d.prepare('SELECT * FROM variants WHERE id = ? AND active = 1').get(row.variant_id);
-        if (!variant) throw httpError(409, `held item no longer available (variant ${row.variant_id} deactivated)`);
-        const product = d.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(variant.product_id);
-        if (!product) throw httpError(409, `held item no longer available (${row.name} deactivated)`);
-        return {
-          variant, product, qty: row.qty, unitPrice: row.unit_price || 0, source: 'frozen',
-          disc: row.line_discount, net: row.net, tax: row.tax, gross: row.gross,
-          taxType: row.tax_type, kra: row.kra_item_code, age: row.age_verified, batchId: null, note: row.line_note, _rowId: row.id
-        };
-      });
-      const ctx = saleContext(d, req.user);
-      if (!ctx.branchId || !ctx.locationId) return res.status(400).json({ error: 'no selling location for this user' });
-      if (ctx.branchId !== sale.branch_id) return res.status(400).json({ error: 'held sales can only be paid at the same branch' });
-      const run = d.transaction(() => {
-        moveStockForSale(d, { user: req.user, ctx, lines, ref: sale.invoice_no, allowOversell: b.oversell === true });
-        const fresh = d.prepare('SELECT * FROM sales WHERE id = ?').get(sale.id);
-        applyPayment(d, { user: req.user, saleId: sale.id, sale: fresh, payment: b.payment, discountBy: approver ? approver.id : null });
-        const upd = d.prepare('UPDATE sale_items SET batch_id = ? WHERE id = ?');
-        for (const L of lines) upd.run(L.batchId, L._rowId);
-      });
-      run();
+      resumeHeldSale(d, { sale, user: req.user, b, approver });
       dbm.audit(d, {
         userId: req.user.id, branchId: sale.branch_id, action: 'sale/pay',
         entity: 'sale', entityId: String(sale.id),
@@ -3213,6 +3224,30 @@ function createApp(d) {
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message });
       console.error('[error] POST /api/sales/:id/pay:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Quote → invoice (Phase 7 acceptance): the quote converts with a payment,
+  // re-validates its lines, and moves stock exactly once — then it is an invoice.
+  app.post('/api/sales/:id/convert', me, (req, res) => {
+    try {
+      const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(req.params.id));
+      if (!sale) return res.status(404).json({ error: 'not found' });
+      if (sale.kind !== 'quote') return res.status(400).json({ error: 'only quotes can be converted' });
+      if (sale.status !== 'suspended') return res.status(400).json({ error: `quote is ${sale.status}, not pending` });
+      const b = req.body || {};
+      const approver = b.override_pin ? supervisorFromPin(b.override_pin) : null;
+      resumeHeldSale(d, { sale, user: req.user, b, approver, markInvoice: true });
+      dbm.audit(d, {
+        userId: req.user.id, branchId: sale.branch_id, action: 'sale/convert',
+        entity: 'sale', entityId: String(sale.id),
+        detail: { invoice: sale.invoice_no, method: b.payment ? b.payment.method : null, gross: sale.gross, oversell: b.oversell === true || undefined }
+      });
+      res.json({ ok: true, ...buildSalePayload(d, sale.id) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/sales/:id/convert:', e.message);
       return res.status(500).json({ error: 'internal error' });
     }
   });
@@ -3545,7 +3580,7 @@ if (require.main === module) {
   auth.pruneSessions(db);
   app.listen(PORT, '0.0.0.0', () => {
     const s = dbm.getSetting(db, 'business', {});
-    console.log(`OpenPOS v2 (Phase 6)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
+    console.log(`OpenPOS v2 (Phase 7)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
   });
 }
 

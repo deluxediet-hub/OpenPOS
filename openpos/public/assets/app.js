@@ -82,6 +82,8 @@ const I18N = {
     supervisor_pin: 'Supervisor PIN', supervisor_pin_msg: 'Enter a manager or owner PIN to approve this discount.',
     confirm: 'Confirm', print: 'Print', new_sale: 'New sale', payment_ref: 'Reference',
     customer: 'Customer', invoice_no: 'Invoice',
+    quote_sale: 'Quote', convert_sale: 'Convert & pay',
+    till_tip: 'Scan a barcode or tap a product to start. F2 refocuses search. Cash is the default payment — Hold parks the cart, Quote prices it for later.',
   },
   sw: {
     staff_signin: 'Waketi wafanyakazi', select_staff: 'Chagua mfanyakazi', enter_pin: 'Weka PIN',
@@ -158,6 +160,8 @@ const I18N = {
     supervisor_pin: 'PIN ya msimamizi', supervisor_pin_msg: 'Weka PIN ya meneja au mwenyeji ili kuidhinisha punguzo hili.',
     confirm: 'Thibitisha', print: 'Chapisha', new_sale: 'Mauzo mapya', payment_ref: 'Marejeo',
     customer: 'Mteja', invoice_no: 'Fatura',
+    quote_sale: 'Nukuu', convert_sale: 'Badilisha & lipa',
+    till_tip: 'Scan barcode au gusa bidhaa ili kuanza. F2 inarudisha kwenye utafutaji. Taslimu ni njia ya kawaida — Shikilia inaweka kikapu, Nukuu inamilishwa baadaye.',
   }
 };
 

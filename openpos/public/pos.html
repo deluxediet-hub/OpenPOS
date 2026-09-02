@@ -40,7 +40,10 @@
   .paytabs button.on { background: var(--green-soft); border-color: var(--green); color: var(--green-dark); }
   .quick { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
   .quick button { border: 1px dashed var(--line); background: #fff; border-radius: 8px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
-  .act-row { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; margin-top: 10px; }
+  .act-row { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 8px; margin-top: 10px; }
+  .tip { background: var(--green-soft); border: 1px solid #bfe3d0; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; margin-bottom: 8px; }
+  .tip b { color: var(--green-dark); }
+  .tip button { float: right; border: none; background: none; cursor: pointer; color: var(--muted); font-size: 14px; }
   #sell-btn { padding: 14px; font-size: 16px; }
   .held { font-size: 13px; }
   .held .r { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
@@ -99,6 +102,7 @@
     <div id="grid"></div>
   </div>
   <div class="pos-right">
+    <div class="tip hidden" id="p-tip"><button id="p-tip-x">✕</button><span data-i18n="till_tip"></span></div>
     <div class="cust-row">
       <select id="p-cust" style="flex:1"></select>
       <input id="p-promo" placeholder="Promo" style="width:90px" title="Promo code">
@@ -123,6 +127,7 @@
     </div>
     <div class="act-row">
       <button class="btn ghost" id="p-hold" data-i18n="hold_sale">Hold</button>
+      <button class="btn ghost" id="p-quote" data-i18n="quote_sale">Quote</button>
       <button class="btn" id="sell-btn" data-i18n="complete_sale">Complete sale</button>
     </div>
     <div class="msg" id="p-msg" style="margin:4px 0 0"></div>
@@ -243,6 +248,7 @@ async function initMain() {
   drawCats(); drawGrid(); drawCust(); drawCart(); loadHeld();
   applyI18n();
   wireCart();
+  if (!localStorage.getItem('op_till_tip_v1')) $('#p-tip').classList.remove('hidden');
   setTimeout(() => $('#scan').focus(), 50);
 }
 
@@ -371,7 +377,9 @@ function wireCart() {
   });
   $('#p-amount').oninput = drawQuick;
   $('#sell-btn').onclick = () => completeSale();
-  $('#p-hold').onclick = () => holdSale();
+  $('#p-hold').onclick = () => holdSale('sale');
+  $('#p-quote').onclick = () => holdSale('quote');
+  $('#p-tip-x').onclick = () => { $('#p-tip').classList.add('hidden'); localStorage.setItem('op_till_tip_v1', '1'); };
 }
 
 function scan(code) {
@@ -394,13 +402,16 @@ function lineTax(L) { return L.tax_type === 'std' ? Math.round(lineGross(L) * VA
 function drawCart() {
   const el = $('#cart');
   if (RESUME_SALE) {
-    el.innerHTML = `<div class="cline"><div><div class="nm">${t('held_sale')} #${RESUME_SALE.id}</div>
+    const isQuote = RESUME_SALE.kind === 'quote';
+    el.innerHTML = `<div class="cline"><div><div class="nm">${isQuote ? t('quote_sale') : t('held_sale')} #${RESUME_SALE.id}</div>
       <div class="sub">${t('total')}: ${fmt(RESUME_SALE.gross)}</div></div></div>`;
-    $('#sell-btn').textContent = t('resume_sale');
+    $('#sell-btn').textContent = isQuote ? t('convert_sale') : t('resume_sale');
     $('#p-hold').disabled = true;
+    $('#p-quote').disabled = true;
   } else {
     $('#sell-btn').textContent = t('complete_sale');
     $('#p-hold').disabled = !CART.length;
+    $('#p-quote').disabled = !CART.length;
     el.innerHTML = CART.map((L, i) => `
       <div class="cline">
         <div>
@@ -544,16 +555,17 @@ function payBody(total) {
   return b;
 }
 
-async function holdSale() {
+async function holdSale(kind) {
   if (!CART.length) return;
   const msg = $('#p-msg');
   const body = {
     items: CART.map((L) => ({ variant_id: L.variant_id, qty: L.qty, line_discount: L.line_discount || 0, line_note: L.line_note || '', age_verified: L.age_verified ? 1 : 0 })),
     customer_id: CUST_ID(), promo_code: PROMO() || null, hold: true
   };
+  if (kind === 'quote') body.kind = 'quote';
   try {
     const r = await api('/api/sales', { method: 'POST', body });
-    toast(msg, `${t('held_sale')} #${r.sale.id}`, true);
+    toast(msg, `${kind === 'quote' ? t('quote_sale') : t('held_sale')} #${r.sale.id}`, true);
     CART = []; CUST_ID(); $('#p-promo').value = '';
     drawCart(); loadHeld(); $('#scan').focus();
   } catch (e) { toast(msg, e.message, false); }
@@ -563,13 +575,15 @@ async function loadHeld() {
   try {
     const rows = await api('/api/sales?status=suspended&mine=1&limit=10');
     $('#p-held').innerHTML = rows.length
-      ? `<div class="muted small" style="margin-top:8px">${t('held_sales')}</div>` + rows.map((s) =>
-          `<div class="r"><span>#${s.id} · ${fmt(s.gross)} · ${esc(s.cashier || '')}</span>
-           <button class="btn small" data-resume="${s.id}" data-g="${s.gross}">${t('resume')}</button></div>`).join('')
+      ? `<div class="muted small" style="margin-top:8px">${t('held_sales')}</div>` + rows.map((s) => {
+          const isQuote = s.kind === 'quote';
+          return `<div class="r"><span>#${s.id} · ${isQuote ? `<span class="pill">${t('quote_sale')}</span> ` : ''}${fmt(s.gross)} · ${esc(s.cashier || '')}</span>
+           <button class="btn small" data-resume="${s.id}" data-g="${s.gross}" data-kind="${isQuote ? 'quote' : 'sale'}">${isQuote ? t('convert_sale') : t('resume')}</button></div>`;
+        }).join('')
       : '';
     $('#p-held').querySelectorAll('[data-resume]').forEach((b) => {
       b.onclick = () => {
-        RESUME_SALE = { id: Number(b.dataset.resume), gross: Number(b.dataset.g) };
+        RESUME_SALE = { id: Number(b.dataset.resume), gross: Number(b.dataset.g), kind: b.dataset.kind };
         drawCart();
       };
     });
@@ -580,8 +594,9 @@ async function resumeSale() {
   const msg = $('#p-msg');
   const total = RESUME_SALE.gross;
   const b = payBody(total);
+  const action = RESUME_SALE.kind === 'quote' ? 'convert' : 'pay';
   try {
-    const r = await api(`/api/sales/${RESUME_SALE.id}/pay`, { method: 'POST', body: { payment: b } });
+    const r = await api(`/api/sales/${RESUME_SALE.id}/${action}`, { method: 'POST', body: { payment: b } });
     RESUME_SALE = null;
     showReceipt(r);
     loadHeld();

@@ -948,6 +948,10 @@ function migrate(d) {
   // and the exact variant on each sale line (held sales re-validate + FEFO at payment).
   addCol(d, 'sales', 'discount_by', 'INTEGER');
   addCol(d, 'sale_items', 'variant_id', 'INTEGER');
+
+  // Phase 7 (Day 11): sale kind — 'sale' (default), 'quote', or 'invoice' (a quote
+  // converted at payment). Quotes never touch stock until conversion.
+  addCol(d, 'sales', 'kind', "TEXT NOT NULL DEFAULT 'sale'");
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

@@ -215,7 +215,7 @@ contradicts the doc without a change-log entry.**
   (module proper in Phase 11). **83 tests green** (was 71) incl. the full acceptance grid,
   PIN flow, block policy, floor precedence, history immutability and cashier permissions.
 
-### Phase 7 — POS / Checkout Engine · Days 10–11
+### Phase 7 — POS / Checkout Engine · Days 10–11 ✅
 - Barcode scan (wedge), fast search, product grid, variant picker, cart, qty, discounts
   (permissioned), customer attach, **hold/resume**, **quote → invoice**, receipt (print/
   screen/HTML), notes, cashier assignment, supervisor approvals, multi-register concurrent
@@ -236,8 +236,13 @@ contradicts the doc without a change-log entry.**
   (qty/discount/note), customer + promo attach, hold + held-sales resume, printable
   receipt with KRA fields, cashier bound to their register. **96 tests green** (was 83)
   incl. two-till concurrency (8 units, 4+4, exact stock, distinct tills) + 25-step UI
-  smoke. **Day 11:** quote → invoice (converts stock exactly once), cashier onboarding
-  polish (first unaided sale < 5 min acceptance), receipt print CSS polish.
+  smoke. **Done (Day 11):** quote → invoice — `sales.kind` (sale/quote/invoice); a
+  quote is a suspended sale that never touches stock; `POST /api/sales/:id/convert`
+  re-validates the lines (deactivated item → 409, no stock move), takes payment and
+  moves stock **exactly once**; pay-on-quote and double-convert refused; UI adds a
+  Quote button, convert-from-held-list, and a dismissable first-run till hint
+  (EN/SW) so a new cashier's first unaided sale is a scan-and-tap exercise.
+  **98 tests green** (was 96) + 30-step UI smoke green; health + banner report Phase 7.
 
 ### Phase 8 — Payment Engine · Day 12
 - Adapter architecture: cash · M-Pesa · card · bank · credit(deni) · store credit · other
