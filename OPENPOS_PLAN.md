@@ -291,13 +291,30 @@ contradicts the doc without a change-log entry.**
   (was 106) incl. cross-shift refund billing, handover variance, enforcement gating;
   34-step UI smoke green.
 
-### Phase 10 — Sales Lifecycle, Returns & Exchanges · Day 14
+### Phase 10 — Sales Lifecycle, Returns & Exchanges · Day 14 ✅
 - Sale → payment → receipt → return → refund → exchange → cancellation → void → correction,
   with approval rules; full/partial returns (restock flags, batch/serial-aware), exchanges
   (price diff settles), wrong-item/damaged reason codes, customer/store credit,
   credit/debit notes (eTIMS-ready numbering)
 - **Acceptance:** partial return of a batch item lands in the right batch; exchange price
   diff settles; every correction references its original; nothing edited in place.
+- **Done (Day 14):** nothing edited in place — a return is its own `RET-` document (eTIMS-
+  ready sequential) pointing at the exact `sale_items` it undoes, with per-line restock
+  flag and the FEFO batch the goods land back in (batch items return to the **same**
+  batch — verified). Money back = **partial refunds to the original method, newest
+  payment first** (`payments.refunded`; a fully-returned sale goes terminal `refunded`)
+  or **store credit** (ledger-evidenced). **Exchanges** = return + replacement sale
+  carrying the returned value as a VAT-exact exchange-credit discount; the price diff
+  settles exactly — the customer pays the new sale's actual balance, or the excess is
+  refunded to the *original* sale (never double-refunded). Approval rule as a capability:
+  cashiers ≤ `settings.returns.cashier_limit` (default 5 000), managers/owners unlimited;
+  exchanges need `sales.discount` or a supervisor PIN. Reason codes (wrong item /
+  damaged / defective / changed mind / other); shift drawer counts partial refunds out;
+  sale payloads expose derived `returns`/`returns_total`. POS return/exchange modal,
+  manager Returns/Exchanges tab, EN/SW. **119 tests green** (was 111) incl. same-batch
+  return, newest-first multi-method refund split, VAT-exact diff settlement both
+  directions; 29-step UI smoke green. (Void + cancellation + corrections already existed
+  from P5/P8 — the lifecycle is now complete end to end.)
 
 ### Phase 11 — Customer / Deni / Credit System · Day 15
 - Phone-first profiles, home branch, purchase history, **credit (deni) accounts**: limits,

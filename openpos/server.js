@@ -388,7 +388,7 @@ function createApp(d) {
   app.use(express.static(path.join(__dirname, 'public')));
 
   // ---- health / status ------------------------------------------------------
-  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 9 }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 10 }));
 
   app.get('/api/setup/status', (req, res) => {
     res.json({
@@ -3079,6 +3079,10 @@ function createApp(d) {
         discount_by: sale.discount_by ? names[sale.discount_by] : null
       },
       items, payments,
+      returns_total: d.prepare('SELECT COALESCE(SUM(total), 0) AS t FROM returns WHERE sale_id = ?').get(saleId).t,
+      returns: d.prepare(
+        'SELECT id, return_no, total, reason, refund_as, note, created_at FROM returns WHERE sale_id = ? ORDER BY id'
+      ).all(saleId),
       customer: customer ? { id: customer.id, name: customer.name, phone: customer.phone } : null,
       receipt: {
         business: { name: biz.name || '', phone: biz.phone || '', kraPin: biz.kraPin || '', address: biz.address || '' },
@@ -3298,6 +3302,7 @@ function createApp(d) {
     const where = ['b.id IN (' + branches.map((x) => x.id).join(',') + ')'];
     const args = [];
     if (q.status) { where.push('s.status = ?'); args.push(String(q.status)); }
+    if (q.invoice) { where.push('s.invoice_no = ?'); args.push(String(q.invoice).trim().toUpperCase()); }
     if (q.mine === '1') { where.push('s.user_id = ?'); args.push(req.user.id); }
     if (q.from) { where.push('s.created_at >= ?'); args.push(String(q.from)); }
     if (q.to) { where.push('s.created_at < ?'); args.push(String(q.to)); }
@@ -3358,7 +3363,7 @@ function createApp(d) {
         }
         d.prepare("UPDATE sales SET status = 'voided' WHERE id = ?").run(sale.id);
         if (hadStock) {
-          d.prepare("UPDATE payments SET status = 'refunded' WHERE sale_id = ? AND status = 'confirmed'").run(sale.id);
+          d.prepare("UPDATE payments SET status = 'refunded', refunded = amount WHERE sale_id = ? AND status = 'confirmed'").run(sale.id);
           d.prepare("UPDATE payments SET status = 'cancelled', note = 'voided' WHERE sale_id = ? AND status = 'pending'").run(sale.id);
         }
       });
@@ -3727,8 +3732,8 @@ function createApp(d) {
     // Cash that physically left the drawer while this shift was running —
     // whoever made the sale, the money came out of THIS drawer.
     const cashOut = d.prepare(
-      `SELECT COALESCE(SUM(p.amount), 0) AS s FROM payments p JOIN sales s ON s.id = p.sale_id
-       WHERE p.method = 'cash' AND p.status = 'refunded'
+      `SELECT COALESCE(SUM(p.refunded), 0) AS s FROM payments p JOIN sales s ON s.id = p.sale_id
+       WHERE p.method = 'cash' AND p.refunded > 0
          AND s.register_id = ? AND s.user_id = ? AND p.updated_at IS NOT NULL
          AND p.updated_at >= ? AND p.updated_at < ?`
     ).get(reg, uid, shift.opened_at, end).s;
@@ -3902,6 +3907,453 @@ function createApp(d) {
     dbm.setSetting(d, 'shifts', next);
     dbm.audit(d, { userId: req.user.id, action: 'settings/shifts', entity: 'setting', entityId: 'shifts', detail: next });
     res.json({ ok: true, ...next });
+  });
+
+  // ---- Phase 10: returns & exchanges ------------------------------------------
+  // Nothing is edited in place: a return is its own document (RET-#) whose
+  // lines point at the exact sale_items it undoes, the batch the goods land
+  // in, and whether they came back into stock. The money goes back through
+  // the payment engine — partial refunds to the ORIGINAL method, newest
+  // payment first — or into the customer's store credit. An exchange is a
+  // return + a replacement sale carrying an "exchange credit" discount worth
+  // the returned value; the price diff settles exactly (pay more, or the
+  // difference is refunded). Every correction references its original.
+  const RETURN_REASONS = ['wrong_item', 'damaged', 'defective', 'customer_changed_mind', 'other'];
+
+  function returnsConfig(d) {
+    const s = d.prepare('SELECT value FROM settings WHERE key = ?').get('returns');
+    const cur = s ? JSON.parse(s.value) : {};
+    return { cashier_limit: Number(cur.cashier_limit) || 5000 };
+  }
+
+  function returnPayload(d, retId) {
+    const r = d.prepare(
+      `SELECT rt.*, s.invoice_no AS sale_invoice, u.name AS cashier, b.name AS branch_name
+       FROM returns rt
+       JOIN sales s ON s.id = rt.sale_id
+       JOIN branches b ON b.id = rt.branch_id
+       LEFT JOIN users u ON u.id = rt.user_id
+       WHERE rt.id = ?`
+    ).get(retId);
+    if (!r) return null;
+    const items = d.prepare(
+      `SELECT ri.*, si.batch_id AS sale_item_batch
+       FROM return_items ri JOIN sale_items si ON si.id = ri.sale_item_id
+       WHERE ri.return_id = ?`
+    ).all(retId);
+    const ex = d.prepare(`SELECT * FROM exchanges WHERE return_id = ?`).get(retId);
+    const cust = r.customer_id ? d.prepare('SELECT id, name, store_credit FROM customers WHERE id = ?').get(r.customer_id) : null;
+    return { ...r, items, exchange: ex || null, customer: cust };
+  }
+
+  // Push `amount` back out of the sale's confirmed payments, newest first,
+  // to the original method (partial refunds supported). Throws 409 when the
+  // sale has no money left to refund.
+  function refundAcrossPayments(d, { sale, amount, user, note }) {
+    const pays = d.prepare(
+      `SELECT id, amount, refunded FROM payments
+       WHERE sale_id = ? AND status = 'confirmed' AND refunded < amount ORDER BY id DESC`
+    ).all(sale.id);
+    const rows = [];
+    let left = amount;
+    for (const p of pays) {
+      if (left <= 0) break;
+      const amt = Math.min(left, p.amount - (p.refunded || 0));
+      const r = pme.refundPayment(d, { paymentId: p.id, user, note, amount: amt });
+      rows.push(r.payment);
+      left -= r.amount;
+    }
+    if (left > 0) throw httpError(409, `only ${amount - left} is left to refund on ${sale.invoice_no} (short ${left})`);
+    return rows;
+  }
+
+  // Validate return lines against a sale. Returns { plan, total } where each
+  // plan row carries the sale_item, qty, proration amount and restock flag.
+  function planReturnLines(d, sale, linesBody) {
+    if (!Array.isArray(linesBody) || !linesBody.length) {
+      throw httpError(400, 'lines required: [{sale_item_id, qty, restock}]');
+    }
+    const items = d.prepare('SELECT * FROM sale_items WHERE sale_id = ? ORDER BY id').all(sale.id);
+    const perItem = new Map(items.map((i) => [i.id, i]));
+    const used = d.prepare(
+      `SELECT ri.sale_item_id, COALESCE(SUM(ri.qty), 0) AS q FROM return_items ri
+       JOIN returns rt ON rt.id = ri.return_id WHERE rt.sale_id = ? GROUP BY ri.sale_item_id`
+    ).all(sale.id);
+    const usedMap = new Map(used.map((u) => [u.sale_item_id, u.q]));
+    const plan = [];
+    let total = 0;
+    for (const ln of linesBody) {
+      const si = perItem.get(numOrNull(ln.sale_item_id));
+      if (!si) throw httpError(400, `unknown sale_item ${ln.sale_item_id}`);
+      const qty = Number(ln.qty);
+      if (!Number.isFinite(qty) || qty <= 0) throw httpError(400, 'qty must be positive');
+      const avail = si.qty - (usedMap.get(si.id) || 0);
+      if (qty > avail + 1e-9) throw httpError(400, `only ${avail} of "${si.name}" left to return`);
+      const amount = Math.round((si.gross * qty) / si.qty);
+      const restock = ln.restock === false ? 0 : 1;
+      plan.push({ si, qty, amount, restock });
+      total += amount;
+    }
+    if (total <= 0) throw httpError(400, 'nothing to return');
+    return { plan, total };
+  }
+
+  // Write one return document (header + items + restock stock moves).
+  // Call inside a transaction.
+  function insertReturn(d, { sale, plan, total, reason, refundAs, note, user, t }) {
+    const returnNo = dbm.nextCounter(d, 'ret', 'RET-');
+    const rid = d.prepare(
+      `INSERT INTO returns (branch_id, sale_id, return_no, user_id, customer_id, total, reason, refund_as, note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(sale.branch_id, sale.id, returnNo, user.id, sale.customer_id || null, total, reason, refundAs,
+      String(note || '').trim(), t).lastInsertRowid;
+    const insItem = d.prepare(
+      `INSERT INTO return_items (return_id, sale_item_id, sale_item_batch_id, variant_id, name, qty, unit, net, tax, gross, restock)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`
+    );
+    for (const p of plan) {
+      insItem.run(rid, p.si.id, p.si.batch_id, p.si.variant_id, p.si.name, p.qty,
+        Math.round((p.si.net * p.qty) / p.si.qty), Math.round((p.si.tax * p.qty) / p.si.qty), p.amount, p.restock);
+      if (p.restock) {
+        const variant = d.prepare('SELECT * FROM variants WHERE id = ?').get(p.si.variant_id);
+        const product = d.prepare('SELECT * FROM products WHERE id = ?').get(p.si.product_id);
+        if (variant && product) {
+          addStockMove(d, {
+            product, variant, branchId: sale.branch_id, locationId: sale.location_id,
+            qty: p.qty, type: 'return_in', reason: 'return_in', ref: returnNo,
+            batchId: p.si.batch_id, userId: user.id,
+            note: `return ${returnNo} of ${sale.invoice_no}`
+          });
+          if (p.si.batch_id) d.prepare('UPDATE batches SET qty = qty + ? WHERE id = ?').run(p.qty, p.si.batch_id);
+          upsertStock(d, p.si.variant_id, sale.location_id, p.qty);
+        }
+      }
+    }
+    return { rid, returnNo };
+  }
+
+  // ---- returns ---------------------------------------------------------------
+
+  app.post('/api/returns', me, (req, res) => {
+    try {
+      const b = req.body || {};
+      const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(b.sale_id));
+      if (!sale || !visibleBranches(d, req.user).some((x) => x.id === sale.branch_id)) {
+        return res.status(404).json({ error: 'sale not found' });
+      }
+      if (['voided', 'refunded', 'suspended'].includes(sale.status)) {
+        return res.status(409).json({ error: `cannot return a ${sale.status} sale` });
+      }
+      const reason = String(b.reason || 'other').trim();
+      if (!RETURN_REASONS.includes(reason)) {
+        return res.status(400).json({ error: `reason must be one of: ${RETURN_REASONS.join(', ')}` });
+      }
+      const refundAs = b.refund_as === 'store_credit' ? 'store_credit' : 'money';
+      if (refundAs === 'store_credit' && !sale.customer_id) {
+        return res.status(400).json({ error: 'store credit needs a customer attached to the sale' });
+      }
+      const { plan, total } = planReturnLines(d, sale, b.lines);
+      // Approval rule: cashiers up to their limit, managers/owners unlimited.
+      const cfg = returnsConfig(d);
+      if (req.user.role === 'cashier' && total > cfg.cashier_limit) {
+        return res.status(403).json({ error: `return of ${total} exceeds your limit of ${cfg.cashier_limit} — ask a manager` });
+      }
+      const t = new Date().toISOString();
+      const run = d.transaction(() => {
+        const { rid, returnNo } = insertReturn(d, { sale, plan, total, reason, refundAs, note: b.note, user: req.user, t });
+        let refundRows = [];
+        let creditAdded = 0;
+        if (refundAs === 'money') {
+          refundRows = refundAcrossPayments(d, { sale, amount: total, user: req.user, note: `return ${returnNo}` });
+        } else {
+          d.prepare('UPDATE customers SET store_credit = store_credit + ? WHERE id = ?').run(total, sale.customer_id);
+          d.prepare(
+            `INSERT INTO customer_ledger (customer_id, type, amount, ref, user_id, note, created_at)
+             VALUES (?, 'adjustment', ?, ?, ?, ?, ?)`
+          ).run(sale.customer_id, total, returnNo, req.user.id, `store credit for return ${returnNo} (${sale.invoice_no})`, t);
+          creditAdded = total;
+        }
+        return { rid, returnNo, refundRows, creditAdded };
+      });
+      const out = run();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: sale.branch_id, action: 'sale/return',
+        entity: 'return', entityId: String(out.rid),
+        detail: {
+          return_no: out.returnNo, sale: sale.invoice_no, total, reason, refund_as: refundAs,
+          lines: plan.map((p) => ({ item: p.si.id, qty: p.qty, restock: !!p.restock })),
+          refunded: out.refundRows.length ? out.refundRows.map((r) => `${r.method}:${r.amount}`) : undefined,
+          store_credit: out.creditAdded || undefined
+        }
+      });
+      res.json({
+        ok: true,
+        return: returnPayload(d, out.rid),
+        refund_rows: out.refundRows,
+        store_credit_added: out.creditAdded,
+        sale: buildSalePayload(d, sale.id)
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/returns:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  app.get('/api/returns', me, (req, res) => {
+    const q = req.query;
+    const branches = visibleBranches(d, req.user);
+    const where = ['b.id IN (' + branches.map((x) => x.id).join(',') + ')'];
+    const args = [];
+    if (q.sale_id) { where.push('rt.sale_id = ?'); args.push(numOrNull(q.sale_id)); }
+    if (q.reason) { where.push('rt.reason = ?'); args.push(String(q.reason)); }
+    if (q.from) { where.push('rt.created_at >= ?'); args.push(String(q.from)); }
+    if (q.to) { where.push('rt.created_at < ?'); args.push(String(q.to)); }
+    const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200);
+    const rows = d.prepare(
+      `SELECT rt.*, s.invoice_no AS sale_invoice, u.name AS cashier, b.name AS branch_name,
+              (SELECT COUNT(*) FROM exchanges ex WHERE ex.return_id = rt.id) AS exchanged
+       FROM returns rt
+       JOIN sales s ON s.id = rt.sale_id
+       JOIN branches b ON b.id = rt.branch_id
+       LEFT JOIN users u ON u.id = rt.user_id
+       WHERE ${where.join(' AND ')} ORDER BY rt.id DESC LIMIT ?`
+    ).all(...args, limit);
+    res.json(rows.map((r) => ({ ...r, items: d.prepare('SELECT * FROM return_items WHERE return_id = ?').all(r.id) })));
+  });
+
+  // ---- exchanges ---------------------------------------------------------------
+
+  app.post('/api/exchanges', me, (req, res) => {
+    try {
+      const b = req.body || {};
+      const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(b.sale_id));
+      if (!sale || !visibleBranches(d, req.user).some((x) => x.id === sale.branch_id)) {
+        return res.status(404).json({ error: 'sale not found' });
+      }
+      if (['voided', 'refunded', 'suspended'].includes(sale.status)) {
+        return res.status(409).json({ error: `cannot exchange items from a ${sale.status} sale` });
+      }
+      const reason = String(b.reason || 'other').trim();
+      if (!RETURN_REASONS.includes(reason)) {
+        return res.status(400).json({ error: `reason must be one of: ${RETURN_REASONS.join(', ')}` });
+      }
+      const { plan, total: returnedTotal } = planReturnLines(d, sale, b.lines);
+      const cfg = returnsConfig(d);
+      if (req.user.role === 'cashier' && returnedTotal > cfg.cashier_limit) {
+        return res.status(403).json({ error: `exchange of ${returnedTotal} exceeds your limit of ${cfg.cashier_limit} — ask a manager` });
+      }
+      const ctx = saleContext(d, req.user);
+      if (!ctx.branchId || !ctx.locationId) return res.status(400).json({ error: 'no selling location for this user' });
+      if (ctx.branchId !== sale.branch_id) {
+        return res.status(400).json({ error: 'exchange must happen at the same branch as the sale' });
+      }
+      const approver = b.override_pin ? supervisorFromPin(b.override_pin)
+        : (perms.userHasPerm(d, req.user, 'sales.discount') ? req.user : null);
+      if (!approver) {
+        return res.status(403).json({ error: 'exchange credit needs the sales.discount permission or a supervisor PIN' });
+      }
+      const vatRate = Number((dbm.getSetting(d, 'tax', {}) || {}).vatRate) || 0;
+      // Price the replacement lines (full price, frozen). The exchange credit
+      // - worth the returned value, tax-inclusive - is spread across them as
+      // PRE-TAX line discounts, largest line first. The sale's actual
+      // tax-inclusive balance is then the exact amount the customer owes
+      // (pay the diff) or, when the credit covers everything, what we refund.
+      const resolved = [];
+      for (const it of (Array.isArray(b.items) ? b.items : [])) {
+        const variantId = numOrNull(it.variant_id);
+        const qty = Number(it.qty);
+        if (!variantId) return res.status(400).json({ error: 'variant_id required on each exchange item' });
+        if (!Number.isFinite(qty) || qty <= 0) return res.status(400).json({ error: 'qty must be positive' });
+        const variant = d.prepare('SELECT * FROM variants WHERE id = ? AND active = 1').get(variantId);
+        if (!variant) return res.status(404).json({ error: `unknown variant ${variantId}` });
+        const product = d.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(variant.product_id);
+        if (!product) return res.status(404).json({ error: 'unknown product' });
+        if (product.requires_rx) return res.status(403).json({ error: `${product.name} requires a prescription` });
+        if (product.is_controlled) return res.status(403).json({ error: `${product.name} is controlled — licensed workflow required` });
+        if (product.age_min && !it.age_verified) {
+          return res.status(400).json({ error: `${product.name}: age verification required (${product.age_min}+)` });
+        }
+        const px = resolvePrice(d, { variantId, branchId: ctx.branchId, customerId: sale.customer_id, promoCode: null });
+        if (px.error) return res.status(px.status || 400).json({ error: px.error });
+        resolved.push({ it, variant, product, qty, unitPrice: px.price, lineTotal: Math.round(px.price * qty) });
+      }
+      if (!resolved.length) return res.status(400).json({ error: 'items required (the replacement lines)' });
+      const ttOf = (L) => eff(L.product, L.variant, 'tax_type') || 'std';
+      const grossOf = (L, disc) => {
+        const tt = ttOf(L);
+        const net = L.lineTotal - disc;
+        return net + lineTax(net, tt, vatRate);
+      };
+      const W_full = resolved.reduce((s2, L) => s2 + grossOf(L, 0), 0);
+      // Pass 1: best-effort pre-tax discount for the tax-inclusive target.
+      let creditLeft = returnedTotal;
+      for (const L of [...resolved].sort((a, z) => z.lineTotal - a.lineTotal)) {
+        if (creditLeft <= 0) { L.disc = 0; continue; }
+        const fullGross = grossOf(L, 0);
+        const take = Math.min(fullGross, creditLeft);
+        L.disc = (take >= fullGross)
+          ? L.lineTotal
+          : (ttOf(L) === 'std' && vatRate ? Math.round((take * (100 + vatRate)) / (100 + 2 * vatRate)) : take);
+        creditLeft -= fullGross - grossOf(L, L.disc);
+        if (creditLeft < 0) creditLeft = 0;
+      }
+      // Pass 2: absorb VAT rounding (+/-1-2 per line) on a partial line so the
+      // tax-inclusive credit used equals min(returned, W_full) to the shilling.
+      const target = Math.min(returnedTotal, W_full);
+      const usedCredit = () => resolved.reduce((s2, L) => s2 + (grossOf(L, 0) - grossOf(L, L.disc)), 0);
+      let used = usedCredit();
+      for (let i = 0; i < 8 && used !== target; i++) {
+        const partial = resolved.filter((L) => L.disc > 0 && L.disc < L.lineTotal);
+        if (!partial.length) break;
+        const tried = new Set();
+        let hit = false;
+        for (let off = 0; off < 2 * partial.length && !hit; off++) {
+          const L = partial[off % partial.length];
+          const delta = (off < partial.length ? 1 : 2) * (used < target ? 1 : -1);
+          const d2 = L.disc + delta;
+          if (d2 < 0 || d2 > L.lineTotal || tried.has(L.variant.id + ':' + d2)) continue;
+          tried.add(L.variant.id + ':' + d2);
+          const prev = L.disc;
+          L.disc = d2;
+          if (usedCredit() === target) { hit = true; used = usedCredit(); break; }
+          L.disc = prev;
+        }
+        if (!hit) break;
+      }
+      const prepared = prepareSaleLines(d, {
+        user: req.user, ctx, customerId: sale.customer_id, promoCode: null,
+        items: resolved.map((L) => ({
+          variant_id: L.variant.id, qty: L.qty, line_discount: L.disc,
+          line_note: String(L.it.line_note || '').trim(), age_verified: L.it.age_verified
+        })),
+        approver, allowOversell: false
+      });
+      const totals = saleTotals(prepared.lines);
+      const diff = W_full - returnedTotal; // nominal price diff, VAT-inclusive
+      const owed = totals.gross;           // actual balance after the credit
+      const settle = b.settle || {};
+      const t = new Date().toISOString();
+      const biz = dbm.getSetting(d, 'business', {}) || {};
+      const run = d.transaction(() => {
+        const { rid, returnNo } = insertReturn(d, { sale, plan, total: returnedTotal, reason, refundAs: 'money', note: `exchange ${String(b.note || '').trim()}`, user: req.user, t });
+        const orderNo = nextOrderNo(d, ctx.branchId);
+        const invoiceNo = `${ctx.branch.code || 'BR'}-${String(orderNo).padStart(6, '0')}`;
+        const newSaleId = d.prepare(
+          `INSERT INTO sales (branch_id, location_id, register_id, terminal, order_no, invoice_no, customer_id, user_id, status,
+             subtotal, discount, net, tax, gross, tender, note, etims_status, discount_by, kind, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, '[]', ?, ?, ?, 'sale', ?)`
+        ).run(ctx.branchId, ctx.locationId, ctx.register ? ctx.register.id : null, ctx.register ? ctx.register.name : '',
+          orderNo, invoiceNo, prepared.customer ? prepared.customer.id : null, req.user.id,
+          totals.subtotal, totals.discount, totals.net, totals.tax, totals.gross,
+          `exchange for return ${returnNo}`, biz.kraPin ? 'pending' : 'exempt', approver.id, t).lastInsertRowid;
+        moveStockForSale(d, { user: req.user, ctx, lines: prepared.lines, ref: invoiceNo, allowOversell: false });
+        const newSale = d.prepare('SELECT * FROM sales WHERE id = ?').get(newSaleId);
+        const ins = d.prepare(
+          `INSERT INTO sale_items (sale_id, product_id, variant_id, name, qty, unit, line_discount, net, tax, gross, tax_type, kra_item_code, batch_id, line_note, age_verified, unit_price)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        for (const L of prepared.lines) {
+          ins.run(newSaleId, L.product.id, L.variant.id, L.product.name + (L.variant.name ? ` — ${L.variant.name}` : ''),
+            L.qty, L.disc, L.net, L.tax, L.gross, L.taxType, L.kra, L.batchId, L.note, L.age, L.unitPrice);
+        }
+        let payRes = null;
+        let refundRows = [];
+        if (owed > 0) {
+          // Pay the ACTUAL balance (credit already shrank the sale).
+          payRes = applyPayment(d, {
+            user: req.user, saleId: newSaleId, sale: newSale, discountBy: approver.id,
+            payment: {
+              method: String(settle.method || 'cash').trim(), amount: owed,
+              ref: settle.ref, phone: settle.phone,
+              tendered: settle.tendered !== undefined ? settle.tendered : owed
+            }
+          });
+        } else if (diff < 0) {
+          // Credit covered the new items and then some: refund the excess
+          // to the ORIGINAL sale's payments (exact: credit == W_full here).
+          refundRows = refundAcrossPayments(d, { sale, amount: -diff, user: req.user, note: `exchange ${returnNo}` });
+          pme.recomputeSale(d, newSaleId); // fully-credited sale: gross 0, paid
+        }
+        const exNo = dbm.nextCounter(d, 'exch', 'EX-');
+        const exId = d.prepare(
+          `INSERT INTO exchanges (branch_id, exchange_no, return_id, new_sale_id, user_id, customer_id,
+             returned_total, new_total, diff, settled_by, note, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(sale.branch_id, exNo, rid, newSaleId, req.user.id, sale.customer_id || null,
+          returnedTotal, W_full, diff, owed > 0 ? 'payment' : (diff < 0 ? 'refund' : 'none'),
+          String(b.note || '').trim(), t).lastInsertRowid;
+        const insExItem = d.prepare(
+          `INSERT INTO exchange_items (exchange_id, variant_id, name, qty, unit, net, tax, gross)
+           VALUES (?, ?, ?, ?, 1, ?, ?, ?)`
+        );
+        for (const L of prepared.lines) {
+          insExItem.run(exId, L.variant.id, L.product.name + (L.variant.name ? ` — ${L.variant.name}` : ''), L.qty, L.net, L.tax, L.gross);
+        }
+        return { rid, returnNo, exId, exNo, newSaleId, invoiceNo, payRes, refundRows };
+      });
+      const out = run();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: sale.branch_id, action: 'sale/exchange',
+        entity: 'exchange', entityId: String(out.exId),
+        detail: {
+          exchange_no: out.exNo, return_no: out.returnNo, sale: sale.invoice_no, new_sale: out.invoiceNo,
+          returned: returnedTotal, new_total: W_full, diff,
+          settled_by: owed > 0 ? 'payment' : (diff < 0 ? 'refund' : 'none'),
+          refund_rows: out.refundRows.length ? out.refundRows.map((r) => `${r.method}:${r.amount}`) : undefined,
+          pending: out.payRes && out.payRes.payment.status === 'pending'
+        }
+      });
+      res.json({
+        ok: true,
+        exchange: d.prepare(`SELECT * FROM exchanges WHERE id = ?`).get(out.exId),
+        return: returnPayload(d, out.rid),
+        sale: buildSalePayload(d, out.newSaleId),
+        refund_rows: out.refundRows
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/exchanges:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  app.get('/api/exchanges', me, (req, res) => {
+    const q = req.query;
+    const branches = visibleBranches(d, req.user);
+    const where = ['b.id IN (' + branches.map((x) => x.id).join(',') + ')'];
+    const args = [];
+    if (q.from) { where.push('ex.created_at >= ?'); args.push(String(q.from)); }
+    if (q.to) { where.push('ex.created_at < ?'); args.push(String(q.to)); }
+    const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200);
+    const rows = d.prepare(
+      `SELECT ex.*, rt.return_no, rt.reason, s.invoice_no AS sale_invoice, ns.invoice_no AS new_invoice,
+              u.name AS cashier, b.name AS branch_name
+       FROM exchanges ex
+       JOIN returns rt ON rt.id = ex.return_id
+       JOIN sales s ON s.id = rt.sale_id
+       LEFT JOIN sales ns ON ns.id = ex.new_sale_id
+       JOIN branches b ON b.id = ex.branch_id
+       LEFT JOIN users u ON u.id = ex.user_id
+       WHERE ${where.join(' AND ')} ORDER BY ex.id DESC LIMIT ?`
+    ).all(...args, limit);
+    res.json(rows.map((r) => ({ ...r, items: d.prepare('SELECT * FROM exchange_items WHERE exchange_id = ?').all(r.id) })));
+  });
+
+  // ---- returns settings (approval limit) ---------------------------------------
+
+  app.get('/api/settings/returns', me, (req, res) => {
+    res.json({ returns: returnsConfig(d) });
+  });
+
+  app.put('/api/settings/returns', me, can('settings.manage'), (req, res) => {
+    const r = req.body || {};
+    const next = { cashier_limit: Number.isInteger(r.cashier_limit) && r.cashier_limit >= 0 ? r.cashier_limit : null };
+    if (next.cashier_limit === null) return res.status(400).json({ error: 'cashier_limit must be a whole number ≥ 0' });
+    d.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .run('returns', JSON.stringify({ cashier_limit: next.cashier_limit }));
+    dbm.audit(d, { userId: req.user.id, action: 'settings/returns', entity: 'setting', entityId: 'returns', detail: next });
+    res.json({ ok: true, returns: next });
   });
 
   // ---- CSV import/export (products + variants + packs in one file) --------------------------------
@@ -4149,7 +4601,7 @@ if (require.main === module) {
   auth.pruneSessions(db);
   app.listen(PORT, '0.0.0.0', () => {
     const s = dbm.getSetting(db, 'business', {});
-    console.log(`OpenPOS v2 (Phase 9)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
+    console.log(`OpenPOS v2 (Phase 10)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
   });
 }
 

@@ -490,6 +490,39 @@
         <div class="muted small" id="sh-closed-empty" data-i18n="no_rows">No rows</div>
       </div>
     </section>
+    <section id="tab-returns" class="hidden">
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="returns">Returns</h3>
+          <span class="spacer"></span>
+          <button class="btn small" id="rt-m-reload" data-i18n="reload">Reload</button>
+        </div>
+        <div style="overflow:auto">
+          <table><thead><tr>
+            <th data-i18n="return_no_l">Note</th><th data-i18n="invoice_no">Sale</th>
+            <th data-i18n="cashier">Cashier</th><th data-i18n="reason">Reason</th>
+            <th data-i18n="total">Total</th><th data-i18n="refund_as">Refund as</th>
+            <th data-i18n="restock">Restock</th><th data-i18n="exchanged_l">Exchanged</th>
+            <th data-i18n="at">At</th>
+          </tr></thead>
+          <tbody id="rt-m-body"></tbody>
+        </table>
+        <div class="muted small" id="rt-m-empty" data-i18n="no_rows">No rows</div>
+      </div>
+      <div class="card">
+        <h3 data-i18n="exchanges">Exchanges</h3>
+        <div style="overflow:auto">
+          <table><thead><tr>
+            <th>EX</th><th data-i18n="return_no_l">Return</th><th data-i18n="invoice_no">Sale</th>
+            <th data-i18n="new_sale">New sale</th><th data-i18n="returned_l">Returned</th>
+            <th data-i18n="new_total_l">New total</th><th data-i18n="diff_l">Diff</th>
+            <th data-i18n="settled_by">Settled by</th><th data-i18n="at">At</th>
+          </tr></thead>
+          <tbody id="rt-x-body"></tbody>
+        </table>
+        <div class="muted small" id="rt-x-empty" data-i18n="no_rows">No rows</div>
+      </div>
+    </section>
     <section id="tab-payments" class="hidden">
       <div class="card" style="margin-bottom:14px">
         <div class="row" style="margin-bottom:10px">
@@ -698,6 +731,7 @@ const TABS = [
   { id: 'categories', label: 'categories', always: true },
   { id: 'tills',      label: 'tills',     always: true },
   { id: 'shifts',     label: 'shifts',     always: true },
+  { id: 'returns',    label: 'returns',    always: true },
   { id: 'customers',  label: 'customers', always: true, badge: 'Day 15' },
   { id: 'purchasing', label: 'purchasing', cap: 'purchasing' },
   { id: 'payments',   label: 'payments',   always: true },
@@ -737,7 +771,38 @@ function selectTab(name) {
   if (name === 'pricing') loadPricing();
   if (name === 'payments') loadPayments();
   if (name === 'shifts') loadShiftsM();
+  if (name === 'returns') loadReturnsM();
 }
+
+// ---------------- returns & exchanges (Phase 10) ----------------
+async function loadReturnsM() {
+  $('#rt-m-reload').onclick = loadReturnsM;
+  const [rets, exs] = await Promise.all([api('/api/returns?limit=50').catch(() => []), api('/api/exchanges?limit=50').catch(() => [])]);
+  const when = (x) => new Date(x).toLocaleString('en-KE', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  $('#rt-m-body').innerHTML = rets.map((r) => {
+    const allRestock = r.items.length && r.items.every((i) => i.restock);
+    return `<tr>
+      <td>${esc(r.return_no)}</td><td>${esc(r.sale_invoice)}</td><td>${esc(r.cashier || '')}</td>
+      <td>${esc(t(RET_REASON_KEY[r.reason] || 'reason_other'))}</td>
+      <td>${OP.fmt(r.total)}</td>
+      <td>${r.refund_as === 'store_credit' ? esc(t('refund_credit')) : esc(t('cash_m'))}</td>
+      <td>${allRestock ? '✓' : '—'}</td>
+      <td>${r.exchanged ? esc(t('exchanged_l')) : ''}</td>
+      <td>${when(r.created_at)}</td>
+    </tr>`;
+  }).join('');
+  $('#rt-m-empty').style.display = rets.length ? 'none' : '';
+  $('#rt-x-body').innerHTML = exs.map((e) => `<tr>
+    <td>${esc(e.exchange_no)}</td><td>${esc(e.return_no)}</td><td>${esc(e.sale_invoice)}</td>
+    <td>${esc(e.new_invoice || '')}</td>
+    <td>${OP.fmt(e.returned_total)}</td><td>${OP.fmt(e.new_total)}</td>
+    <td>${e.diff > 0 ? '+' : ''}${OP.fmt(e.diff)}</td>
+    <td>${esc(t('settled_by'))} ${e.settled_by === 'payment' ? esc(t('cash_m')) : e.settled_by}</td>
+    <td>${when(e.created_at)}</td>
+  </tr>`).join('');
+  $('#rt-x-empty').style.display = exs.length ? 'none' : '';
+}
+const RET_REASON_KEY = { wrong_item: 'reason_wrong', damaged: 'reason_damaged', defective: 'reason_defective', customer_changed_mind: 'reason_mind', other: 'reason_other' };
 
 // ---------------- shifts (Phase 9) ----------------
 async function loadShiftsM() {

@@ -44,6 +44,16 @@
   .followup { margin-top: 10px; padding: 10px; border: 1px dashed #94a3b8; border-radius: 8px; background: #f8fafc; }
   .followup .row { gap: 6px; }
   .shift-bar { background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; margin-bottom: 8px; }
+  .ret-modal { position: fixed; inset: 0; background: rgba(15,23,42,.55); display: flex; align-items: center; justify-content: center; z-index: 60; }
+  .ret-card { background: #fff; border-radius: 10px; width: min(600px, 94vw); max-height: 92vh; overflow: auto; padding: 16px; box-shadow: 0 14px 44px rgba(0,0,0,.28); }
+  .ret-card h3 { margin: 0 0 10px; }
+  .ret-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .ret-tabs button { flex: 1; padding: 7px; border-radius: 6px; border: 1px solid #cbd5e1; background: #f1f5f9; cursor: pointer; font-weight: 600; }
+  .ret-tabs button.on { background: #0f172a; color: #fff; border-color: #0f172a; }
+  .ret-line { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed #e2e8f0; }
+  .ret-line .nm { flex: 1; font-size: 13px; }
+  .ret-line input[type=number] { width: 62px; }
+  .ret-result { margin-top: 8px; padding: 10px; border-radius: 8px; background: #f0fdf4; border: 1px solid #bbf7d0; font-size: 13px; }
   .shift-bar.warn { background: #fef3c7; border-color: #fcd34d; }
   .shift-bar .row { gap: 6px; margin-top: 6px; }
   .shift-bar input { padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; }
@@ -134,9 +144,59 @@
       <button class="btn ghost" id="p-hold" data-i18n="hold_sale">Hold</button>
       <button class="btn ghost" id="p-quote" data-i18n="quote_sale">Quote</button>
       <button class="btn" id="sell-btn" data-i18n="complete_sale">Complete sale</button>
+      <button class="btn ghost" id="p-ret" data-i18n="return_exchange">Return / Exchange</button>
     </div>
     <div class="msg" id="p-msg" style="margin:4px 0 0"></div>
     <div class="held" id="p-held"></div>
+
+  <!-- Phase 10: returns & exchanges -->
+  <div class="ret-modal hidden" id="ret-modal">
+    <div class="ret-card">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h3 data-i18n="return_exchange">Return / Exchange</h3>
+        <button class="btn ghost" id="ret-x" style="padding:2px 10px">✕</button>
+      </div>
+      <div class="ret-tabs">
+        <button id="ret-mode-return" class="on" data-i18n="return_tab">Return</button>
+        <button id="ret-mode-exchange" data-i18n="exchange_tab">Exchange</button>
+      </div>
+      <label class="f"><span data-i18n="invoice_no">Invoice</span>
+        <input id="ret-invoice" placeholder="BR01-000042" autocomplete="off"></label>
+      <div class="msg" id="ret-saleinfo"></div>
+      <div id="ret-lines" class="hidden"></div>
+      <div id="ret-exchzone" class="hidden">
+        <div style="margin:12px 0 4px;font-weight:700" data-i18n="exchange_for">Exchange for</div>
+        <div id="ret-newitems"></div>
+        <button class="btn ghost" id="ret-additem" style="margin-top:6px" data-i18n="add_item">+ Add item</button>
+        <div id="ret-settlebox">
+          <label class="f"><span data-i18n="settle_method">Settle diff with</span>
+            <select id="ret-settle"><option value="cash" data-i18n="cash_m">Cash</option><option value="mpesa">M-Pesa</option></select></label>
+          <label class="f hidden" id="ret-pf-phone"><span data-i18n="phone">Phone</span><input id="ret-phone" placeholder="07XX XXX XXX"></label>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="f" style="flex:1"><span data-i18n="reason">Reason</span>
+          <select id="ret-reason">
+            <option value="wrong_item" data-i18n="reason_wrong">Wrong item</option>
+            <option value="damaged" data-i18n="reason_damaged">Damaged</option>
+            <option value="defective" data-i18n="reason_defective">Defective</option>
+            <option value="customer_changed_mind" data-i18n="reason_mind">Changed mind</option>
+            <option value="other" data-i18n="reason_other">Other</option>
+          </select></label>
+      </div>
+      <label class="f hidden" id="ret-refundas-f"><span data-i18n="refund_as">Refund as</span>
+        <select id="ret-refundas"><option value="money" data-i18n="refund_money">Money (original method)</option>
+        <option value="store_credit" data-i18n="refund_credit">Store credit</option></select></label>
+      <label class="f hidden" id="ret-pin-f"><span data-i18n="mgr_pin">Manager PIN (exchange)</span>
+        <input id="ret-pin" type="password" maxlength="8" placeholder="••••"></label>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="ret-go" data-i18n="do_return">Process</button>
+        <span class="muted small" id="ret-diffinfo"></span>
+      </div>
+      <div class="msg" id="ret-msg" style="margin-top:6px"></div>
+      <div id="ret-result"></div>
+    </div>
+  </div>
   </div>
 </div>
 
@@ -257,6 +317,7 @@ async function initMain() {
   drawCats(); drawGrid(); drawCust(); drawCart(); loadHeld();
   applyI18n();
   wireCart();
+  wireRet();
   loadPayMethods();
   if (ME.role === 'cashier' || ME.role === 'staff') loadShift();
   if (!localStorage.getItem('op_till_tip_v1')) $('#p-tip').classList.remove('hidden');
@@ -787,6 +848,176 @@ function drawShift() {
       await loadShift();
     } catch (e) { toast($('#p-msg'), e.message, false); }
   };
+}
+
+// ---------------- returns & exchanges (Phase 10) ----------------
+let RET = null;
+const RET_REASONS = { wrong_item: 'reason_wrong', damaged: 'reason_damaged', defective: 'reason_defective', customer_changed_mind: 'reason_mind', other: 'reason_other' };
+
+function openRet() {
+  RET = { mode: 'return', sale: null };
+  $('#ret-invoice').value = '';
+  $('#ret-saleinfo').textContent = '';
+  $('#ret-lines').classList.add('hidden');
+  $('#ret-lines').innerHTML = '';
+  $('#ret-exchzone').classList.add('hidden');
+  $('#ret-newitems').innerHTML = '';
+  $('#ret-msg').textContent = '';
+  $('#ret-result').innerHTML = '';
+  $('#ret-diffinfo').textContent = '';
+  $('#ret-refundas').value = 'money';
+  $('#ret-pin').value = '';
+  setRetMode('return');
+  $('#ret-modal').classList.remove('hidden');
+  setTimeout(() => $('#ret-invoice').focus(), 50);
+}
+
+function setRetMode(m) {
+  RET.mode = m;
+  $('#ret-mode-return').classList.toggle('on', m === 'return');
+  $('#ret-mode-exchange').classList.toggle('on', m === 'exchange');
+  $('#ret-exchzone').classList.toggle('hidden', m !== 'exchange');
+  if (m !== 'exchange') $('#ret-pin-f').classList.add('hidden');
+  refreshRetUi();
+}
+
+function refreshRetUi() {
+  const hasCustomer = !!(RET && RET.sale && RET.sale.customer);
+  // store credit only for plain returns with a customer on the sale
+  $('#ret-refundas-f').classList.toggle('hidden', !(hasCustomer && RET.mode === 'return'));
+  const needsPin = ['cashier', 'staff'].includes(ME.role) && RET.mode === 'exchange';
+  $('#ret-pin-f').classList.toggle('hidden', !needsPin);
+  $('#ret-settle').querySelectorAll('option').forEach((o) => { o.disabled = !PAY_METHODS.some((m) => m.key === o.value); });
+  $('#ret-pf-phone').classList.toggle('hidden', $('#ret-settle').value !== 'mpesa');
+}
+
+async function retFindSale() {
+  const inv = $('#ret-invoice').value.trim().toUpperCase();
+  if (!inv) return;
+  try {
+    const list = await api(`/api/sales?invoice=${encodeURIComponent(inv)}&limit=5`);
+    if (!list.length) { $('#ret-saleinfo').textContent = t('invoice_not_found'); return; }
+    const payload = await api(`/api/sales/${list[0].id}`);
+    RET.sale = payload;
+    const s = payload.sale;
+    $('#ret-saleinfo').textContent =
+      `${s.invoice_no} · ${s.cashier} · ${fmt(s.gross)} · ${t('status')} ${s.status}${payload.customer ? ' · ' + esc(payload.customer.name) : ''}`;
+    const done = {};
+    for (const r of (payload.returns || [])) { /* totals only; server enforces per-line */ }
+    $('#ret-lines').innerHTML = payload.items.map((it) => `
+      <div class="ret-line" data-item="${it.id}">
+        <input type="number" min="0" max="${it.qty}" step="any" value="0" class="ret-qty" title="${t('quantity')}">
+        <span class="nm">${esc(it.name)} × ${it.qty} — ${fmt(it.gross)}</span>
+        <label class="small" style="white-space:nowrap"><input type="checkbox" class="ret-restock" checked> ${t('restock')}</label>
+      </div>`).join('');
+    $('#ret-lines').classList.remove('hidden');
+    refreshRetUi();
+  } catch (e) { $('#ret-saleinfo').textContent = e.message; }
+}
+
+function retAddNewItem() {
+  const box = $('#ret-newitems');
+  const row = document.createElement('div');
+  row.className = 'ret-line';
+  row.innerHTML = `
+    <select class="ret-nvar" style="flex:1">
+      ${PRODUCTS.map((p) => `<option value="${p.base_variant_id}" data-price="${p.price}">${esc(p.name)} · ${fmt(p.price)}</option>`).join('')}
+    </select>
+    <input type="number" class="ret-nqty" min="1" step="any" value="1">
+    <button class="btn ghost" style="padding:2px 8px">✕</button>`;
+  row.querySelector('button').onclick = () => row.remove();
+  box.appendChild(row);
+}
+
+function retDiffPreview() {
+  if (!RET || !RET.sale || RET.mode !== 'exchange') { $('#ret-diffinfo').textContent = ''; return; }
+  let retV = 0;
+  $('#ret-lines .ret-line').forEach((ln) => {
+    const it = RET.sale.items.find((x) => String(x.id) === ln.dataset.item);
+    const q = Number(ln.querySelector('.ret-qty').value) || 0;
+    if (it && q > 0) retV += Math.round((it.gross * q) / it.qty);
+  });
+  let newV = 0;
+  $('#ret-newitems .ret-line').forEach((ln) => {
+    const sel = ln.querySelector('.ret-nvar');
+    const price = Number(sel && sel.selectedOptions[0].dataset.price) || 0;
+    const q = Number(ln.querySelector('.ret-nqty').value) || 0;
+    newV += Math.round(price * q * (1 + VAT_RATE / 100 / 1.16)); // rough VAT-inclusive preview
+  });
+  const d = newV - retV;
+  $('#ret-diffinfo').textContent = d > 0 ? `≈ ${fmt(d)} ${t('to_pay')}` : (d < 0 ? `≈ ${fmt(-d)} ${t('refunded')}` : t('exact_swap'));
+}
+
+async function retGo() {
+  const msg = $('#ret-msg');
+  msg.textContent = '';
+  if (!RET.sale) { msg.textContent = t('invoice_not_found'); return; }
+  const lines = [];
+  $('#ret-lines .ret-line').forEach((ln) => {
+    const q = Number(ln.querySelector('.ret-qty').value) || 0;
+    if (q > 0) lines.push({
+      sale_item_id: Number(ln.dataset.item), qty: q,
+      restock: ln.querySelector('.ret-restock').checked
+    });
+  });
+  if (!lines.length) { msg.textContent = t('nothing_selected'); return; }
+  const reason = $('#ret-reason').value;
+  const body = { sale_id: RET.sale.sale.id, reason, lines };
+  try {
+    if (RET.mode === 'return') {
+      if ($('#ret-refundas-f').classList.contains('hidden') || $('#ret-refundas').value === 'money') body.refund_as = 'money';
+      else body.refund_as = 'store_credit';
+      const r = await api('/api/returns', { method: 'POST', body });
+      const bits = [`${r.return.return_no} · ${fmt(r.return.total)}`];
+      if (r.store_credit_added) bits.push(`${t('store_credit_got')}: ${fmt(r.store_credit_added)}`);
+      if (r.refund_rows.length) bits.push(r.refund_rows.map((x) => `${x.method} ${fmt(x.refunded ?? x.amount)}`).join(' + '));
+      $('#ret-result').innerHTML = `<div class="ret-result"><b>${t('return_done')}</b><br>${esc(bits.join('<br>'))}</div>`;
+      $('#ret-lines').querySelectorAll('.ret-qty').forEach((i) => { i.value = 0; });
+    } else {
+      const items = [];
+      $('#ret-newitems .ret-line').forEach((ln) => {
+        const sel = ln.querySelector('.ret-nvar');
+        const q = Number(ln.querySelector('.ret-nqty').value) || 0;
+        if (sel && q > 0) items.push({ variant_id: Number(sel.value), qty: q });
+      });
+      if (!items.length) { msg.textContent = t('add_exchange_item'); return; }
+      body.items = items;
+      const settle = { method: $('#ret-settle').value };
+      if (settle.method === 'mpesa') settle.phone = $('#ret-phone').value.trim();
+      body.settle = settle;
+      if (['cashier', 'staff'].includes(ME.role)) {
+        if (!$('#ret-pin').value.trim()) { msg.textContent = t('pin_needed'); return; }
+        body.override_pin = $('#ret-pin').value.trim();
+      }
+      const r = await api('/api/exchanges', { method: 'POST', body });
+      const bits = [`${r.exchange.exchange_no} · ${t('return_no_l')} ${r.return.return_no}`];
+      if (r.exchange.diff > 0) bits.push(`${t('paid_diff')}: ${fmt(r.sale.payments[0] ? r.sale.payments[0].amount : r.exchange.diff)}`);
+      if (r.exchange.diff < 0) bits.push(`${t('refunded')}: ${fmt(-r.exchange.diff)}`);
+      if (r.exchange.diff === 0) bits.push(t('exact_swap'));
+      bits.push(`${t('new_sale')}: ${r.sale.sale.invoice_no}`);
+      $('#ret-result').innerHTML = `<div class="ret-result"><b>${t('exchange_done')}</b><br>${esc(bits.join('<br>'))}</div>`;
+      $('#ret-lines').querySelectorAll('.ret-qty').forEach((i) => { i.value = 0; });
+      $('#ret-newitems').innerHTML = '';
+    }
+  } catch (e) { msg.textContent = e.message; }
+}
+
+function wireRet() {
+  $('#p-ret').onclick = () => openRet();
+  $('#ret-x').onclick = () => $('#ret-modal').classList.add('hidden');
+  $('#ret-modal').addEventListener('click', (e) => { if (e.target.id === 'ret-modal') $('#ret-modal').classList.add('hidden'); });
+  $('#ret-mode-return').onclick = () => setRetMode('return');
+  $('#ret-mode-exchange').onclick = () => setRetMode('exchange');
+  $('#ret-invoice').addEventListener('keydown', (e) => { if (e.key === 'Enter') retFindSale(); });
+  $('#ret-reason').onchange = () => {
+    const bad = ['damaged', 'defective'].includes($('#ret-reason').value);
+    $('#ret-lines .ret-restock').forEach((c) => { c.checked = !bad; });
+  };
+  $('#ret-settle').onchange = refreshRetUi;
+  $('#ret-lines').addEventListener('input', retDiffPreview);
+  $('#ret-newitems').addEventListener('input', retDiffPreview);
+  $('#ret-additem').onclick = retAddNewItem;
+  $('#ret-go').onclick = retGo;
 }
 
 function wireFollowup(data, pendingPay, balance) {

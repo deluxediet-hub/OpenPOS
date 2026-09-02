@@ -1986,6 +1986,249 @@ function section(title) { console.log(`\n${title}`); }
   });
 
 
+  // ---- Phase 10: returns & exchanges -----------------------------------------
+  await test('returns: batch item returns to the SAME batch; sequential note; partial refund keeps payment alive', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.B.vid, qty: 2 }], payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(s.status, 200, JSON.stringify(s.body));
+    assert.strictEqual(s.body.sale.gross, 228);
+    const line = s.body.items[0];
+    const batchId = line.batch_id;
+    assert.ok(batchId, 'sale line carries its FEFO batch');
+    const bBefore = d.prepare('SELECT qty FROM batches WHERE id = ?').get(batchId).qty;
+    const r = await asA({ path: '/api/returns', method: 'POST', body: {
+      sale_id: s.body.sale.id, reason: 'customer_changed_mind',
+      lines: [{ sale_item_id: line.id, qty: 1, restock: true }]
+    } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+    assert.strictEqual(r.body.return.return_no, 'RET-000001', 'sequential eTIMS-ready note number');
+    assert.strictEqual(r.body.return.total, 114, 'prorated half of 228');
+    assert.strictEqual(r.body.return.items[0].sale_item_batch_id, batchId);
+    const mv = d.prepare("SELECT * FROM stock_moves WHERE type = 'return_in' AND ref = 'RET-000001'").get();
+    assert.ok(mv, 'return_in move written');
+    assert.strictEqual(mv.batch_id, batchId, 'back into the SAME batch');
+    assert.strictEqual(mv.qty, 1);
+    assert.strictEqual(d.prepare('SELECT qty FROM batches WHERE id = ?').get(batchId).qty, bBefore + 1, 'batch qty restored');
+    // the sale itself was NOT edited: same lines, same totals
+    const sale2 = d.prepare('SELECT * FROM sales WHERE id = ?').get(s.body.sale.id);
+    assert.strictEqual(sale2.gross, 228);
+    assert.strictEqual(sale2.status, 'paid');
+    assert.strictEqual(d.prepare('SELECT qty FROM sale_items WHERE id = ?').get(line.id).qty, 2, 'sale line untouched');
+    // money back: partial refund of the one cash payment
+    const p = d.prepare('SELECT * FROM payments WHERE id = ?').get(s.body.payments[0].id);
+    assert.strictEqual(p.refunded, 114);
+    assert.strictEqual(p.status, 'confirmed', 'partially refunded payment stays live');
+    assert.strictEqual(r.body.refund_rows.length, 1);
+    assert.strictEqual(r.body.refund_rows[0].method, 'cash');
+    // over-return refused
+    const over = await asA({ path: '/api/returns', method: 'POST', body: {
+      sale_id: s.body.sale.id, reason: 'other', lines: [{ sale_item_id: line.id, qty: 2 }]
+    } });
+    assert.strictEqual(over.status, 400, JSON.stringify(over.body));
+    assert.match(over.body.error, /left to return/);
+    pos.ret1Sale = s.body.sale.id;
+    pos.ret1Line = line.id;
+  });
+
+  await test('returns: restock=false keeps the goods OUT of stock; full return makes the sale terminal', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const r = await asA({ path: '/api/returns', method: 'POST', body: {
+      sale_id: pos.ret1Sale, reason: 'damaged',
+      lines: [{ sale_item_id: pos.ret1Line, qty: 1, restock: false }]
+    } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+    assert.strictEqual(r.body.return.return_no, 'RET-000002');
+    assert.strictEqual(r.body.return.total, 114);
+    assert.strictEqual(r.body.return.items[0].restock, 0);
+    assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM stock_moves WHERE type = 'return_in' AND ref = 'RET-000002'").get().n, 0, 'damaged goods do not re-enter stock');
+    // sale now fully returned → terminal, all money back
+    const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(pos.ret1Sale);
+    assert.strictEqual(sale.status, 'refunded', 'fully returned sale is terminal');
+    const p = d.prepare('SELECT * FROM payments WHERE sale_id = ?').get(pos.ret1Sale);
+    assert.strictEqual(p.refunded, 228);
+    assert.strictEqual(p.status, 'refunded');
+    const again = await asA({ path: '/api/returns', method: 'POST', body: {
+      sale_id: pos.ret1Sale, reason: 'other', lines: [{ sale_item_id: pos.ret1Line, qty: 1 }]
+    } });
+    assert.strictEqual(again.status, 409, 'cannot return a refunded sale');
+    // nothing edited in place: the original line still says qty 2
+    assert.strictEqual(d.prepare('SELECT qty FROM sale_items WHERE id = ?').get(pos.ret1Line).qty, 2);
+  });
+
+  await test('returns: split sale refunds to ORIGINAL methods, newest first', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 100 } } });
+    assert.strictEqual(s.status, 200, JSON.stringify(s.body));
+    assert.strictEqual(s.body.sale.status, 'partial', '100 of 228');
+    const m = await asA({ path: `/api/sales/${s.body.sale.id}/payments`, method: 'POST', body: { method: 'mpesa', amount: 128, phone: '0700111222' } });
+    assert.strictEqual(m.status, 200, JSON.stringify(m.body).slice(0, 160));
+    const mp = m.body.payments.find((x) => x.method === 'mpesa');
+    const cf = await asA({ path: `/api/payments/${mp.id}/confirm`, method: 'POST', body: { code: 'SFA-RET' } });
+    assert.strictEqual(cf.status, 200);
+    const line = (await asA({ path: `/api/sales/${s.body.sale.id}` })).body.items[0];
+    const r = await asA({ path: '/api/returns', method: 'POST', body: {
+      sale_id: s.body.sale.id, reason: 'defective', lines: [{ sale_item_id: line.id, qty: 1 }]
+    } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+    assert.strictEqual(r.body.return.total, 228);
+    // newest first: mpesa 128 fully, then cash 100
+    const rows = r.body.refund_rows.map((x) => `${x.method}:${x.amount}`).join(',');
+    assert.strictEqual(rows, 'mpesa:128,cash:100', rows);
+    const pays = d.prepare('SELECT method, refunded, status FROM payments WHERE sale_id = ? ORDER BY id').all(s.body.sale.id);
+    assert.strictEqual(pays[0].method, 'cash');
+    assert.strictEqual(pays[0].refunded, 100);
+    assert.strictEqual(pays[0].status, 'refunded');
+    assert.strictEqual(pays[1].method, 'mpesa');
+    assert.strictEqual(pays[1].refunded, 128);
+    assert.strictEqual(pays[1].status, 'refunded');
+    assert.strictEqual(d.prepare('SELECT status FROM sales WHERE id = ?').get(s.body.sale.id).status, 'refunded');
+  });
+
+  await test('returns: cashier limit (business capability) — manager unlimited, settings owner-gated', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const lim = await authJ({ path: '/api/settings/returns', method: 'PUT', body: { cashier_limit: 200 } });
+    assert.strictEqual(lim.status, 200, JSON.stringify(lim.body));
+    const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 250 } } });
+    const line = (await asA({ path: `/api/sales/${s.body.sale.id}` })).body.items[0];
+    const den = await asA({ path: '/api/returns', method: 'POST', body: {
+      sale_id: s.body.sale.id, reason: 'other', lines: [{ sale_item_id: line.id, qty: 1 }]
+    } });
+    assert.strictEqual(den.status, 403, JSON.stringify(den.body));
+    assert.match(den.body.error, /exceeds your limit of 200/);
+    const mgrCookie = await cashierLogin('Mwenyeji M', '2345');
+    const mgr = (o) => withCookie(mgrCookie)(o);
+    const okM = await mgr({ path: '/api/returns', method: 'POST', body: {
+      sale_id: s.body.sale.id, reason: 'other', lines: [{ sale_item_id: line.id, qty: 1 }]
+    } });
+    assert.strictEqual(okM.status, 200, 'manager can return any amount');
+    const cashierToggle = await asA({ path: '/api/settings/returns', method: 'PUT', body: { cashier_limit: 10 } });
+    assert.strictEqual(cashierToggle.status, 403, 'cashiers cannot change the limit');
+    await authJ({ path: '/api/settings/returns', method: 'PUT', body: { cashier_limit: 5000 } });
+  });
+
+  await test('returns: store credit alternative (money stays in the business)', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const now = new Date().toISOString();
+    const cid = d.prepare(`INSERT INTO customers (business_id, name, phone, created_at) VALUES (1, 'POS Return Credit', '0711333444', ?)`).run(now).lastInsertRowid;
+    const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: cid, payment: { method: 'cash', amount: 250 } } });
+    assert.strictEqual(s.status, 200, JSON.stringify(s.body));
+    const line = (await asA({ path: `/api/sales/${s.body.sale.id}` })).body.items[0];
+    const r = await asA({ path: '/api/returns', method: 'POST', body: {
+      sale_id: s.body.sale.id, reason: 'customer_changed_mind', refund_as: 'store_credit',
+      lines: [{ sale_item_id: line.id, qty: 1 }]
+    } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+    assert.strictEqual(r.body.store_credit_added, 228);
+    assert.strictEqual(d.prepare('SELECT store_credit FROM customers WHERE id = ?').get(cid).store_credit, 228, 'credit on the customer');
+    assert.strictEqual(d.prepare(`SELECT COUNT(*) AS n FROM customer_ledger WHERE customer_id = ? AND type = 'adjustment' AND amount = 228`).get(cid).n, 1, 'ledger evidence');
+    const p = d.prepare('SELECT * FROM payments WHERE sale_id = ?').get(s.body.sale.id);
+    assert.strictEqual(p.refunded, 0, 'no money out the door');
+    // no customer → store credit refused
+    const s2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 250 } } });
+    const line2 = (await asA({ path: `/api/sales/${s2.body.sale.id}` })).body.items[0];
+    const noCust = await asA({ path: '/api/returns', method: 'POST', body: {
+      sale_id: s2.body.sale.id, reason: 'other', refund_as: 'store_credit', lines: [{ sale_item_id: line2.id, qty: 1 }]
+    } });
+    assert.strictEqual(noCust.status, 400, JSON.stringify(noCust.body));
+  });
+
+  await test('exchange: price diff settles exactly — customer pays the difference, stock both ways, original untouched', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const aBefore = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.A.vid, pos.loc).qty;
+    const dBefore = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.D.vid, pos.loc).qty;
+    const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], payment: { method: 'cash', amount: 500 } } });
+    assert.strictEqual(s.status, 200, JSON.stringify(s.body));
+    assert.strictEqual(s.body.sale.gross, 455);
+    const line = s.body.items[0];
+    const ex = await asA({ path: '/api/exchanges', method: 'POST', body: {
+      sale_id: s.body.sale.id, reason: 'wrong_item',
+      lines: [{ sale_item_id: line.id, qty: 1, restock: true }],
+      items: [{ variant_id: pos.D.vid, qty: 1 }],
+      settle: { method: 'cash', amount: 341 },
+      override_pin: '2345'
+    } });
+    assert.strictEqual(ex.status, 200, JSON.stringify(ex.body).slice(0, 220));
+    assert.strictEqual(ex.body.exchange.returned_total, 228);
+    assert.strictEqual(ex.body.exchange.new_total, 569);
+    assert.strictEqual(ex.body.exchange.diff, 341, '569 − 228');
+    assert.strictEqual(ex.body.exchange.settled_by, 'payment');
+    const ns = ex.body.sale.sale;
+    assert.strictEqual(ns.gross, 341, 'the sale is exactly what the customer owes after the credit');
+    assert.strictEqual(ns.discount, 200, 'exchange credit recorded as a discount (VAT-exact)');
+    assert.strictEqual(ns.status, 'paid');
+    assert.strictEqual(ns.note, `exchange for return ${ex.body.return.return_no}`, 'references its original');
+    const pay = ex.body.sale.payments[0];
+    assert.strictEqual(pay.method, 'cash');
+    assert.strictEqual(pay.amount, 341, 'paid the actual diff, to the shilling');
+    assert.strictEqual(ex.body.return.exchange_id !== undefined ? ex.body.return.exchange.id : ex.body.exchange.id, ex.body.exchange.id);
+    // stock: A back in, D out
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.A.vid, pos.loc).qty, aBefore - 1, 'sold 2, returned 1');
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.D.vid, pos.loc).qty, dBefore - 1);
+    // original sale: untouched lines, returns visible on it
+    const orig = (await asA({ path: `/api/sales/${s.body.sale.id}` })).body;
+    assert.strictEqual(orig.returns_total, 228);
+    assert.strictEqual(orig.returns.length, 1);
+    assert.strictEqual(orig.items[0].qty, 2, 'original line never edited');
+    assert.strictEqual(d.prepare('SELECT status FROM sales WHERE id = ?').get(s.body.sale.id).status, 'paid', 'partially returned sale stays paid');
+  });
+
+  await test('exchange: worth-less replacement — excess refunded to the ORIGINAL sale, not the customer twice', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.E.vid, qty: 1 }], payment: { method: 'cash', amount: 200 } } });
+    assert.strictEqual(s.status, 200, JSON.stringify(s.body));
+    assert.strictEqual(s.body.sale.gross, 171);
+    const line = s.body.items[0];
+    const ex = await asA({ path: '/api/exchanges', method: 'POST', body: {
+      sale_id: s.body.sale.id, reason: 'customer_changed_mind',
+      lines: [{ sale_item_id: line.id, qty: 1, restock: true }],
+      items: [{ variant_id: pos.B.vid, qty: 1 }],
+      override_pin: '2345'
+    } });
+    assert.strictEqual(ex.status, 200, JSON.stringify(ex.body).slice(0, 220));
+    assert.strictEqual(ex.body.exchange.returned_total, 171);
+    assert.strictEqual(ex.body.exchange.new_total, 114);
+    assert.strictEqual(ex.body.exchange.diff, -57);
+    assert.strictEqual(ex.body.exchange.settled_by, 'refund');
+    assert.strictEqual(ex.body.refund_rows.length, 1);
+    assert.strictEqual(ex.body.refund_rows[0].method, 'cash');
+    assert.strictEqual(ex.body.refund_rows[0].refunded, 57, 'only the excess, back out of the original sale');
+    const ns = ex.body.sale.sale;
+    assert.strictEqual(ns.gross, 0, 'replacement fully covered by the credit');
+    assert.strictEqual(ns.status, 'paid');
+    const origPay = d.prepare('SELECT * FROM payments WHERE sale_id = ?').get(s.body.sale.id);
+    assert.strictEqual(origPay.refunded, 57);
+    assert.strictEqual(origPay.status, 'confirmed', 'original payment still live for the remaining 114');
+    assert.strictEqual(d.prepare('SELECT status FROM sales WHERE id = ?').get(s.body.sale.id).status, 'paid');
+    const orig = (await asA({ path: `/api/sales/${s.body.sale.id}` })).body;
+    assert.strictEqual(orig.returns_total, 171);
+    // no double exchange on the same return
+    const again = await asA({ path: '/api/exchanges', method: 'POST', body: {
+      sale_id: s.body.sale.id, reason: 'other',
+      lines: [{ sale_item_id: line.id, qty: 0.5 }],
+      items: [{ variant_id: pos.A.vid, qty: 1 }],
+      override_pin: '2345'
+    } });
+    assert.notStrictEqual(again.status, 200, 'line fully returned — nothing left to exchange');
+  });
+
+  await test('shifts + returns: a partial refund counts back out of the drawer exactly', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const before = (await asA({ path: '/api/shifts/mine' })).body;
+    assert.ok(before.shift && before.shift.status === 'open', 'cashier A still on shift');
+    const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], payment: { method: 'cash', amount: 500 } } });
+    assert.strictEqual(s.status, 200, JSON.stringify(s.body));
+    const line = s.body.items[0];
+    const mid = (await asA({ path: '/api/shifts/mine' })).body.shift;
+    assert.strictEqual(mid.expected_cash, before.shift.expected_cash + 455, 'cash in');
+    const r = await asA({ path: '/api/returns', method: 'POST', body: {
+      sale_id: s.body.sale.id, reason: 'other', lines: [{ sale_item_id: line.id, qty: 1 }]
+    } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 160));
+    const after = (await asA({ path: '/api/shifts/mine' })).body.shift;
+    assert.strictEqual(after.cash_refunded, before.shift.cash_refunded + 228, 'the refunded 228 left the drawer');
+    assert.strictEqual(after.expected_cash, before.shift.expected_cash + 455 - 228, 'partial refund counted out once');
+  });
+
   await test('two registers sell concurrently: no conflicts, stock exact, distinct tills', async () => {
     const asA = (o) => withCookie(pos.cashA)(o);
     const asB = (o) => withCookie(pos.cashB)(o);

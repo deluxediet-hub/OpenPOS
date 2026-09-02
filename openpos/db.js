@@ -953,6 +953,74 @@ function migrate(d) {
   // converted at payment). Quotes never touch stock until conversion.
   addCol(d, 'sales', 'kind', "TEXT NOT NULL DEFAULT 'sale'");
 
+  // ---- Phase 10: returns & exchanges (additive) -----------------------------
+  // (payments.refunded is added at the end of migrate() — the Phase 8 block
+  // may have just rebuilt the payments table, which would drop it.)
+
+  // A return never edits its sale: it is its own document (RET-#), with lines
+  // pointing at the exact sale_items it undoes, the batch it landed in, and
+  // whether the goods came back into stock.
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS returns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      branch_id INTEGER NOT NULL,
+      sale_id INTEGER NOT NULL REFERENCES sales(id),
+      return_no TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      customer_id INTEGER,
+      total INTEGER NOT NULL DEFAULT 0,
+      reason TEXT NOT NULL DEFAULT 'other'
+        CHECK(reason IN ('wrong_item','damaged','defective','customer_changed_mind','other')),
+      refund_as TEXT NOT NULL DEFAULT 'money' CHECK(refund_as IN ('money','store_credit')),
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_returns_sale ON returns(sale_id);
+    CREATE INDEX IF NOT EXISTS idx_returns_at ON returns(created_at);
+    CREATE TABLE IF NOT EXISTS return_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      return_id INTEGER NOT NULL REFERENCES returns(id),
+      sale_item_id INTEGER NOT NULL REFERENCES sale_items(id),
+      sale_item_batch_id INTEGER,
+      variant_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      qty REAL NOT NULL,
+      unit INTEGER NOT NULL,
+      net INTEGER NOT NULL,
+      tax INTEGER NOT NULL,
+      gross INTEGER NOT NULL,
+      restock INTEGER NOT NULL DEFAULT 1,
+      UNIQUE(return_id, sale_item_id)
+    );
+    CREATE TABLE IF NOT EXISTS exchanges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      branch_id INTEGER NOT NULL,
+      exchange_no TEXT NOT NULL,
+      return_id INTEGER NOT NULL REFERENCES returns(id),
+      new_sale_id INTEGER REFERENCES sales(id),
+      user_id INTEGER NOT NULL,
+      customer_id INTEGER,
+      returned_total INTEGER NOT NULL,
+      new_total INTEGER NOT NULL,
+      diff INTEGER NOT NULL,
+      settled_by TEXT NOT NULL DEFAULT 'none' CHECK(settled_by IN ('none','payment','refund','store_credit')),
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_exchanges_return ON exchanges(return_id);
+    CREATE TABLE IF NOT EXISTS exchange_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      exchange_id INTEGER NOT NULL REFERENCES exchanges(id),
+      variant_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      qty REAL NOT NULL,
+      unit INTEGER NOT NULL,
+      net INTEGER NOT NULL,
+      tax INTEGER NOT NULL,
+      gross INTEGER NOT NULL
+    );
+  `);
+
   // ---- Phase 9: shifts & till control (additive) ----------------------------
   // Which till a shift belongs to (terminal = its name, kept for display).
   addCol(d, 'shifts', 'register_id', 'INTEGER');
@@ -1010,6 +1078,11 @@ function migrate(d) {
     CREATE INDEX IF NOT EXISTS idx_payments_sale ON payments(sale_id);
     CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_ref ON payments(sale_id, method, ref) WHERE ref != '';
   `);
+
+  // Phase 10: partial refunds — how much of each payment has already gone
+  // back (full refund = refunded == amount; the payment then flips to
+  // status 'refunded'). MUST run after the Phase 8 payments rebuild above.
+  addCol(d, 'payments', 'refunded', 'INTEGER NOT NULL DEFAULT 0');
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

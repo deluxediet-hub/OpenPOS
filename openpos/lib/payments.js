@@ -289,37 +289,70 @@ function failPayment(d, { paymentId, note, via }) {
 }
 
 /**
- * Refund a CONFIRMED payment to its original method. The sale balance drops
- * back to partial; the customer balance (deni / store credit) is restored;
- * M-Pesa leaves a reversal row in mpesa_log as evidence (actual reversal
- * calls are Phase 16, live mode).
+ * Refund a CONFIRMED payment to its original method — all of it, or a part
+ * (Phase 10: `amount` ≤ the still-unrefunded balance). Partial refunds keep
+ * the payment 'confirmed' and track the money back in `refunded`; when the
+ * last shilling is back the payment flips to 'refunded'. The customer balance
+ * (deni / store credit) is restored; M-Pesa leaves a reversal row in
+ * mpesa_log as evidence (actual reversal calls are Phase 16, live mode).
+ * If the return takes the last money off the sale, the sale goes 'refunded'
+ * (a terminal state — nothing is ever edited back).
  */
-function refundPayment(d, { paymentId, user, note }) {
+function refundPayment(d, { paymentId, user, note, amount }) {
   const p = d.prepare('SELECT * FROM payments WHERE id = ?').get(paymentId);
   if (!p) throw httpError(404, 'payment not found');
   if (p.status !== 'confirmed') throw httpError(409, `only confirmed payments can be refunded (this is ${p.status})`);
 
+  const remaining = p.amount - (p.refunded || 0);
+  if (remaining <= 0) throw httpError(409, 'payment is already fully refunded');
+  const amt = amount === undefined ? remaining : intShillings(amount);
+  if (amt === null || amt <= 0) throw httpError(400, 'refund amount must be whole shillings > 0');
+  if (amt > remaining) throw httpError(400, `refund ${amt} exceeds the unrefunded balance ${remaining}`);
+
   const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(p.sale_id);
   const t = new Date().toISOString();
-  d.prepare(`UPDATE payments SET status = 'refunded', note = ?, updated_at = ? WHERE id = ?`)
-    .run(String(note || '').trim() ? `${p.note ? p.note + ' · ' : ''}refunded by ${user.name}` : `refunded by ${user.name}`, t, p.id);
+  const full = (p.refunded || 0) + amt >= p.amount;
+  const noteTxt = String(note || '').trim();
+  d.prepare(`UPDATE payments SET refunded = ?, status = ?, note = ?, updated_at = ? WHERE id = ?`)
+    .run(
+      (p.refunded || 0) + amt,
+      full ? 'refunded' : 'confirmed',
+      noteTxt
+        ? `${p.note ? p.note + ' · ' : ''}${noteTxt} (by ${user.name})`
+        : `refunded by ${user.name}`,
+      t, p.id
+    );
 
   if (p.method === 'credit') {
     d.prepare(
       `INSERT INTO customer_ledger (customer_id, type, amount, ref, user_id, note, created_at)
        VALUES (?, 'repayment', ?, ?, ?, ?, ?)`
-    ).run(sale.customer_id, p.amount, sale.invoice_no, user.id, `refund of credit payment on ${sale.invoice_no}`, t);
+    ).run(sale.customer_id, amt, sale.invoice_no, user.id, `refund of ${amt} credit payment on ${sale.invoice_no}`, t);
   }
   if (p.method === 'store_credit' && sale.customer_id) {
-    d.prepare('UPDATE customers SET store_credit = store_credit + ? WHERE id = ?').run(p.amount, sale.customer_id);
+    d.prepare('UPDATE customers SET store_credit = store_credit + ? WHERE id = ?').run(amt, sale.customer_id);
     d.prepare(
       `INSERT INTO customer_ledger (customer_id, type, amount, ref, user_id, note, created_at)
        VALUES (?, 'adjustment', ?, ?, ?, ?, ?)`
-    ).run(sale.customer_id, p.amount, sale.invoice_no, user.id, `store credit restored (refund on ${sale.invoice_no})`, t);
+    ).run(sale.customer_id, amt, sale.invoice_no, user.id, `store credit restored ${amt} (refund on ${sale.invoice_no})`, t);
   }
 
-  const sale2 = recomputeSale(d, p.sale_id);
-  return { payment: d.prepare('SELECT * FROM payments WHERE id = ?').get(p.id), sale: sale2 };
+  // Terminal check: is ALL the sale's money back — and nothing still pending?
+  const left = d.prepare(
+    `SELECT COALESCE(SUM(amount - refunded), 0) AS v FROM payments
+     WHERE sale_id = ? AND status IN ('confirmed', 'refunded')`
+  ).get(p.sale_id).v;
+  const pending = d.prepare(
+    `SELECT COUNT(*) AS c FROM payments WHERE sale_id = ? AND status = 'pending'`
+  ).get(p.sale_id).c;
+  let sale2;
+  if (left <= 0 && pending === 0) {
+    d.prepare(`UPDATE sales SET status = 'refunded' WHERE id = ? AND status NOT IN ('voided', 'refunded')`).run(p.sale_id);
+    sale2 = d.prepare('SELECT * FROM sales WHERE id = ?').get(p.sale_id);
+  } else {
+    sale2 = recomputeSale(d, p.sale_id);
+  }
+  return { payment: d.prepare('SELECT * FROM payments WHERE id = ?').get(p.id), sale: sale2, amount: amt };
 }
 
 module.exports = {
