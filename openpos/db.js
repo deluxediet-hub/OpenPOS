@@ -782,12 +782,16 @@ function migrate(d) {
   );
 
   // Stocktakes: expected vs physical, variance reportable, approved = stocktake moves.
+  // Phase 13 Day 18: full/partial/blind, reason codes, recount, attribution
   d.exec(
     `CREATE TABLE IF NOT EXISTS stocktakes (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        location_id INTEGER NOT NULL,
        branch_id INTEGER NOT NULL,
        status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','approved','cancelled')),
+       count_type TEXT NOT NULL DEFAULT 'full' CHECK(count_type IN ('full','partial','blind')),
+       is_blind INTEGER NOT NULL DEFAULT 0,
+       title TEXT NOT NULL DEFAULT '',
        taken_by INTEGER,
        approved_by INTEGER,
        note TEXT NOT NULL DEFAULT '',
@@ -804,6 +808,14 @@ function migrate(d) {
        expected_qty REAL NOT NULL DEFAULT 0,
        physical_qty REAL,
        variance REAL,
+       reason TEXT NOT NULL DEFAULT '',
+       note TEXT NOT NULL DEFAULT '',
+       counted_by INTEGER,
+       counted_at TEXT,
+       recount_qty REAL,
+       recount_variance REAL,
+       recount_by INTEGER,
+       recount_at TEXT,
        created_at TEXT NOT NULL
      )`
   );
@@ -1173,6 +1185,29 @@ function migrate(d) {
     CREATE INDEX IF NOT EXISTS idx_expenses_branch_date ON expenses(branch_id, expense_date);
   `);
   addCol(d, 'suppliers', 'branch_id', 'INTEGER REFERENCES branches(id)');
+
+  // Phase 13 Day 18: stock-taking, shrinkage & reconciliation polish
+  addCol(d, 'stocktakes', 'count_type', "TEXT NOT NULL DEFAULT 'full'");
+  addCol(d, 'stocktakes', 'is_blind', 'INTEGER NOT NULL DEFAULT 0');
+  addCol(d, 'stocktakes', 'title', "TEXT NOT NULL DEFAULT ''");
+  addCol(d, 'stocktake_lines', 'reason', "TEXT NOT NULL DEFAULT ''");
+  addCol(d, 'stocktake_lines', 'note', "TEXT NOT NULL DEFAULT ''");
+  addCol(d, 'stocktake_lines', 'counted_by', 'INTEGER');
+  addCol(d, 'stocktake_lines', 'counted_at', 'TEXT');
+  addCol(d, 'stocktake_lines', 'recount_qty', 'REAL');
+  addCol(d, 'stocktake_lines', 'recount_variance', 'REAL');
+  addCol(d, 'stocktake_lines', 'recount_by', 'INTEGER');
+  addCol(d, 'stocktake_lines', 'recount_at', 'TEXT');
+
+  // Backfill count_type from is_blind if needed
+  try {
+    d.exec(`UPDATE stocktakes SET count_type = 'blind' WHERE is_blind = 1 AND count_type = 'full'`);
+  } catch (_) {}
+
+  // Ensure stocktakes.status allows recount? Keep same but allow recount as separate action, not status
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_stocktakes_branch ON stocktakes(branch_id, created_at)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_moves_reason ON stock_moves(reason, created_at)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_stocktake_lines_variant ON stocktake_lines(variant_id)`);
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

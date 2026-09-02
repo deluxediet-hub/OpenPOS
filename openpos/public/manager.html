@@ -98,7 +98,7 @@
       </div>
     </section>
 
-    <!-- ============ STOCK (ledger, stocktakes, integrity) ============ -->
+    <!-- ============ STOCK (ledger, stocktakes, integrity, shrinkage — Phase 13 Day 18) ============ -->
     <section id="tab-stock" class="hidden">
       <div class="row wrap" style="margin-bottom:10px">
         <span class="muted small" id="st-integrity-msg"></span>
@@ -108,16 +108,53 @@
       </div>
 
       <div class="card" style="margin-bottom:14px">
-        <h3 data-i18n="stocktakes">Stocktakes</h3>
-        <div class="row wrap" style="margin-bottom:8px">
-          <select id="stk-loc" style="width:200px"></select>
-          <button class="btn small" id="stk-new" data-i18n="new_stocktake">New stocktake</button>
+        <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+          <h3 style="margin:0" data-i18n="stocktakes">Stocktakes</h3>
+          <div class="row wrap" style="gap:6px">
+            <select id="stk-branch" style="width:160px"></select>
+            <select id="stk-loc" style="width:180px"></select>
+            <select id="stk-type" style="width:110px"><option value="full">full</option><option value="partial">partial</option><option value="blind">blind</option></select>
+            <label class="check" style="margin:0"><input type="checkbox" id="stk-blind"> blind</label>
+            <input id="stk-title" placeholder="Title (e.g. Night count)" style="width:160px;padding:6px;border:1px solid #cbd5e1;border-radius:6px">
+            <button class="btn small" id="stk-new" data-i18n="new_stocktake">New stocktake</button>
+            <button class="btn small ghost" id="stk-new-50">Blind 50</button>
+          </div>
           <div class="msg" id="stk-msg" style="margin:0"></div>
+        </div>
+        <div class="row wrap" style="gap:8px;margin-bottom:8px">
+          <select id="stk-filter-status" style="width:110px"><option value="">all status</option><option value="draft">draft</option><option value="approved">approved</option><option value="cancelled">cancelled</option></select>
+          <select id="stk-filter-type" style="width:110px"><option value="">all types</option><option value="full">full</option><option value="partial">partial</option><option value="blind">blind</option></select>
+          <button class="btn small ghost" id="stk-reload">Reload</button>
+          <span class="muted small">Reason codes: damage, expired, theft, lost, found, correction, other</span>
         </div>
         <div id="stk-active"></div>
         <table style="margin-top:10px"><thead><tr>
-          <th>When</th><th data-i18n="location">Location</th><th>Lines</th><th data-i18n="variance">Variance (|Σ|)</th><th>Status</th>
+          <th>When</th><th>Title</th><th data-i18n="location">Location</th><th>Type</th><th>Blind</th><th>Lines</th><th>Counted</th><th data-i18n="variance">Variance (|Σ|)</th><th>Shrinkage</th><th>Status</th><th>By</th>
         </tr></thead><tbody id="stk-rows"></tbody></table>
+      </div>
+
+      <div class="card" style="margin-bottom:14px" id="shrinkage-card">
+        <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+          <h3 style="margin:0">Shrinkage analysis</h3>
+          <div class="row wrap" style="gap:6px">
+            <select id="shr-branch" style="width:160px"></select>
+            <input type="date" id="shr-from" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px">
+            <input type="date" id="shr-to" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px">
+            <select id="shr-group" style="width:120px"><option value="variant">by SKU</option><option value="reason">by reason</option><option value="branch">by branch</option><option value="location">by location</option></select>
+            <button class="btn small" id="shr-run">Run</button>
+            <span class="muted small" id="shr-msg"></span>
+          </div>
+        </div>
+        <div id="shr-totals" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px"></div>
+        <div class="grid cols-2" style="gap:14px">
+          <div><h4 style="margin:0 0 6px">Top disappearing SKUs (by value)</h4><div style="overflow:auto"><table><thead><tr><th>Product</th><th>Qty lost</th><th>Value lost</th><th>Occur</th><th>Reasons</th></tr></thead><tbody id="shr-variant"></tbody></table></div></div>
+          <div><h4 style="margin:0 0 6px">By reason</h4><div style="overflow:auto"><table><thead><tr><th>Reason</th><th>Qty lost</th><th>Value lost</th><th>Occur</th></tr></thead><tbody id="shr-reason"></tbody></table></div></div>
+        </div>
+        <div class="grid cols-2" style="gap:14px;margin-top:12px">
+          <div><h4 style="margin:0 0 6px">By branch</h4><div style="overflow:auto"><table><thead><tr><th>Branch</th><th>Qty lost</th><th>Value lost</th><th>Occur</th></tr></thead><tbody id="shr-branch-tbl"></tbody></table></div></div>
+          <div><h4 style="margin:0 0 6px">By location</h4><div style="overflow:auto"><table><thead><tr><th>Location</th><th>Qty lost</th><th>Value lost</th><th>Occur</th></tr></thead><tbody id="shr-loc"></tbody></table></div></div>
+        </div>
+        <div style="margin-top:12px"><h4 style="margin:0 0 6px">Per-branch Top 10</h4><div id="shr-per-branch" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px"></div></div>
       </div>
 
       <div class="card" style="margin-bottom:14px">
@@ -1947,40 +1984,51 @@ $('#attr-add').onclick = async () => {
   } catch (e) { toast($('#attr-msg'), e.message, false); }
 };
 
-// ---------- stock ledger (Phase 4: R-S) ----------
+// ---------- stock ledger (Phase 4 + Phase 13 Day 18: full/partial/blind, reason codes, shrinkage) ----------
 const MOVE_TYPES_UI = ['opening','purchase','sale','return_in','return_out','transfer_in','transfer_out',
   'adjustment','damage','expiry_writeoff','stocktake','conversion','refund','hold','release'];
-let STK_OPEN = null; // open stocktake draft being counted
+const STK_REASONS = ['','damage','expired','theft','lost','found','correction','other','stocktake','integrity'];
+let STK_OPEN = null;
 
 async function loadStock() {
-  $('#stk-loc').innerHTML = (BOOT.allLocations || BOOT.locations).map((l) =>
-    `<option value="${l.id}">${esc(l.name)}${l.is_warehouse ? ' (warehouse)' : ''}</option>`).join('');
-  $('#st-move-type').innerHTML = '<option value="">all types</option>' +
-    MOVE_TYPES_UI.map((m) => `<option value="${m}">${m}</option>`).join('');
-  await Promise.all([loadStockBalances(), loadStockMoves(), loadStockInsight(), loadStocktakeHistory()]);
+  const locs = BOOT.allLocations || BOOT.locations || [];
+  const brs = BOOT.branches || [];
+  $('#stk-branch').innerHTML = '<option value="">all branches</option>' + brs.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  $('#stk-loc').innerHTML = locs.map((l) => `<option value="${l.id}">${esc(l.name)}${l.is_warehouse ? ' (warehouse)' : ''} — ${esc((brs.find((b)=>b.id===l.branch_id)||{}).name||'')}</option>`).join('');
+  $('#shr-branch').innerHTML = '<option value="">all branches</option>' + brs.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  $('#stk-branch').onchange = () => {
+    const bid = Number($('#stk-branch').value);
+    const filtered = bid ? locs.filter((l) => l.branch_id === bid) : locs;
+    $('#stk-loc').innerHTML = filtered.map((l) => `<option value="${l.id}">${esc(l.name)}${l.is_warehouse ? ' (warehouse)' : ''}</option>`).join('');
+  };
+  $('#st-move-type').innerHTML = '<option value="">all types</option>' + MOVE_TYPES_UI.map((m) => `<option value="${m}">${m}</option>`).join('');
+  $('#stk-filter-status').onchange = loadStocktakeHistory;
+  $('#stk-filter-type').onchange = loadStocktakeHistory;
+  $('#stk-reload').onclick = loadStocktakeHistory;
+  $('#shr-run').onclick = loadShrinkage;
+  await Promise.all([loadStockBalances(), loadStockMoves(), loadStockInsight(), loadStocktakeHistory(), loadShrinkage()]);
   if (STK_OPEN) renderStocktake(STK_OPEN);
 }
 
 async function loadStockBalances() {
   const rows = await api('/api/stock/balances');
   $('#st-bal-rows').innerHTML = rows
-    .flatMap((b) => b.locations.map((l) => `\n    <tr>
+    .flatMap((b) => b.locations.map((l) => `
+    <tr>
       <td>${esc(b.product_name)}${b.variant_name && b.variant_name !== '(base)' ? ` <span class="muted small">· ${esc(b.variant_name)}</span>` : ''}</td>
       <td>${esc(l.location_name)}</td>
       <td>${esc(String(l.qty))}</td>
       <td>${esc(String(l.expected))}</td>
-      <td>${Math.abs(l.qty - l.expected) > 1e-9
-        ? '<span class="pill r">✗ ' + t('drift') + '</span>'
-        : '<span class="pill g">✓</span>'}</td>
+      <td>${Math.abs(l.qty - l.expected) > 1e-9 ? '<span class="pill r">✗ ' + t('drift') + '</span>' : '<span class="pill g">✓</span>'}</td>
       <td class="muted small">${l.last_moved_at ? new Date(l.last_moved_at).toLocaleString() : '—'}</td>
-    </tr>`)).join('')
-    || `<tr><td colspan="6" class="muted">${t('no_rows')}</td></tr>`;
+    </tr>`)).join('') || `<tr><td colspan="6" class="muted">${t('no_rows')}</td></tr>`;
 }
 
 async function loadStockMoves() {
   const type = $('#st-move-type').value;
   const rows = await api(`/api/stock/moves?limit=80${type ? `&type=${type}` : ''}`);
-  $('#st-move-rows').innerHTML = rows.map((m) => `\n    <tr>
+  $('#st-move-rows').innerHTML = rows.map((m) => `
+    <tr>
       <td class="muted small">${new Date(m.created_at).toLocaleString()}</td>
       <td>${esc(m.product_name)}${m.variant_name ? ` <span class="muted small">· ${esc(m.variant_name)}</span>` : ''}${m.batch_no ? ` <span class="pill">b:${esc(m.batch_no)}</span>` : ''}</td>
       <td><span class="pill">${esc(m.type)}</span></td>
@@ -1994,14 +2042,16 @@ async function loadStockMoves() {
 async function loadStockInsight() {
   const [aging, dead] = await Promise.all([api('/api/stock/aging'), api('/api/stock/dead?days=90')]);
   const agePill = (v, cls) => v > 0 ? `<span class="pill ${cls}">${esc(String(v))}</span>` : '<span class="muted">0</span>';
-  $('#st-age-rows').innerHTML = aging.map((a) => `\n    <tr>
+  $('#st-age-rows').innerHTML = aging.map((a) => `
+    <tr>
       <td>${esc(a.product_name)}${a.variant_name !== '(base)' ? ` <span class="muted small">· ${esc(a.variant_name)}</span>` : ''} <span class="muted small">${esc(a.location_name)}</span></td>
       <td>${esc(String(a.qty))}</td>
       <td>${agePill(a.buckets.fresh, 'g')}</td><td>${agePill(a.buckets.maturing, '')}</td>
       <td>${agePill(a.buckets.aging, 'r')}</td>
       <td class="muted small">${a.oldest_age_days}d</td>
     </tr>`).join('') || `<tr><td colspan="6" class="muted">${t('no_rows')}</td></tr>`;
-  $('#st-dead-rows').innerHTML = dead.map((r) => `\n    <tr>
+  $('#st-dead-rows').innerHTML = dead.map((r) => `
+    <tr>
       <td>${esc(r.product_name)}${r.variant_name ? ` <span class="muted small">· ${esc(r.variant_name)}</span>` : ''}</td>
       <td>${esc(r.location_name)}</td>
       <td>${esc(String(r.qty))}</td>
@@ -2010,14 +2060,56 @@ async function loadStockInsight() {
 }
 
 async function loadStocktakeHistory() {
-  const rows = await api('/api/stocktakes');
-  $('#stk-rows').innerHTML = rows.map((s) => `\n    <tr>
+  const status = $('#stk-filter-status')?.value || '';
+  const ctype = $('#stk-filter-type')?.value || '';
+  const branch = $('#stk-branch')?.value || '';
+  const q = [];
+  if (status) q.push(`status=${status}`);
+  if (ctype) q.push(`count_type=${ctype}`);
+  if (branch) q.push(`branch_id=${branch}`);
+  const rows = await api(`/api/stocktakes${q.length ? '?' + q.join('&') : ''}`);
+  $('#stk-rows').innerHTML = rows.map((s) => `
+    <tr class="clickable" data-stk="${s.id}">
       <td class="muted small">${new Date(s.created_at).toLocaleString()}</td>
-      <td>${esc(s.location_name)}</td>
+      <td>${esc(s.title || '')}${s.title ? '' : '<span class="muted small">—</span>'}</td>
+      <td>${esc(s.location_name)}<div class="muted small">${esc(s.branch_name||'')}</div></td>
+      <td><span class="pill">${esc(s.count_type||'full')}</span></td>
+      <td>${s.is_blind ? '<span class="pill y">blind</span>' : '—'}</td>
       <td>${s.lines}</td>
+      <td>${s.counted}/${s.lines}</td>
       <td>${Number(s.total_abs_variance) > 0 ? esc(String(s.total_abs_variance)) : '—'}</td>
-      <td><span class="pill ${s.status === 'approved' ? 'g' : ''}">${s.status}</span></td>
-    </tr>`).join('') || `<tr><td colspan="5" class="muted">${t('no_rows')}</td></tr>`;
+      <td>${Number(s.total_shrinkage_qty) < 0 ? `<span class="pill r">${esc(String(s.total_shrinkage_qty))}</span>` : '—'}</td>
+      <td><span class="pill ${s.status === 'approved' ? 'g' : s.status === 'draft' ? 'y' : 'r'}">${s.status}</span></td>
+      <td class="small">${esc(s.taken_by_name||'')}</td>
+    </tr>`).join('') || `<tr><td colspan="11" class="muted">${t('no_rows')}</td></tr>`;
+  document.querySelectorAll('#stk-rows tr[data-stk]').forEach((tr) => { tr.onclick = () => { STK_OPEN = Number(tr.dataset.stk); renderStocktake(STK_OPEN); }; });
+}
+
+async function loadShrinkage() {
+  const branch = $('#shr-branch')?.value || '';
+  const from = $('#shr-from')?.value || '';
+  const to = $('#shr-to')?.value || '';
+  const group = $('#shr-group')?.value || 'variant';
+  const q = [];
+  if (branch) q.push(`branch_id=${branch}`);
+  if (from) q.push(`from=${from}`);
+  if (to) q.push(`to=${to}`);
+  q.push(`group_by=${group}`);
+  q.push('limit=10');
+  $('#shr-msg').textContent = 'loading…';
+  const r = await api(`/api/reports/shrinkage${q.length ? '?' + q.join('&') : ''}`).catch((e) => ({ error: e.message }));
+  if (!r || r.error) { $('#shr-msg').textContent = r?.error || 'failed'; return; }
+  $('#shr-msg').textContent = `from ${r.from.slice(0,10)} to ${r.to.slice(0,10)} — ${r.totals.occurrences} events`;
+  $('#shr-totals').innerHTML = `<span class="pill r">Qty lost: ${esc(String(Math.round(r.totals.qty_lost*100)/100))}</span> <span class="pill r">Value lost: ${fmt(r.totals.value_lost)}</span> <span class="pill">${r.totals.occurrences} events</span>`;
+  $('#shr-variant').innerHTML = (r.by_variant||[]).map((v) => `<tr><td>${esc(v.product_name)}${v.variant_name && v.variant_name!=='(base)'?` · ${esc(v.variant_name)}`:''}</td><td>${esc(String(Math.round(v.qty_lost*100)/100))}</td><td>${fmt(v.value_lost)}</td><td>${v.occurrences}</td><td class="small muted">${(v.reasons||[]).map(esc).join(', ')||'—'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">no shrinkage</td></tr>';
+  $('#shr-reason').innerHTML = (r.by_reason||[]).map((v) => `<tr><td><span class="pill">${esc(v.reason)}</span></td><td>${esc(String(Math.round(v.qty_lost*100)/100))}</td><td>${fmt(v.value_lost)}</td><td>${v.occurrences}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">—</td></tr>';
+  $('#shr-branch-tbl').innerHTML = (r.by_branch||[]).map((v) => `<tr><td>${esc(v.branch_name||String(v.branch_id))}</td><td>${esc(String(Math.round(v.qty_lost*100)/100))}</td><td>${fmt(v.value_lost)}</td><td>${v.occurrences}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">—</td></tr>';
+  $('#shr-loc').innerHTML = (r.by_location||[]).map((v) => `<tr><td>${esc(v.location_name||'unknown')}</td><td>${esc(String(Math.round(v.qty_lost*100)/100))}</td><td>${fmt(v.value_lost)}</td><td>${v.occurrences}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">—</td></tr>';
+  const per = r.per_branch_top || {};
+  $('#shr-per-branch').innerHTML = Object.entries(per).map(([bid, top]) => {
+    const bname = (r.by_branch||[]).find((b)=>String(b.branch_id)===String(bid))?.branch_name || `Branch ${bid}`;
+    return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#f8fafc"><b>${esc(bname)}</b> — Top 10 disappearing<table style="margin-top:6px"><thead><tr><th>SKU</th><th>Qty</th><th>Value</th></tr></thead><tbody>${top.map((t)=>`<tr><td class="small">${esc(t.product_name)}${t.variant_name?' · '+esc(t.variant_name):''}</td><td>${esc(String(Math.round(t.qty_lost*100)/100))}</td><td>${fmt(t.value_lost)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">clean</td></tr>'}</tbody></table></div>`;
+  }).join('') || '<div class="muted">no data</div>';
 }
 
 $('#st-integrity').onclick = async () => {
@@ -2029,8 +2121,7 @@ $('#st-integrity').onclick = async () => {
       msg.textContent = `✓ ${t('match')}: ${r.checked} variant/location balances agree with the ledger`;
       $('#st-repair').classList.add('hidden');
     } else {
-      msg.textContent = `✗ ${r.mismatches.length} ${t('drift')} of ${r.checked} checked: ` +
-        r.mismatches.slice(0, 3).map((m) => `${m.product} (loc ${m.location_id}): ${m.materialized} vs ${m.expected}`).join(' · ');
+      msg.textContent = `✗ ${r.mismatches.length} ${t('drift')} of ${r.checked} checked: ` + r.mismatches.slice(0, 3).map((m) => `${m.product} (loc ${m.location_id}): ${m.materialized} vs ${m.expected}`).join(' · ');
       $('#st-repair').classList.remove('hidden');
     }
     msg.className = 'small';
@@ -2051,58 +2142,162 @@ $('#st-move-type').onchange = loadStockMoves;
 $('#stk-new').onclick = async () => {
   const msg = $('#stk-msg');
   try {
-    const r = await api('/api/stocktakes', { method: 'POST', body: { location_id: Number($('#stk-loc').value) } });
+    const loc = Number($('#stk-loc').value);
+    if (!loc) { toast(msg, 'Pick location', false); return; }
+    const count_type = $('#stk-type').value || 'full';
+    const is_blind = $('#stk-blind').checked || count_type === 'blind' ? 1 : 0;
+    const title = $('#stk-title').value.trim();
+    const r = await api('/api/stocktakes', { method: 'POST', body: { location_id: loc, count_type, is_blind, title } });
     STK_OPEN = r.id;
     renderStocktake(STK_OPEN);
+    loadStocktakeHistory();
+  } catch (e) { toast(msg, e.message, false); }
+};
+
+$('#stk-new-50').onclick = async () => {
+  const msg = $('#stk-msg');
+  try {
+    const loc = Number($('#stk-loc').value);
+    if (!loc) { toast(msg, 'Pick location', false); return; }
+    // Blind 50: try to get 50 variants with stock at location via balances
+    let vIds = [];
+    try {
+      const bals = await api('/api/stock/balances');
+      for (const b of bals) {
+        for (const l of b.locations) {
+          if (l.location_id === loc && l.qty > 0) {
+            // balances don't give variant_id directly in old shape, but we have product_id; fetch variant
+            const p = await api(`/api/products/${b.product_id}/variants`).catch(()=>[]);
+            if (p[0]) vIds.push(p[0].id);
+          }
+        }
+        if (vIds.length >= 50) break;
+      }
+    } catch {}
+    if (!vIds.length) {
+      const prods = await api('/api/products?limit=50').catch(()=>[]);
+      for (const p of prods.slice(0,50)) {
+        const vs = await api(`/api/products/${p.id}/variants`).catch(()=>[]);
+        if (vs[0]) vIds.push(vs[0].id);
+      }
+    }
+    vIds = [...new Set(vIds)].slice(0,50);
+    if (!vIds.length) { toast(msg, 'No variants found for blind count', false); return; }
+    const r = await api('/api/stocktakes', { method: 'POST', body: { location_id: loc, count_type: 'blind', is_blind: 1, title: 'Blind 50', variant_ids: vIds } });
+    STK_OPEN = r.id;
+    renderStocktake(STK_OPEN);
+    loadStocktakeHistory();
+    toast(msg, `Blind 50 created with ${vIds.length} variants`, true);
   } catch (e) { toast(msg, e.message, false); }
 };
 
 async function renderStocktake(id) {
   const box = $('#stk-active');
   box.innerHTML = '<span class="muted small">Loading…</span>';
-  const st = await api(`/api/stocktakes/${id}`);
-  box.innerHTML = `\n    <div style="background:var(--green-soft);border-radius:8px;padding:10px">
-      <div class="row wrap" style="margin-bottom:6px">
-        <b>Stocktake #${st.id}</b> — ${esc(st.location_name || '')} <span class="pill">${st.status}</span>
-        <span class="muted small">Enter what you physically counted; leave a line empty to keep the expected value.</span>
+  const st = await api(`/api/stocktakes/${id}`).catch((e)=>({ error: e.message }));
+  if (!st || st.error) { box.innerHTML = `<span class="muted small">${esc(st?.error||'failed')}</span>`; return; }
+  const blindHidden = st.blind_hidden;
+  box.innerHTML = `
+    <div style="background:${st.is_blind?'#fef9c3':'var(--green-soft)'};border-radius:8px;padding:10px;border:1px solid ${st.is_blind?'#facc15':'#bbf7d0'}">
+      <div class="row wrap" style="margin-bottom:6px;gap:8px">
+        <b>Stocktake #${st.id}</b> — ${esc(st.title||'')} ${esc(st.location_name||'')} <span class="pill">${esc(st.count_type||'full')}</span> ${st.is_blind?'<span class="pill y">blind</span>':''} <span class="pill ${st.status==='approved'?'g':st.status==='draft'?'y':''}">${st.status}</span>
+        ${blindHidden?'<span class="pill r">expected hidden — blind count</span>':''}
+        <span class="muted small">Counted ${st.lines.filter((l)=>l.physical_qty!==null).length}/${st.lines.length} · variance |Σ| ${(st.lines.reduce((s,l)=>s+Math.abs(l.variance||l.recount_variance||0),0)).toFixed(2)}</span>
+        <span class="spacer"></span>
+        <button class="btn ghost small" id="stk-add-line">+ Add SKU</button>
       </div>
+      <div style="overflow:auto;max-height:420px">
       <table><thead><tr>
-        <th data-i18n="name">Item</th><th>Batch</th><th data-i18n="expected">Expected</th>
-        <th data-i18n="physical">Counted</th><th data-i18n="variance">Variance</th>
+        <th>Item</th><th>Batch</th><th>${blindHidden?'Expected (hidden)':'Expected'}</th>
+        <th>Counted</th><th>Recount</th><th>Variance</th><th>Reason</th><th>Note</th><th>By</th>
       </tr></thead><tbody>
-      ${st.lines.map((l) => `\n        <tr>
-          <td>${esc(l.product_name)}${l.variant_name ? ` <span class="muted small">· ${esc(l.variant_name)}</span>` : ''}</td>
-          <td class="mono small">${l.batch_no ? esc(l.batch_no) : '—'}${l.expiry_date ? ` <span class="muted">(${esc(l.expiry_date)})</span>` : ''}</td>
-          <td>${esc(String(l.expected_qty))}</td>
-          <td><input type="number" step="0.01" min="0" class="stk-ph" data-line="${l.id}" data-exp="${l.expected_qty}"
-                value="${l.physical_qty === null ? '' : l.physical_qty}" style="width:110px"></td>
-          <td class="stk-vr" data-line="${l.id}">${l.variance === null ? '<span class="muted">—</span>' : esc(String(l.variance))}</td>
+      ${st.lines.map((l) => `
+        <tr>
+          <td>${esc(l.product_name)}${l.variant_name ? ` <span class="muted small">· ${esc(l.variant_name)}</span>` : ''}<div class="muted small">cost ${fmt(l.unit_cost||0)}</div></td>
+          <td class="mono small">${l.batch_no ? esc(l.batch_no) : '—'}${l.expiry_date ? ` <span class="muted">(${esc(l.expiry_date.slice(0,10))})</span>` : ''}</td>
+          <td>${blindHidden ? '<span class="muted">—</span>' : esc(String(l.expected_qty))}</td>
+          <td><input type="number" step="0.01" min="0" class="stk-ph" data-line="${l.id}" data-exp="${l.expected_qty}" value="${l.physical_qty===null?'':l.physical_qty}" style="width:90px" ${st.status!=='draft'?'disabled':''}></td>
+          <td><input type="number" step="0.01" min="0" class="stk-rc" data-line="${l.id}" data-exp="${l.expected_qty}" value="${l.recount_qty===null||l.recount_qty===undefined?'':l.recount_qty}" style="width:90px" ${st.status!=='draft'?'disabled':''}></td>
+          <td class="stk-vr" data-line="${l.id}">${(() => { const v = l.recount_variance!==null&&l.recount_variance!==undefined?l.recount_variance:l.variance; return v===null?'<span class="muted">—</span>':`${v>0?'+':''}${esc(String(v))}${l.variance_value?`<div class="muted small">${fmt(l.variance_value)}</div>`:''}`; })()}</td>
+          <td><select class="stk-rs" data-line="${l.id}" ${st.status!=='draft'?'disabled':''}>${STK_REASONS.map((r)=>`<option value="${r}" ${l.reason===r?'selected':''}>${r||'—'}</option>`).join('')}</select></td>
+          <td><input class="stk-nt" data-line="${l.id}" value="${esc(l.note||'')}" style="width:110px" ${st.status!=='draft'?'disabled':''}></td>
+          <td class="small muted">${esc(l.counted_by_name||'')}${l.recount_by_name?`<div>recount: ${esc(l.recount_by_name)}</div>`:''}</td>
         </tr>`).join('')}
       </tbody></table>
-      <div class="row wrap" style="margin-top:8px">
+      </div>
+      <div class="row wrap" style="margin-top:8px;gap:8px">
         ${st.status === 'draft' ? `
+        <button class="btn small" id="stk-save-all">Save all</button>
         <button class="btn small" id="stk-approve">${t('approve')}</button>
-        <button class="btn ghost small" id="stk-close">✕</button>` : '<span class="muted small">Approved stocktakes are kept as evidence.</span>'}
+        <button class="btn ghost small" id="stk-close">Discard</button>
+        <span class="muted small" id="stk-save-msg"></span>` : '<span class="muted small">Approved stocktakes are kept as evidence — ledger integrity clean.</span>'}
       </div>
     </div>`;
   box.querySelectorAll('.stk-ph').forEach((inp) => {
     inp.oninput = () => {
+      const exp = Number(inp.dataset.exp);
       const v = inp.value === '' ? null : Number(inp.value);
-      const cell = box.querySelector(`.stk-vr[data-line="${inp.dataset.line}"]`);
-      cell.innerHTML = v === null ? '<span class="muted">—</span>' : esc(String(Math.round((v - Number(inp.dataset.exp)) * 1e6) / 1e6));
+      const tr = inp.closest('tr');
+      const vr = tr.querySelector(`.stk-vr[data-line="${inp.dataset.line}"]`);
+      if (vr) vr.innerHTML = v===null?'<span class="muted">—</span>':esc(String(Math.round((v-exp)*1e6)/1e6));
     };
   });
+  box.querySelectorAll('.stk-rc').forEach((inp) => {
+    inp.oninput = () => {
+      const exp = Number(inp.dataset.exp);
+      const v = inp.value === '' ? null : Number(inp.value);
+      const tr = inp.closest('tr');
+      const vr = tr.querySelector(`.stk-vr[data-line="${inp.dataset.line}"]`);
+      if (vr && v!==null) vr.innerHTML = esc(String(Math.round((v-exp)*1e6)/1e6));
+    };
+  });
+  const saveAll = $('#stk-save-all');
+  if (saveAll) saveAll.onclick = async () => {
+    const msg = $('#stk-save-msg');
+    msg.textContent = 'saving…';
+    try {
+      for (const tr of box.querySelectorAll('tbody tr')) {
+        const lineId = tr.querySelector('.stk-ph')?.dataset.line;
+        if (!lineId) continue;
+        const ph = tr.querySelector('.stk-ph');
+        const rc = tr.querySelector('.stk-rc');
+        const rs = tr.querySelector('.stk-rs');
+        const nt = tr.querySelector('.stk-nt');
+        if (ph && ph.value !== '') {
+          await api(`/api/stocktakes/${st.id}/lines/${lineId}`, { method: 'PUT', body: { physical_qty: Number(ph.value), reason: rs.value, note: nt.value } });
+        } else if (rs.value || nt.value) {
+          await api(`/api/stocktakes/${st.id}/lines/${lineId}`, { method: 'PUT', body: { reason: rs.value, note: nt.value } }).catch(()=>{});
+        }
+        if (rc && rc.value !== '') {
+          await api(`/api/stocktakes/${st.id}/recount/${lineId}`, { method: 'POST', body: { recount_qty: Number(rc.value), reason: rs.value, note: nt.value } });
+        }
+      }
+      msg.textContent = 'saved';
+      renderStocktake(st.id);
+      loadStocktakeHistory();
+    } catch (e) { msg.textContent = e.message; }
+  };
   const approve = $('#stk-approve');
   if (approve) approve.onclick = async () => {
     try {
       for (const inp of box.querySelectorAll('.stk-ph')) {
         if (inp.value === '') continue;
-        await api(`/api/stocktakes/${st.id}/lines/${inp.dataset.line}`, { method: 'PUT', body: { physical_qty: Number(inp.value) } });
+        const tr = inp.closest('tr');
+        const rs = tr.querySelector('.stk-rs');
+        const nt = tr.querySelector('.stk-nt');
+        await api(`/api/stocktakes/${st.id}/lines/${inp.dataset.line}`, { method: 'PUT', body: { physical_qty: Number(inp.value), reason: rs.value, note: nt.value } });
+      }
+      for (const inp of box.querySelectorAll('.stk-rc')) {
+        if (inp.value === '') continue;
+        const tr = inp.closest('tr');
+        const rs = tr.querySelector('.stk-rs');
+        const nt = tr.querySelector('.stk-nt');
+        await api(`/api/stocktakes/${st.id}/recount/${inp.dataset.line}`, { method: 'POST', body: { recount_qty: Number(inp.value), reason: rs.value, note: nt.value } });
       }
       await api(`/api/stocktakes/${st.id}/approve`, { method: 'POST', body: {} });
       STK_OPEN = null;
       $('#stk-active').innerHTML = '';
-      toast($('#stk-msg'), 'Stocktake approved — variances written as moves.', true);
+      toast($('#stk-msg'), 'Stocktake approved — variances written as moves with reasons. Integrity clean.', true);
       loadStock();
     } catch (e) { toast($('#stk-msg'), e.message, false); }
   };
@@ -2112,11 +2307,31 @@ async function renderStocktake(id) {
     try {
       await api(`/api/stocktakes/${st.id}`, { method: 'DELETE' });
       STK_OPEN = null;
-      $('#stk-active').innerHTML = '';
+      box.innerHTML = '';
       loadStocktakeHistory();
     } catch (e) { toast($('#stk-msg'), e.message, false); }
   };
+  const addLine = $('#stk-add-line');
+  if (addLine) addLine.onclick = async () => {
+    const vId = prompt('Variant ID to add (or product ID with p: prefix e.g. p:12)');
+    if (!vId) return;
+    let variant_id = null;
+    if (String(vId).startsWith('p:')) {
+      const pid = Number(String(vId).slice(2));
+      const vs = await api(`/api/products/${pid}/variants`).catch(()=>[]);
+      if (!vs[0]) { alert('no variant'); return; }
+      variant_id = vs[0].id;
+    } else {
+      variant_id = Number(vId);
+    }
+    try {
+      await api(`/api/stocktakes/${st.id}/lines`, { method: 'POST', body: { variant_id } });
+      renderStocktake(st.id);
+    } catch (e) { alert(e.message); }
+  };
 }
+
+
 
 // ---------- categories ----------
 async function loadCategories() {
