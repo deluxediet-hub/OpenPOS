@@ -388,7 +388,7 @@ function createApp(d) {
   app.use(express.static(path.join(__dirname, 'public')));
 
   // ---- health / status ------------------------------------------------------
-  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 10 }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 11 }));
 
   app.get('/api/setup/status', (req, res) => {
     res.json({
@@ -2938,9 +2938,6 @@ function createApp(d) {
   });
 
   // Read-only customer list (the full customer module lands in Phase 11).
-  app.get('/api/customers', me, can('customers.view'), (req, res) => {
-    res.json(d.prepare('SELECT * FROM customers ORDER BY name LIMIT 500').all());
-  });
 
   // ---- Phase 7 (Day 10): POS / sales engine --------------------------------------------------------
   // Prices are FROZEN at line add (R-PR chain: promo → customer → branch → pack → tier → default).
@@ -4356,6 +4353,327 @@ function createApp(d) {
     res.json({ ok: true, returns: next });
   });
 
+  // ---- Phase 11: customers & deni ----------------------------------------------
+  // Phone-first profiles: the duka knows the number before the name. A
+  // repayment is money the customer hands back for their deni — it leaves
+  // ledger evidence (customer_ledger 'repayment'), a till deposit when the
+  // money is cash, and an audit row. The statement is the ledger itself,
+  // so a printed statement can never drift from what the books say.
+  function deniOutstanding(d, customerId) {
+    return d.prepare(
+      `SELECT COALESCE(SUM(CASE WHEN type = 'credit_sale' THEN amount WHEN type = 'repayment' THEN -amount ELSE 0 END), 0) AS b
+       FROM customer_ledger WHERE customer_id = ?`
+    ).get(customerId).b;
+  }
+
+  function customerRow(d, id) {
+    return d.prepare(
+      `SELECT c.*,
+         (SELECT COALESCE(SUM(CASE WHEN type = 'credit_sale' THEN amount WHEN type = 'repayment' THEN -amount ELSE 0 END), 0)
+          FROM customer_ledger WHERE customer_id = c.id) AS deni_outstanding,
+         (SELECT MAX(s.created_at) FROM sales s WHERE s.customer_id = c.id) AS last_purchase,
+         (SELECT COALESCE(SUM(s.gross), 0) FROM sales s WHERE s.customer_id = c.id AND s.status IN ('paid', 'partial')) AS total_purchases
+       FROM customers c WHERE c.id = ?`
+    ).get(id);
+  }
+
+  app.get('/api/customers', me, can('customers.view'), (req, res) => {
+    const q = String(req.query.q || '').trim();
+    const where = q ? "(c.name LIKE ? OR c.phone LIKE ?)" : '1=1';
+    const args = q ? [`%${q}%`, `%${q}%`] : [];
+    const rows = d.prepare(
+      `SELECT c.*,
+         (SELECT COALESCE(SUM(CASE WHEN type = 'credit_sale' THEN amount WHEN type = 'repayment' THEN -amount ELSE 0 END), 0)
+          FROM customer_ledger WHERE customer_id = c.id) AS deni_outstanding,
+         (SELECT MAX(s.created_at) FROM sales s WHERE s.customer_id = c.id) AS last_purchase,
+         (SELECT COALESCE(SUM(s.gross), 0) FROM sales s WHERE s.customer_id = c.id AND s.status IN ('paid', 'partial')) AS total_purchases
+       FROM customers c WHERE ${where} ORDER BY c.name LIMIT 500`
+    ).all(...args);
+    res.json(rows);
+  });
+
+  app.post('/api/customers', me, can('customers.manage'), (req, res) => {
+    try {
+      const b = req.body || {};
+      const name = String(b.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'name required' });
+      const phone = String(b.phone || '').trim();
+      const email = String(b.email || '').trim();
+      const kraPin = String(b.kra_pin || '').trim();
+      const tier = TIERS.includes(b.tier) ? b.tier : 'standard';
+      const creditLimit = Number.isInteger(b.credit_limit) && b.credit_limit >= 0 ? b.credit_limit : 0;
+      const note = String(b.note || '').trim();
+      const birthday = b.birthday ? String(b.birthday).trim() : null;
+      const branches = visibleBranches(d, req.user);
+      const branchId = numOrNull(b.branch_id) && branches.some((x) => x.id === b.branch_id) ? b.branch_id : null;
+      const t = new Date().toISOString();
+      // Phone-first: same number = same customer (update, never duplicate).
+      const existing = phone ? d.prepare('SELECT * FROM customers WHERE phone = ?').get(phone) : null;
+      let id = existing ? existing.id : null;
+      const run = d.transaction(() => {
+        if (existing) {
+          d.prepare(
+            `UPDATE customers SET name = ?, email = ?, kra_pin = ?, credit_limit = ?, tier = ?, birthday = ?, note = ?, branch_id = ? WHERE id = ?`
+          ).run(name, email, kraPin, creditLimit, tier, birthday, note, branchId, existing.id);
+        } else {
+          id = d.prepare(
+            `INSERT INTO customers (business_id, branch_id, name, phone, email, kra_pin, credit_limit, tier, birthday, note, created_at)
+             VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(branchId, name, phone, email, kraPin, creditLimit, tier, birthday, note, t).lastInsertRowid;
+        }
+        return id;
+      });
+      id = run();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: branchId, action: existing ? 'customer/update' : 'customer/create',
+        entity: 'customer', entityId: String(id),
+        detail: { name, phone, credit_limit: creditLimit, existed: !!existing }
+      });
+      res.json({ ok: true, existed: !!existing, customer: customerRow(d, id) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/customers:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  app.get('/api/customers/:id', me, can('customers.view'), (req, res) => {
+    const id = numOrNull(req.params.id);
+    const c = customerRow(d, id);
+    if (!c) return res.status(404).json({ error: 'customer not found' });
+    const ledger = d.prepare(
+      `SELECT id, type, amount, ref, note, created_at FROM customer_ledger WHERE customer_id = ? ORDER BY created_at DESC, id DESC LIMIT 100`
+    ).all(id);
+    // running balance (deni) over the full ledger, oldest first
+    const all = d.prepare(
+      `SELECT id, type, amount FROM customer_ledger WHERE customer_id = ? ORDER BY created_at ASC, id ASC`
+    ).all(id);
+    const balById = {};
+    let bal = 0;
+    for (const r of all) {
+      bal += r.type === 'credit_sale' ? r.amount : (r.type === 'repayment' ? -r.amount : 0);
+      balById[r.id] = bal;
+    }
+    const sales = d.prepare(
+      `SELECT s.id, s.invoice_no, s.gross, s.status, s.created_at, u.name AS cashier
+       FROM sales s LEFT JOIN users u ON u.id = s.user_id
+       WHERE s.customer_id = ? ORDER BY s.id DESC LIMIT 20`
+    ).all(id);
+    const priceRules = d.prepare(
+      `SELECT id, variant_id, price, valid_from, valid_to, active FROM price_rules WHERE customer_id = ? ORDER BY id`
+    ).all(id);
+    const names = Object.fromEntries(d.prepare('SELECT id, name FROM users').all().map((u) => [u.id, u.name]));
+    res.json({
+      customer: c,
+      ledger: ledger.map((r) => ({ ...r, balance: balById[r.id] ?? null })),
+      sales, price_rules: priceRules,
+      business: dbm.getSetting(d, 'business', {})
+    });
+  });
+
+  app.put('/api/customers/:id', me, can('customers.manage'), (req, res) => {
+    try {
+      const id = numOrNull(req.params.id);
+      const c = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+      if (!c) return res.status(404).json({ error: 'customer not found' });
+      const b = req.body || {};
+      const name = b.name !== undefined ? String(b.name).trim() : c.name;
+      if (!name) return res.status(400).json({ error: 'name required' });
+      const phone = b.phone !== undefined ? String(b.phone).trim() : c.phone;
+      const dup = phone ? d.prepare('SELECT id FROM customers WHERE phone = ? AND id != ?').get(phone, id) : null;
+      if (dup) return res.status(409).json({ error: `that phone already belongs to customer #${dup.id}` });
+      const email = b.email !== undefined ? String(b.email).trim() : c.email;
+      const kraPin = b.kra_pin !== undefined ? String(b.kra_pin).trim() : c.kra_pin;
+      const tier = b.tier !== undefined ? (TIERS.includes(b.tier) ? b.tier : 'standard') : c.tier;
+      const creditLimit = b.credit_limit !== undefined
+        ? (Number.isInteger(b.credit_limit) && b.credit_limit >= 0 ? b.credit_limit : null)
+        : c.credit_limit;
+      if (creditLimit === null) return res.status(400).json({ error: 'credit_limit must be a whole number ≥ 0' });
+      const note = b.note !== undefined ? String(b.note).trim() : c.note;
+      const birthday = b.birthday !== undefined ? (b.birthday ? String(b.birthday).trim() : null) : c.birthday;
+      const branches = visibleBranches(d, req.user);
+      const branchId = b.branch_id !== undefined
+        ? (numOrNull(b.branch_id) && branches.some((x) => x.id === b.branch_id) ? b.branch_id : null)
+        : c.branch_id;
+      d.prepare(
+        `UPDATE customers SET name = ?, phone = ?, email = ?, kra_pin = ?, credit_limit = ?, tier = ?, birthday = ?, note = ?, branch_id = ? WHERE id = ?`
+      ).run(name, phone, email, kraPin, creditLimit, tier, birthday, note, branchId, id);
+      dbm.audit(d, { userId: req.user.id, action: 'customer/update', entity: 'customer', entityId: String(id), detail: { changed: Object.keys(b) } });
+      res.json({ ok: true, customer: customerRow(d, id) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] PUT /api/customers/:id:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Deni repayment: ledger evidence + till deposit when cash + overpayment
+  // becomes store credit (the duka practice: you paid more than you owed).
+  app.post('/api/customers/:id/repayments', me, (req, res) => {
+    try {
+      const id = numOrNull(req.params.id);
+      const c = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+      if (!c) return res.status(404).json({ error: 'customer not found' });
+      const amt = Number((req.body || {}).amount);
+      if (!Number.isInteger(amt) || amt <= 0) return res.status(400).json({ error: 'amount must be whole shillings > 0' });
+      const method = String((req.body || {}).method || 'cash').trim();
+      if (!['cash', 'mpesa', 'card', 'bank', 'other'].includes(method)) return res.status(400).json({ error: `unknown method '${method}'` });
+      const phone = String((req.body || {}).phone || '').trim();
+      if (method === 'mpesa' && !phone) return res.status(400).json({ error: 'M-Pesa repayment needs the phone number' });
+      const outstanding = deniOutstanding(d, id);
+      if (outstanding <= 0) return res.status(400).json({ error: 'no deni outstanding for this customer' });
+      const repay = Math.min(amt, outstanding);
+      const excess = amt - repay;
+      const ctx = saleContext(d, req.user);
+      const registerId = numOrNull((req.body || {}).register_id) || (ctx.register && ctx.register.id) || null;
+      const t = new Date().toISOString();
+      const run = d.transaction(() => {
+        d.prepare(
+          `INSERT INTO customer_ledger (customer_id, type, amount, ref, user_id, note, created_at)
+           VALUES (?, 'repayment', ?, ?, ?, ?, ?)`
+        ).run(id, repay, `deni ${c.name}`, req.user.id,
+          `${method} repayment${phone ? ` from ${phone}` : ''} (by ${req.user.name})`, t);
+        let excessCredit = 0;
+        if (excess > 0) {
+          d.prepare('UPDATE customers SET store_credit = store_credit + ? WHERE id = ?').run(excess, id);
+          d.prepare(
+            `INSERT INTO customer_ledger (customer_id, type, amount, ref, user_id, note, created_at)
+             VALUES (?, 'adjustment', ?, ?, ?, ?, ?)`
+          ).run(id, excess, `deni ${c.name}`, req.user.id, `overpayment ${excess} → store credit (by ${req.user.name})`, t);
+          excessCredit = excess;
+        }
+        if (method === 'cash' && registerId) {
+          d.prepare(
+            `INSERT INTO deposits (business_id, branch_id, register_id, amount, ref, note, user_id, created_at)
+             VALUES (1, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(c.branch_id || ctx.branchId, registerId, amt, 'DENI', `deni repayment ${c.name} (by ${req.user.name})`, req.user.id, t);
+        }
+        return excessCredit;
+      });
+      const excessCredit = run();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: c.branch_id, action: 'deni/repay',
+        entity: 'customer', entityId: String(id),
+        detail: { customer: c.name, amount: amt, method, repayment: repay, excess_to_credit: excessCredit || undefined, phone: phone || undefined }
+      });
+      res.json({ ok: true, customer: customerRow(d, id), repayment: repay, store_credit_excess: excessCredit, method });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/customers/:id/repayments:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Customer deposit: money in advance → store credit (+ till deposit if cash).
+  app.post('/api/customers/:id/deposits', me, (req, res) => {
+    try {
+      const id = numOrNull(req.params.id);
+      const c = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+      if (!c) return res.status(404).json({ error: 'customer not found' });
+      const amt = Number((req.body || {}).amount);
+      if (!Number.isInteger(amt) || amt <= 0) return res.status(400).json({ error: 'amount must be whole shillings > 0' });
+      const method = String((req.body || {}).method || 'cash').trim();
+      if (!['cash', 'mpesa', 'card', 'bank', 'other'].includes(method)) return res.status(400).json({ error: `unknown method '${method}'` });
+      const note = String((req.body || {}).note || '').trim();
+      const ctx = saleContext(d, req.user);
+      const registerId = numOrNull((req.body || {}).register_id) || (ctx.register && ctx.register.id) || null;
+      const t = new Date().toISOString();
+      d.transaction(() => {
+        d.prepare('UPDATE customers SET store_credit = store_credit + ? WHERE id = ?').run(amt, id);
+        d.prepare(
+          `INSERT INTO customer_ledger (customer_id, type, amount, ref, user_id, note, created_at)
+           VALUES (?, 'adjustment', ?, ?, ?, ?, ?)`
+        ).run(id, amt, `dep ${c.name}`, req.user.id, `deposit ${amt} → store credit${note ? ` (${note})` : ''} (by ${req.user.name})`, t);
+        if (method === 'cash' && registerId) {
+          d.prepare(
+            `INSERT INTO deposits (business_id, branch_id, register_id, amount, ref, note, user_id, created_at)
+             VALUES (1, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(c.branch_id || ctx.branchId, registerId, amt, 'DEP', `customer deposit ${c.name}${note ? ` (${note})` : ''} (by ${req.user.name})`, req.user.id, t);
+        }
+      })();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: c.branch_id, action: 'customer/deposit',
+        entity: 'customer', entityId: String(id),
+        detail: { customer: c.name, amount: amt, method }
+      });
+      res.json({ ok: true, customer: customerRow(d, id), deposited: amt, method });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/customers/:id/deposits:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Direct store-credit adjustment (owner/manager judgement, ledger-evidenced).
+  app.post('/api/customers/:id/store-credit', me, can('customers.manage'), (req, res) => {
+    try {
+      const id = numOrNull(req.params.id);
+      const c = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+      if (!c) return res.status(404).json({ error: 'customer not found' });
+      const delta = Number((req.body || {}).delta);
+      if (!Number.isInteger(delta) || delta === 0) return res.status(400).json({ error: 'delta must be a non-zero whole number of shillings' });
+      const newBal = (c.store_credit || 0) + delta;
+      if (newBal < 0) return res.status(400).json({ error: `insufficient store credit (balance ${c.store_credit || 0})` });
+      const note = String((req.body || {}).note || '').trim();
+      const t = new Date().toISOString();
+      d.transaction(() => {
+        d.prepare('UPDATE customers SET store_credit = ? WHERE id = ?').run(newBal, id);
+        d.prepare(
+          `INSERT INTO customer_ledger (customer_id, type, amount, ref, user_id, note, created_at)
+           VALUES (?, 'adjustment', ?, ?, ?, ?, ?)`
+        ).run(id, delta, `sc ${c.name}`, req.user.id, `store credit ${delta > 0 ? '+' : ''}${delta}${note ? ` (${note})` : ''} (by ${req.user.name})`, t);
+      })();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: c.branch_id, action: 'customer/store_credit',
+        entity: 'customer', entityId: String(id),
+        detail: { customer: c.name, delta, new_balance: newBal }
+      });
+      res.json({ ok: true, customer: customerRow(d, id), delta, balance: newBal });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/customers/:id/store-credit:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Deni statement: the ledger itself, with a running balance.
+  app.get('/api/customers/:id/statement', me, can('customers.view'), (req, res) => {
+    const id = numOrNull(req.params.id);
+    const c = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+    if (!c) return res.status(404).json({ error: 'customer not found' });
+    const from = req.query.from ? String(req.query.from) : null;
+    const to = req.query.to ? String(req.query.to) : null;
+    const opening = from
+      ? d.prepare(
+          `SELECT COALESCE(SUM(CASE WHEN type = 'credit_sale' THEN amount WHEN type = 'repayment' THEN -amount ELSE 0 END), 0) AS b
+           FROM customer_ledger WHERE customer_id = ? AND created_at < ?`
+        ).get(id, from).b
+      : 0;
+    const where = ['customer_id = ?', "type IN ('credit_sale', 'repayment')"];
+    const args = [id];
+    if (from) { where.push('created_at >= ?'); args.push(from); }
+    if (to) { where.push('created_at < ?'); args.push(to); }
+    const rows = d.prepare(
+      `SELECT id, type, amount, ref, note, created_at FROM customer_ledger
+       WHERE ${where.join(' AND ')} ORDER BY created_at ASC, id ASC`
+    ).all(...args);
+    let bal = opening;
+    let salesTotal = 0, repayTotal = 0;
+    const out = rows.map((r) => {
+      if (r.type === 'credit_sale') { bal += r.amount; salesTotal += r.amount; }
+      else { bal -= r.amount; repayTotal += r.amount; }
+      return { date: r.created_at, type: r.type, amount: r.amount, ref: r.ref, note: r.note, balance: bal };
+    });
+    res.json({
+      customer: { id: c.id, name: c.name, phone: c.phone, kra_pin: c.kra_pin, credit_limit: c.credit_limit, store_credit: c.store_credit || 0 },
+      business: dbm.getSetting(d, 'business', {}),
+      from, to, opening,
+      closing: bal,
+      totals: { credit_sales: salesTotal, repayments: repayTotal },
+      rows: out
+    });
+  });
+
   // ---- CSV import/export (products + variants + packs in one file) --------------------------------
   const CSV_COLUMNS = [
     'section', 'product_id', 'product_sku', 'product_name', 'product_name_sw', 'category', 'brand',
@@ -4601,7 +4919,7 @@ if (require.main === module) {
   auth.pruneSessions(db);
   app.listen(PORT, '0.0.0.0', () => {
     const s = dbm.getSetting(db, 'business', {});
-    console.log(`OpenPOS v2 (Phase 10)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
+    console.log(`OpenPOS v2 (Phase 11)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
   });
 }
 

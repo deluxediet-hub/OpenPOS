@@ -316,12 +316,29 @@ contradicts the doc without a change-log entry.**
   directions; 29-step UI smoke green. (Void + cancellation + corrections already existed
   from P5/P8 — the lifecycle is now complete end to end.)
 
-### Phase 11 — Customer / Deni / Credit System · Day 15
+### Phase 11 — Customer / Deni / Credit System · Day 15 ✅
 - Phone-first profiles, home branch, purchase history, **credit (deni) accounts**: limits,
   credit sales from checkout, repayments (via payment engine), ledger + **statements**
   (print/WhatsApp), deposits, store credit, customer-specific pricing link, notes
 - **Acceptance:** over-limit deni demands manager; M-Pesa repayment reduces balance and
   reconciles; printed statement matches the ledger to the shilling.
+- **Done (Day 15):** phone-first profiles (POST/PUT customers, same number = same
+  customer, never duplicated; `?q=` phone/name search). Deni lives on the payment
+  engine: credit sales from checkout, **over-limit deni demands a manager**
+  (`deni.approve` → audited `deni/override`, ledger row marked "OVER LIMIT";
+  cashier gets 403). Repayments = ledger rows that reduce the balance, leave a
+  till **deposit** when the money is cash, turn overpayments into store credit,
+  and reconcile to the shilling (`Σ credit_sale − Σ repayment = balance` —
+  M-Pesa repayment verified). Deposits top up store credit, which the POS then
+  spends through the P8 store-credit payment method. **The statement is the
+  ledger itself** — opening balance + running balance + closing, printed via
+  `statement.html` (WhatsApp-shareable link later, P25), so it can never drift
+  from the books. Customer-specific pricing links through the Phase-6 chain
+  (customer price rules visible on the profile). Manager Customers tab (search,
+  profile, ledger with running balance, recent sales, repay/deposit/adjust
+  actions, statement link); POS customer options show phone + outstanding deni.
+  **124 tests green** (was 119) incl. manager override, M-Pesa reconciliation,
+  statement-vs-ledger tie; 22-step UI smoke green.
 
 ### Phase 12 — Multi-Branch Operating System · Days 16–17
 - Branch dashboards; branch users/permissions/stock/pricing/expenses/suppliers/customers;

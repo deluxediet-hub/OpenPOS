@@ -1812,8 +1812,18 @@ function section(title) { console.log(`\n${title}`); }
     const led = d.prepare(`SELECT COUNT(*) AS n FROM customer_ledger WHERE customer_id = ? AND type = 'credit_sale' AND amount = 228`).get(cid).n;
     assert.strictEqual(led, 1, 'credit sale leaves ledger evidence');
     const s2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: cid, payment: { method: 'credit', amount: 455 } } });
-    assert.strictEqual(s2.status, 400, '228 + 455 > 500');
-    assert.match(s2.body.error, /credit limit exceeded/);
+    assert.strictEqual(s2.status, 403, '228 + 455 > 500 — cashier refused');
+    assert.match(s2.body.error, /deni over limit.*manager/i);
+    // a manager (deni.approve) may cross the limit — audited
+    const sOver = await mgr({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: cid, payment: { method: 'credit', amount: 455 } } });
+    assert.strictEqual(sOver.status, 200, JSON.stringify(sOver.body).slice(0, 160), 'manager approves over-limit deni');
+    const override = d.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE action = 'deni/override' AND entity_id = ?`).get(String(cid)).n;
+    assert.strictEqual(override, 1, 'over-limit deni audited');
+    const overLedger = d.prepare(`SELECT note FROM customer_ledger WHERE customer_id = ? AND type = 'credit_sale' AND amount = 455`).get(cid).note;
+    assert.match(overLedger, /OVER LIMIT/, 'ledger marks the override');
+    // manager refunds the over-limit sale, then the original — deni back to 0
+    const refOver = await mgr({ path: `/api/payments/${sOver.body.payments[0].id}/refund`, method: 'POST', body: {} });
+    assert.strictEqual(refOver.status, 200);
     const cardId = s1.body.payments[0].id;
     const ref = await mgr({ path: `/api/payments/${cardId}/refund`, method: 'POST', body: {} });
     assert.strictEqual(ref.status, 200, JSON.stringify(ref.body));
@@ -2227,6 +2237,106 @@ function section(title) { console.log(`\n${title}`); }
     const after = (await asA({ path: '/api/shifts/mine' })).body.shift;
     assert.strictEqual(after.cash_refunded, before.shift.cash_refunded + 228, 'the refunded 228 left the drawer');
     assert.strictEqual(after.expected_cash, before.shift.expected_cash + 455 - 228, 'partial refund counted out once');
+  });
+
+  // ---- Phase 11: customers & deni ---------------------------------------------
+  await test('customers: phone-first profile (same number = same customer), cashier cannot create', async () => {
+    const c1 = await authJ({ path: '/api/customers', method: 'POST', body: { name: 'Amina Yusuf', phone: '0722111222', credit_limit: 1000 } });
+    assert.strictEqual(c1.status, 200, JSON.stringify(c1.body).slice(0, 160));
+    assert.strictEqual(c1.body.existed, false);
+    pos.custA = c1.body.customer;
+    const c2 = await authJ({ path: '/api/customers', method: 'POST', body: { name: 'Amina Y.', phone: '0722111222', credit_limit: 1500 } });
+    assert.strictEqual(c2.status, 200);
+    assert.strictEqual(c2.body.existed, true);
+    assert.strictEqual(c2.body.customer.id, pos.custA.id, 'same number = same customer');
+    assert.strictEqual(c2.body.customer.credit_limit, 1500, 'fields updated');
+    assert.strictEqual(d.prepare(`SELECT COUNT(*) AS n FROM customers WHERE phone = '0722111222'`).get().n, 1, 'no duplicate profile');
+    const den = await withCookie(pos.cashA)({ path: '/api/customers', method: 'POST', body: { name: 'Nope', phone: '0700000001' } });
+    assert.strictEqual(den.status, 403, 'cashiers cannot create customers');
+    const list = await authJ({ path: '/api/customers?q=0722111222' });
+    assert.ok(list.body.length >= 1 && list.body.some((x) => x.id === pos.custA.id), 'phone search');
+    assert.strictEqual(typeof list.body[0].deni_outstanding, 'number', 'deni balance on the list');
+  });
+
+  await test('deni: cash repayment reduces balance, leaves till evidence; overpayment becomes store credit', async () => {
+    const s1 = await withCookie(pos.cashA)({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: pos.custA.id, payment: { method: 'credit', amount: 455 } } });
+    assert.strictEqual(s1.status, 200, JSON.stringify(s1.body).slice(0, 160));
+    let c = (await authJ({ path: `/api/customers/${pos.custA.id}` })).body;
+    assert.strictEqual(c.customer.deni_outstanding, 455, 'deni open');
+    assert.strictEqual(c.sales.length, 1, 'purchase history on the profile');
+    const r1 = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/repayments`, method: 'POST', body: { amount: 200, method: 'cash' } });
+    assert.strictEqual(r1.status, 200, JSON.stringify(r1.body).slice(0, 160));
+    assert.strictEqual(r1.body.repayment, 200);
+    assert.strictEqual(r1.body.customer.deni_outstanding, 255);
+    assert.ok(d.prepare(`SELECT COUNT(*) AS n FROM deposits WHERE ref = 'DENI'`).get().n >= 1, 'cash repayment leaves till evidence');
+    const r2 = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/repayments`, method: 'POST', body: { amount: 300, method: 'cash' } });
+    assert.strictEqual(r2.status, 200, JSON.stringify(r2.body).slice(0, 160));
+    assert.strictEqual(r2.body.repayment, 255, 'only the amount owed');
+    assert.strictEqual(r2.body.store_credit_excess, 45, 'overpayment → store credit');
+    assert.strictEqual(r2.body.customer.deni_outstanding, 0);
+    assert.strictEqual(r2.body.customer.store_credit, 45);
+    const r3 = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/repayments`, method: 'POST', body: { amount: 50 } });
+    assert.strictEqual(r3.status, 400, JSON.stringify(r3.body));
+    assert.match(r3.body.error, /no deni outstanding/);
+  });
+
+  await test('deni: M-Pesa repayment reduces the balance and reconciles with the ledger', async () => {
+    const s1 = await withCookie(pos.cashA)({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: pos.custA.id, payment: { method: 'credit', amount: 228 } } });
+    assert.strictEqual(s1.status, 200, JSON.stringify(s1.body).slice(0, 160));
+    const noPhone = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/repayments`, method: 'POST', body: { amount: 100, method: 'mpesa' } });
+    assert.strictEqual(noPhone.status, 400, 'mpesa needs a phone');
+    const r = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/repayments`, method: 'POST', body: { amount: 228, method: 'mpesa', phone: '0722111222' } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 160));
+    assert.strictEqual(r.body.customer.deni_outstanding, 0, 'balance cleared');
+    const direct = d.prepare(
+      `SELECT COALESCE(SUM(CASE WHEN type = 'credit_sale' THEN amount WHEN type = 'repayment' THEN -amount ELSE 0 END), 0) AS b
+       FROM customer_ledger WHERE customer_id = ?`
+    ).get(pos.custA.id).b;
+    assert.strictEqual(direct, 0, 'ledger reconciles to the shilling');
+    const aud = d.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE action = 'deni/repay' AND entity_id = ?`).get(String(pos.custA.id)).n;
+    assert.ok(aud >= 2, 'repayments audited');
+  });
+
+  await test('statement: matches the ledger to the shilling; windowed opening balance', async () => {
+    const st = await authJ({ path: `/api/customers/${pos.custA.id}/statement` });
+    assert.strictEqual(st.status, 200);
+    const s = st.body;
+    assert.strictEqual(s.opening, 0);
+    assert.ok(s.rows.length >= 5, 'statement rows present');
+    assert.strictEqual(s.rows[s.rows.length - 1].balance, s.closing, 'running balance ends at closing');
+    const direct = d.prepare(
+      `SELECT COALESCE(SUM(CASE WHEN type = 'credit_sale' THEN amount WHEN type = 'repayment' THEN -amount ELSE 0 END), 0) AS b
+       FROM customer_ledger WHERE customer_id = ?`
+    ).get(pos.custA.id).b;
+    assert.strictEqual(s.closing, direct, 'statement ties to the ledger');
+    assert.strictEqual(s.totals.credit_sales - s.totals.repayments, s.closing - s.opening, 'totals tie');
+    const now = new Date().toISOString();
+    const st2 = await authJ({ path: `/api/customers/${pos.custA.id}/statement?from=${encodeURIComponent(now)}` });
+    assert.strictEqual(st2.body.opening, direct, 'windowed statement carries the opening balance');
+    assert.strictEqual(st2.body.rows.length, 0);
+    const html = await (await fetch(`${BASE}/statement.html`)).text();
+    assert.ok(html.toLowerCase().includes('statement'), 'printable statement page served');
+  });
+
+  await test('store credit: deposit top-up, negative adjustment, floor at zero; customer price rule resolves', async () => {
+    const dep = await authJ({ path: `/api/customers/${pos.custA.id}/deposits`, method: 'POST', body: { amount: 500, method: 'cash', note: 'prep' } });
+    assert.strictEqual(dep.status, 200, JSON.stringify(dep.body).slice(0, 160));
+    assert.strictEqual(dep.body.customer.store_credit, 545, '45 + 500');
+    const adj = await authJ({ path: `/api/customers/${pos.custA.id}/store-credit`, method: 'POST', body: { delta: -100, note: 'partial use' } });
+    assert.strictEqual(adj.status, 200, JSON.stringify(adj.body).slice(0, 120));
+    assert.strictEqual(adj.body.balance, 445);
+    const over = await authJ({ path: `/api/customers/${pos.custA.id}/store-credit`, method: 'POST', body: { delta: -99999 } });
+    assert.strictEqual(over.status, 400, 'cannot take credit below zero');
+    const cashierAdj = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/store-credit`, method: 'POST', body: { delta: 10 } });
+    assert.strictEqual(cashierAdj.status, 403, 'adjustments are a manager act');
+    // customer-specific price: the chain resolves it (deni/VIP agreement)
+    const rule = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: pos.A.vid, customer_id: pos.custA.id, price: 180, pin: '2345' } });
+    assert.strictEqual(rule.status, 200, JSON.stringify(rule.body).slice(0, 160));
+    const px = await authJ({ path: `/api/pricing/resolve?variant_id=${pos.A.vid}&customer_id=${pos.custA.id}` });
+    assert.strictEqual(px.body.source, 'customer', JSON.stringify(px.body).slice(0, 160));
+    assert.strictEqual(px.body.price, 180);
+    const profile = (await authJ({ path: `/api/customers/${pos.custA.id}` })).body;
+    assert.ok(profile.price_rules.length >= 1, 'price rules visible on the profile');
   });
 
   await test('two registers sell concurrently: no conflicts, stock exact, distinct tills', async () => {

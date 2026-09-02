@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deni statement</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; color: #0f172a; margin: 0; background: #f1f5f9; }
+  .page { max-width: 720px; margin: 24px auto; background: #fff; padding: 32px; border-radius: 10px; box-shadow: 0 4px 18px rgba(15,23,42,.08); }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f172a; padding-bottom: 14px; margin-bottom: 14px; }
+  .biz { font-size: 20px; font-weight: 800; }
+  .biz small { display: block; font-weight: 400; font-size: 12px; color: #475569; }
+  h1 { font-size: 16px; margin: 0; text-transform: uppercase; letter-spacing: .06em; color: #475569; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; margin: 12px 0 18px; font-size: 13px; }
+  .grid b { color: #334155; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #64748b; border-bottom: 1px solid #cbd5e1; padding: 6px 8px; }
+  td { padding: 6px 8px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.credit td { color: #b45309; }
+  tr.repay td { color: #15803d; }
+  .tot { display: flex; gap: 28px; margin-top: 14px; font-size: 13px; }
+  .tot div { flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; }
+  .tot b { display: block; font-size: 16px; margin-top: 2px; }
+  .foot { margin-top: 22px; padding-top: 12px; border-top: 1px dashed #cbd5e1; font-size: 12px; color: #64748b; display: flex; justify-content: space-between; }
+  .btnbar { max-width: 720px; margin: 0 auto; padding: 0 0 12px; display: flex; gap: 8px; justify-content: flex-end; }
+  .btn { border: 1px solid #0f172a; background: #0f172a; color: #fff; border-radius: 8px; padding: 8px 18px; font-weight: 600; cursor: pointer; }
+  .btn.ghost { background: #fff; color: #0f172a; }
+  @media print { body { background: #fff; } .page { box-shadow: none; margin: 0; max-width: none; } .btnbar { display: none; } }
+</style>
+</head>
+<body>
+<div class="btnbar">
+  <button class="btn ghost" onclick="location.href='/'">← Back</button>
+  <button class="btn" onclick="window.print()">Print</button>
+</div>
+<div class="page" id="doc">
+  <div class="top">
+    <div class="biz" id="biz">…</div>
+    <h1>Deni statement</h1>
+  </div>
+  <div class="grid" id="meta"></div>
+  <table>
+    <thead><tr><th>Date</th><th>Type</th><th>Note / ref</th><th class="num">Amount</th><th class="num">Balance</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="tot" id="tot"></div>
+  <div class="foot">
+    <span id="printed"></span>
+    <span>OpenPOS — this statement is generated from the customer ledger and reconciles to the shilling.</span>
+  </div>
+</div>
+<script>
+const fmt = (n) => `Ksh ${Number(n || 0).toLocaleString('en-KE')}`;
+const dt = (s) => new Date(s).toLocaleString('en-KE', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const q = new URLSearchParams(location.search);
+const id = q.get('id');
+(async () => {
+  if (!id) { document.getElementById('doc').innerHTML = '<p>Missing <code>?id=</code>.</p>'; return; }
+  let s;
+  try {
+    const r = await fetch(`/api/customers/${id}/statement?${q.get('from') ? 'from=' + encodeURIComponent(q.get('from')) : ''}${q.get('to') ? '&to=' + encodeURIComponent(q.get('to')) : ''}`, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+    s = await r.json();
+  } catch (e) { document.getElementById('doc').innerHTML = `<p>${esc(e.message)}</p>`; return; }
+  const b = s.business || {};
+  document.getElementById('biz').innerHTML = `${esc(b.name || 'OpenPOS')}<small>${esc(b.phone || '')}${b.kraPin ? ' · KRA PIN ' + esc(b.kraPin) : ''}${b.address ? '<br>' + esc(b.address) : ''}</small>`;
+  document.getElementById('meta').innerHTML = `
+    <div><b>Customer</b><br>${esc(s.customer.name)}${s.customer.phone ? ' · ' + esc(s.customer.phone) : ''}</div>
+    <div><b>Period</b><br>${s.from || 'beginning'} → ${s.to ? dt(s.to) : 'today'}</div>
+    <div><b>Credit limit</b><br>${fmt(s.customer.credit_limit)}</div>
+    <div><b>Store credit</b><br>${fmt(s.customer.store_credit)}</div>`;
+  const rows = document.getElementById('rows');
+  if (s.opening !== 0) {
+    rows.innerHTML += `<tr><td>${esc(s.from ? dt(s.from) : 'before period')}</td><td>Opening balance</td><td></td><td></td><td class="num">${fmt(s.opening)}</td></tr>`;
+  }
+  rows.innerHTML += s.rows.map((r) => `
+    <tr class="${r.type === 'credit_sale' ? 'credit' : 'repay'}">
+      <td>${dt(r.date)}</td>
+      <td>${r.type === 'credit_sale' ? 'Credit sale' : 'Repayment'}</td>
+      <td>${esc(r.note || r.ref || '')}</td>
+      <td class="num">${r.type === 'credit_sale' ? '+' : '−'}${fmt(r.amount)}</td>
+      <td class="num">${fmt(r.balance)}</td>
+    </tr>`).join('') || '<tr><td colspan="5">No movements in this period.</td></tr>';
+  document.getElementById('tot').innerHTML = `
+    <div>Credit sales<b>${fmt(s.totals.credit_sales)}</b></div>
+    <div>Repayments<b>${fmt(s.totals.repayments)}</b></div>
+    <div>Closing balance<b>${fmt(s.closing)}</b></div>`;
+  document.getElementById('printed').textContent = `Printed ${new Date().toLocaleString('en-KE')}`;
+  document.title = `Statement — ${s.customer.name}`;
+})();
+</script>
+</body>
+</html>

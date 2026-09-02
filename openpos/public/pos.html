@@ -416,7 +416,7 @@ function PROMO() { return $('#p-promo').value.trim(); }
 
 function drawCust() {
   $('#p-cust').innerHTML = `<option value="">${t('walk_in')}</option>` + CUSTOMERS
-    .map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    .map((c) => `<option value="${c.id}">${esc(c.name)}${c.phone ? ' · ' + esc(c.phone) : ''}${c.deni_outstanding > 0 ? ` · ${t('deni')} ${fmt(c.deni_outstanding)}` : ''}</option>`).join('');
   $('#p-cust').onchange = () => { reprice(); drawCart(); };
   $('#p-promo').onchange = () => { reprice(); drawCart(); };
 }

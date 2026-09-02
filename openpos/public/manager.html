@@ -314,11 +314,72 @@
 
     <!-- ============ CUSTOMERS (Phase 11, Day 15) ============ -->
     <section id="tab-customers" class="hidden">
-      <div class="placeholder">
-        <h2>Customers & deni</h2>
-        <p>Profiles, purchase history, credit limits, ledgers, statements, repayments.<br>
-        <b>Land: Day 15 (Phase 11).</b></p>
-        <p><a href="/">&larr; Back</a></p>
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:10px;align-items:center">
+          <h3 style="margin:0" data-i18n="customers">Customers</h3>
+          <input id="cu-q" placeholder="07XX / name…" style="width:180px">
+          <span class="spacer"></span>
+          <button class="btn small" id="cu-new" data-i18n="add_customer">+ Customer</button>
+        </div>
+        <div style="overflow:auto">
+          <table><thead><tr>
+            <th data-i18n="name">Name</th><th data-i18n="phone">Phone</th>
+            <th data-i18n="deni">Deni</th><th data-i18n="limit">Limit</th>
+            <th data-i18n="store_credit_b">Store credit</th>
+            <th data-i18n="last_purchase">Last purchase</th>
+            <th data-i18n="total_purchases">Lifetime</th>
+          </tr></thead>
+          <tbody id="cu-body"></tbody>
+        </table>
+        <div class="muted small" id="cu-empty" data-i18n="no_rows">No rows</div>
+      </div>
+      <div class="card" id="cu-detail" style="display:none">
+        <div class="row" style="margin-bottom:10px;align-items:center">
+          <h3 id="cu-d-title" style="margin:0"></h3>
+          <span class="spacer"></span>
+          <a id="cu-stmt" class="btn small" target="_blank" data-i18n="print_statement">Statement</a>
+        </div>
+        <div class="row" style="gap:10px;flex-wrap:wrap">
+          <label class="f"><span data-i18n="name">Name</span><input id="cu-name"></label>
+          <label class="f"><span data-i18n="phone">Phone</span><input id="cu-phone"></label>
+          <label class="f"><span data-i18n="email">Email</span><input id="cu-email"></label>
+          <label class="f"><span data-i18n="kra_pin_l">KRA PIN</span><input id="cu-kra"></label>
+          <label class="f"><span data-i18n="limit">Limit</span><input id="cu-limit" type="number" min="0" style="width:100px"></label>
+          <label class="f"><span data-i18n="tier_l">Tier</span>
+            <select id="cu-tier"><option value="standard">standard</option><option value="retail">retail</option>
+            <option value="wholesale">wholesale</option><option value="member">member</option></select></label>
+        </div>
+        <label class="f" style="margin-top:8px"><span data-i18n="note">Note</span><input id="cu-note" style="width:100%"></label>
+        <div class="row" style="gap:8px;flex-wrap:wrap;align-items:end;margin-top:10px">
+          <button class="btn" id="cu-save" data-i18n="save">Save</button>
+          <div class="row" style="gap:6px;align-items:end">
+            <label class="f"><span data-i18n="repay_amt">Repay (Ksh)</span><input id="cu-repay-amt" type="number" min="0" style="width:110px"></label>
+            <label class="f"><span data-i18n="method_l">Method</span>
+              <select id="cu-repay-method"><option value="cash" data-i18n="cash_m">Cash</option><option value="mpesa">M-Pesa</option></select></label>
+            <input id="cu-repay-phone" placeholder="07XX" style="width:100px" class="hidden">
+            <button class="btn ghost" id="cu-repay" data-i18n="repay">Repay</button>
+          </div>
+          <div class="row" style="gap:6px;align-items:end">
+            <label class="f"><span data-i18n="deposit_amt">Deposit (Ksh)</span><input id="cu-dep-amt" type="number" min="0" style="width:110px"></label>
+            <button class="btn ghost" id="cu-dep" data-i18n="deposit">Deposit</button>
+          </div>
+          <div class="row" style="gap:6px;align-items:end">
+            <label class="f"><span data-i18n="sc_delta">Credit ± (Ksh)</span><input id="cu-sc-amt" type="number" style="width:110px"></label>
+            <button class="btn ghost" id="cu-sc" data-i18n="adjust_sc">Adjust credit</button>
+          </div>
+        </div>
+        <div class="msg" id="cu-msg" style="margin:8px 0 0"></div>
+        <div id="cu-bal"></div>
+        <h4 style="margin:16px 0 6px" data-i18n="ledger">Ledger</h4>
+        <div style="overflow:auto;max-height:220px">
+          <table><thead><tr><th data-i18n="at">At</th><th>Type</th><th data-i18n="total">Amount</th><th data-i18n="balance_l">Balance</th><th>Note</th></tr></thead>
+          <tbody id="cu-ledger"></tbody></table>
+        </div>
+        <h4 style="margin:16px 0 6px" data-i18n="recent_sales">Recent sales</h4>
+        <div style="overflow:auto;max-height:160px">
+          <table><thead><tr><th data-i18n="invoice_no">Invoice</th><th data-i18n="at">At</th><th data-i18n="cashier">Cashier</th><th data-i18n="status">Status</th><th data-i18n="total">Total</th></tr></thead>
+          <tbody id="cu-sales"></tbody></table>
+        </div>
       </div>
     </section>
 
@@ -732,7 +793,7 @@ const TABS = [
   { id: 'tills',      label: 'tills',     always: true },
   { id: 'shifts',     label: 'shifts',     always: true },
   { id: 'returns',    label: 'returns',    always: true },
-  { id: 'customers',  label: 'customers', always: true, badge: 'Day 15' },
+  { id: 'customers',  label: 'customers', always: true },
   { id: 'purchasing', label: 'purchasing', cap: 'purchasing' },
   { id: 'payments',   label: 'payments',   always: true },
   { id: 'pricing',    label: 'pricing',    always: true },
@@ -772,6 +833,98 @@ function selectTab(name) {
   if (name === 'payments') loadPayments();
   if (name === 'shifts') loadShiftsM();
   if (name === 'returns') loadReturnsM();
+  if (name === 'customers') loadCustomersM();
+}
+
+// ---------------- customers & deni (Phase 11) ----------------
+let CU = null; // selected customer id
+async function loadCustomersM() {
+  if ($('#cu-q').dataset.wired) return;
+  $('#cu-q').dataset.wired = '1';
+  $('#cu-q').oninput = drawCuList;
+  $('#cu-new').onclick = () => { CU = null; $('#cu-detail').style.display = ''; $('#cu-d-title').textContent = t('add_customer'); for (const k of ['cu-name','cu-phone','cu-email','cu-kra','cu-limit','cu-note']) $('#'+k).value = ''; $('#cu-tier').value = 'standard'; $('#cu-ledger').innerHTML = ''; $('#cu-sales').innerHTML = ''; $('#cu-stmt').style.display = 'none'; };
+  $('#cu-repay-method').onchange = () => $('#cu-repay-phone').classList.toggle('hidden', $('#cu-repay-method').value !== 'mpesa');
+  $('#cu-save').onclick = async () => {
+    const body = {
+      name: $('#cu-name').value.trim(), phone: $('#cu-phone').value.trim(), email: $('#cu-email').value.trim(),
+      kra_pin: $('#cu-kra').value.trim(), credit_limit: Number($('#cu-limit').value) || 0,
+      tier: $('#cu-tier').value, note: $('#cu-note').value.trim()
+    };
+    try {
+      const r = CU ? await api(`/api/customers/${CU}`, { method: 'PUT', body }) : await api('/api/customers', { method: 'POST', body });
+      CU = r.customer.id;
+      toast($('#tab-customers'), t('saved_ok'));
+      await drawCuList(); await showCuDetail(CU);
+    } catch (e) { toast($('#tab-customers'), e.message, false); }
+  };
+  const doAction = async (path, body, okMsg) => {
+    try {
+      const r = await api(path, { method: 'POST', body });
+      toast($('#tab-customers'), okMsg || t('saved_ok'));
+      await drawCuList(); if (CU) await showCuDetail(CU);
+    } catch (e) { toast($('#tab-customers'), e.message, false); }
+  };
+  $('#cu-repay').onclick = () => {
+    const amt = Number($('#cu-repay-amt').value);
+    if (!CU || !amt || amt <= 0) return toast($('#tab-customers'), t('fill_amount'), false);
+    const body = { amount: amt, method: $('#cu-repay-method').value };
+    if (body.method === 'mpesa') {
+      body.phone = $('#cu-repay-phone').value.trim();
+      if (!body.phone) return toast($('#tab-customers'), t('phone_required'), false);
+    }
+    doAction(`/api/customers/${CU}/repayments`, body, `${t('repaid')} ${fmt(amt)}`);
+  };
+  $('#cu-dep').onclick = () => {
+    const amt = Number($('#cu-dep-amt').value);
+    if (!CU || !amt || amt <= 0) return toast($('#tab-customers'), t('fill_amount'), false);
+    doAction(`/api/customers/${CU}/deposits`, { amount: amt, method: 'cash' }, `${t('deposited')} ${fmt(amt)}`);
+  };
+  $('#cu-sc').onclick = () => {
+    const delta = Number($('#cu-sc-amt').value);
+    if (!CU || !delta) return toast($('#tab-customers'), t('fill_amount'), false);
+    doAction(`/api/customers/${CU}/store-credit`, { delta }, t('saved_ok'));
+  };
+  await drawCuList();
+}
+async function drawCuList() {
+  const q = $('#cu-q').value.trim();
+  const rows = await api(`/api/customers${q ? `?q=${encodeURIComponent(q)}` : ''}`).catch(() => []);
+  $('#cu-body').innerHTML = rows.map((c) => `<tr data-cu="${c.id}" style="cursor:pointer">
+    <td>${esc(c.name)}</td><td>${esc(c.phone)}</td>
+    <td style="${c.deni_outstanding > 0 ? 'color:#b91c1c;font-weight:700' : ''}">${fmt(c.deni_outstanding)}</td>
+    <td>${fmt(c.credit_limit)}</td><td>${fmt(c.store_credit || 0)}</td>
+    <td>${c.last_purchase ? new Date(c.last_purchase).toLocaleDateString('en-KE') : '—'}</td>
+    <td>${fmt(c.total_purchases)}</td></tr>`).join('');
+  $('#cu-empty').style.display = rows.length ? 'none' : '';
+  $('#cu-body').querySelectorAll('tr').forEach((tr) => tr.onclick = () => showCuDetail(Number(tr.dataset.cu)));
+  if (CU !== null && !rows.some((r) => r.id === CU)) CU = null;
+}
+async function showCuDetail(id) {
+  if (!id) return;
+  const p = await api(`/api/customers/${id}`).catch(() => null);
+  if (!p) return;
+  CU = id;
+  const c = p.customer;
+  $('#cu-detail').style.display = '';
+  $('#cu-d-title').textContent = `${c.name}${c.phone ? ' · ' + c.phone : ''}`;
+  $('#cu-stmt').style.display = '';
+  $('#cu-stmt').href = `/statement.html?id=${c.id}`;
+  $('#cu-name').value = c.name; $('#cu-phone').value = c.phone || ''; $('#cu-email').value = c.email || '';
+  $('#cu-kra').value = c.kra_pin || ''; $('#cu-limit').value = c.credit_limit;
+  $('#cu-tier').value = c.tier || 'standard'; $('#cu-note').value = c.note || '';
+  $('#cu-bal').innerHTML = `<div class="row" style="gap:18px;margin:4px 0 0">
+    <span><b data-i18n="deni">Deni</b> ${fmt(c.deni_outstanding)}</span>
+    <span><b data-i18n="limit">Limit</b> ${fmt(c.credit_limit)}</span>
+    <span><b data-i18n="store_credit_b">Store credit</b> ${fmt(c.store_credit || 0)}</span>
+    <span><b data-i18n="total_purchases">Lifetime</b> ${fmt(c.total_purchases)}</span></div>`;
+  $('#cu-ledger').innerHTML = p.ledger.length ? p.ledger.map((r) => `<tr>
+    <td>${new Date(r.created_at).toLocaleString('en-KE')}</td><td>${esc(r.type)}</td>
+    <td style="text-align:right">${r.amount > 0 ? '+' : ''}${fmt(r.amount)}</td>
+    <td style="text-align:right">${r.balance != null ? fmt(r.balance) : '—'}</td>
+    <td class="muted">${esc(r.note || '')}</td></tr>`).join('') : `<tr><td colspan="5" class="muted">${t('no_rows')}</td></tr>`;
+  $('#cu-sales').innerHTML = p.sales.length ? p.sales.map((x) => `<tr>
+    <td>${esc(x.invoice_no)}</td><td>${new Date(x.created_at).toLocaleString('en-KE')}</td>
+    <td>${esc(x.cashier || '')}</td><td>${esc(x.status)}</td><td style="text-align:right">${fmt(x.gross)}</td></tr>`).join('') : `<tr><td colspan="5" class="muted">${t('no_rows')}</td></tr>`;
 }
 
 // ---------------- returns & exchanges (Phase 10) ----------------

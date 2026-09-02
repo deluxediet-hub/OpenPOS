@@ -114,6 +114,15 @@ const I18N = {
     nothing_selected: 'enter quantities for the returned lines',
     add_exchange_item: 'add the replacement items first',
     pin_needed: 'manager PIN needed for exchanges',
+    deni: 'Deni', limit: 'Limit', store_credit_b: 'Store credit',
+    last_purchase: 'Last purchase', total_purchases: 'Lifetime',
+    add_customer: '+ Customer', print_statement: 'Statement',
+    repay: 'Repay', repay_amt: 'Repay (Ksh)', deposit_amt: 'Deposit (Ksh)',
+    method_l: 'Method', sc_delta: 'Credit ± (Ksh)', adjust_sc: 'Adjust credit',
+    recent_sales: 'Recent sales', tier_l: 'Tier', kra_pin_l: 'KRA PIN',
+    email: 'Email', balance_l: 'Balance', saved_ok: 'Saved',
+    fill_amount: 'enter an amount', repaid: 'Repaid', deposited: 'Deposited',
+    phone_required: 'phone number needed',
   },
   sw: {
     staff_signin: 'Waketi wafanyakazi', select_staff: 'Chagua mfanyakazi', enter_pin: 'Weka PIN',
@@ -222,6 +231,15 @@ const I18N = {
     nothing_selected: 'ingiza idadi ya bidhaa zinazorudishwa',
     add_exchange_item: 'ongeza bidhaa mpya kwanza',
     pin_needed: 'inahitaji PIN ya meneja kwa badilisho',
+    deni: 'Deni', limit: 'Kipimo', store_credit_b: 'Krediti ya duka',
+    last_purchase: 'Ununuzi mwisho', total_purchases: 'Maisha yote',
+    add_customer: '+ Mteja', print_statement: 'Taarifa',
+    repay: 'Rudisha', repay_amt: 'Rudisha (Ksh)', deposit_amt: 'Weka (Ksh)',
+    method_l: 'Njia', sc_delta: 'Krediti ± (Ksh)', adjust_sc: 'Rekebisha krediti',
+    recent_sales: 'Mauzo ya hivi karibuni', tier_l: 'Kiwango', kra_pin_l: 'KRA PIN',
+    email: 'Barua pepe', balance_l: 'Salio', saved_ok: 'Imehifadhiwa',
+    fill_amount: 'weka kiasi', repaid: 'Imelipwa', deposited: 'Imewekwa',
+    phone_required: 'inahitaji nambari ya simu',
   }
 };
 

@@ -19,6 +19,9 @@
 // provider-agnostic.
 // ---------------------------------------------------------------------------
 
+const perms = require('./permissions');
+const dbm = require('../db');
+
 const METHODS = {
   cash:         { label: 'Cash',            sw: 'Taslimu',         async: false },
   mpesa:        { label: 'M-Pesa',          sw: 'M-Pesa',          async: true },
@@ -173,6 +176,7 @@ function addPayment(d, { user, sale, method, amount, ref, phone, tendered, note,
 
   // Credit (deni) and store credit both ride on a customer balance.
   let customer = null;
+  let creditOverride = false;
   if (def.needsCustomer) {
     if (!sale.customer_id) throw httpError(400, `${def.label.toLowerCase()} payment needs a customer attached to the sale`);
     customer = d.prepare('SELECT * FROM customers WHERE id = ?').get(sale.customer_id);
@@ -183,8 +187,12 @@ function addPayment(d, { user, sale, method, amount, ref, phone, tendered, note,
         `SELECT COALESCE(SUM(CASE WHEN type = 'credit_sale' THEN amount WHEN 'repayment' = type THEN -amount ELSE 0 END), 0) AS u
          FROM customer_ledger WHERE customer_id = ?`
       ).get(customer.id).u;
-      if (used + applied > customer.credit_limit) {
-        throw httpError(400, `credit limit exceeded (limit ${customer.credit_limit}, already used ${used})`);
+      creditOverride = used + applied > customer.credit_limit;
+      if (creditOverride) {
+        // Phase 11: over-limit deni is a manager act (deni.approve), audited.
+        if (!perms.userHasPerm(d, user, 'deni.approve')) {
+          throw httpError(403, `deni over limit (limit ${customer.credit_limit}, already used ${used}) — a manager must approve`);
+        }
       }
     }
     if (method === 'store_credit' && customer.store_credit < applied) {
@@ -210,7 +218,15 @@ function addPayment(d, { user, sale, method, amount, ref, phone, tendered, note,
     d.prepare(
       `INSERT INTO customer_ledger (customer_id, type, amount, ref, user_id, note, created_at)
        VALUES (?, 'credit_sale', ?, ?, ?, ?, ?)`
-    ).run(customer.id, applied, sale.invoice_no, user.id, `credit sale ${sale.invoice_no}`, t);
+    ).run(customer.id, applied, sale.invoice_no, user.id,
+      creditOverride ? `credit sale ${sale.invoice_no} — OVER LIMIT (approved by ${user.name})` : `credit sale ${sale.invoice_no}`, t);
+    if (creditOverride) {
+      dbm.audit(d, {
+        userId: user.id, branchId: sale.branch_id, action: 'deni/override',
+        entity: 'customer', entityId: String(customer.id),
+        detail: { customer: customer.name, amount: applied, limit: customer.credit_limit, sale: sale.invoice_no }
+      });
+    }
   }
   if (method === 'store_credit') {
     d.prepare('UPDATE customers SET store_credit = store_credit - ? WHERE id = ?').run(applied, customer.id);
