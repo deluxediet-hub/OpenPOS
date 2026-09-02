@@ -84,6 +84,14 @@ const I18N = {
     customer: 'Customer', invoice_no: 'Invoice',
     quote_sale: 'Quote', convert_sale: 'Convert & pay',
     till_tip: 'Scan a barcode or tap a product to start. F2 refocuses search. Cash is the default payment — Hold parks the cart, Quote prices it for later.',
+    payments: 'Payments', awaiting_payment: 'Awaiting payment', confirm_payment: 'Confirm payment',
+    cancel_payment: 'Cancel payment', confirm_code: 'Confirmation code',
+    simulate_callback: 'Simulate callback (sandbox)', sandbox_wait: 'Sandbox: the callback will confirm it — or use the button below.',
+    awaiting_generic: 'The customer pays, then you record the confirmation code.',
+    add_payment: 'Add payment', reconcile: 'Reconcile', deposits: 'Deposits', deposit: 'Deposit',
+    payment_settings: 'Payment settings', refunded: 'Refunded', failed: 'Failed',
+    mpesa_mode: 'M-Pesa mode', shortcode: 'Shortcode', paybill: 'Paybill/Till',
+    consumer_key: 'Consumer key', consumer_secret: 'Consumer secret',
   },
   sw: {
     staff_signin: 'Waketi wafanyakazi', select_staff: 'Chagua mfanyakazi', enter_pin: 'Weka PIN',
@@ -162,6 +170,14 @@ const I18N = {
     customer: 'Mteja', invoice_no: 'Fatura',
     quote_sale: 'Nukuu', convert_sale: 'Badilisha & lipa',
     till_tip: 'Scan barcode au gusa bidhaa ili kuanza. F2 inarudisha kwenye utafutaji. Taslimu ni njia ya kawaida — Shikilia inaweka kikapu, Nukuu inamilishwa baadaye.',
+    payments: 'Malipo', awaiting_payment: 'Inasubiri malipo', confirm_payment: 'Thibitisha malipo',
+    cancel_payment: 'Ghairi malipo', confirm_code: 'Msimbo wa uthibitisho',
+    simulate_callback: 'Simulia callback (sandbox)', sandbox_wait: 'Sandbox: callback itathibitisha — au tumia kitufe cha chini.',
+    awaiting_generic: 'Mteja analipa, kisha uweke msimbo wa uthibitisho.',
+    add_payment: 'Ongeza malipo', reconcile: 'Kulinganisha', deposits: 'Depoziti', deposit: 'Depoziti',
+    payment_settings: 'Mipangilio ya malipo', refunded: 'Imerejeshwa', failed: 'Imeshindwa',
+    mpesa_mode: 'Modi ya M-Pesa', shortcode: 'Shortcode', paybill: 'Paybill/Till',
+    consumer_key: 'Consumer key', consumer_secret: 'Consumer secret',
   }
 };
 

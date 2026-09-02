@@ -468,6 +468,67 @@
     </section>
 
     <!-- ============ PRICING (Day 9 — R-PR) ============ -->
+    <section id="tab-payments" class="hidden">
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="reconcile">Reconcile</h3>
+          <span class="spacer"></span>
+          <input id="pay-date" type="date" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px">
+          <button class="btn small" id="pay-reload" data-i18n="reload">Reload</button>
+        </div>
+        <div style="overflow:auto">
+          <table><thead><tr><th data-i18n="method">Method</th><th data-i18n="pending">Pending</th><th data-i18n="status">Confirmed</th><th data-i18n="refunded">Refunded</th><th data-i18n="failed">Failed</th><th data-i18n="cancelled">Cancelled</th></tr></thead>
+          <tbody id="pay-rec-body"></tbody>
+          <tfoot id="pay-rec-foot"></tfoot>
+        </table>
+        <div class="muted small" id="pay-rec-empty" data-i18n="no_rows">No rows</div>
+      </div>
+      <div class="card" style="margin-bottom:14px">
+        <h3 data-i18n="payments">Payments</h3>
+        <div style="overflow:auto">
+          <table><thead><tr><th>#</th><th data-i18n="invoice_no">Invoice</th><th data-i18n="method">Method</th><th data-i18n="total">Amount</th><th data-i18n="status">Status</th><th data-i18n="ref">Ref</th><th data-i18n="cashier">Cashier</th><th data-i18n="when">When</th><th></th></tr></thead>
+          <tbody id="pay-list-body"></tbody>
+        </table>
+        <div class="muted small" id="pay-list-empty" data-i18n="no_rows">No rows</div>
+      </div>
+      <div class="grid cols-2" style="gap:14px">
+        <div class="card">
+          <h3 data-i18n="deposits">Deposits</h3>
+          <div class="grid cols-4" id="dep-form">
+            <label class="f"><span>Till</span><select id="dep-reg"></select></label>
+            <label class="f"><span data-i18n="total">Amount</span><input id="dep-amount" type="number" min="1"></label>
+            <label class="f"><span data-i18n="ref">Ref</span><input id="dep-ref" placeholder="bank ref"></label>
+            <label class="f"><span data-i18n="note">Note</span><input id="dep-note"></label>
+          </div>
+          <div class="row" style="margin:8px 0"><button class="btn small" id="dep-save" data-i18n="add">Add deposit</button>
+            <div class="msg" id="dep-msg" style="margin:0"></div></div>
+          <div id="dep-list" class="held"></div>
+        </div>
+        <div class="card">
+          <h3 data-i18n="payment_settings">Payment settings</h3>
+          <div id="pay-settings" class="hidden">
+            <label class="f"><span data-i18n="mpesa_mode">M-Pesa mode</span>
+              <select id="ps-mode">
+                <option value="manual">manual — record the code</option>
+                <option value="sandbox">sandbox — simulated callbacks</option>
+                <option value="live">live — real Daraja (Phase 16)</option>
+              </select></label>
+            <div class="grid cols-2">
+              <label class="f"><span data-i18n="shortcode">Shortcode</span><input id="ps-shortcode"></label>
+              <label class="f"><span data-i18n="paybill">Paybill/Till</span><input id="ps-paybill"></label>
+            </div>
+            <div class="grid cols-2">
+              <label class="f"><span data-i18n="consumer_key">Consumer key</span><input id="ps-ck"></label>
+              <label class="f"><span data-i18n="consumer_secret">Consumer secret</span><input id="ps-cs"></label>
+            </div>
+            <div class="row" id="ps-methods" style="flex-wrap:wrap"></div>
+            <div class="row" style="margin-top:8px"><button class="btn" id="ps-save" data-i18n="save">Save</button>
+              <div class="msg" id="ps-msg" style="margin:0"></div></div>
+          </div>
+          <div class="muted small" id="pay-settings-locked">Owner only — ask the owner to change payment settings.</div>
+        </div>
+      </div>
+    </section>
     <section id="tab-pricing" class="hidden">
       <div class="card" style="margin-bottom:14px">
         <div class="row" style="margin-bottom:10px">
@@ -616,6 +677,7 @@ const TABS = [
   { id: 'tills',      label: 'tills',     always: true },
   { id: 'customers',  label: 'customers', always: true, badge: 'Day 15' },
   { id: 'purchasing', label: 'purchasing', cap: 'purchasing' },
+  { id: 'payments',   label: 'payments',   always: true },
   { id: 'pricing',    label: 'pricing',    always: true },
   { id: 'staff',      label: 'staff',     cap: 'staff_roles' },
   { id: 'layout',     label: 'layout',    cap: ['multi_location', 'multi_branch'] },
@@ -650,6 +712,120 @@ function selectTab(name) {
   if (name === 'layout') loadLayout();
   if (name === 'stock') loadStock();
   if (name === 'pricing') loadPricing();
+  if (name === 'payments') loadPayments();
+}
+
+// ---------------- payments (Phase 8) ----------------
+async function loadPayments() {
+  if (!$('#pay-date').value) $('#pay-date').value = new Date().toISOString().slice(0, 10);
+  await Promise.all([payReconcile(), payList(), payDeposits(), paySettings()]);
+  $('#pay-reload').onclick = loadPayments;
+}
+
+async function payReconcile() {
+  const r = await api(`/api/payments/reconcile?date=${encodeURIComponent($('#pay-date').value)}`);
+  const rows = r.by_method || [];
+  $('#pay-rec-body').innerHTML = rows.map((m) =>
+    `<tr><td>${esc(m.method)}</td><td>${m.pending ? fmt(m.pending) : '—'}${m.pending_n ? ` <span class="muted small">(${m.pending_n})</span>` : ''}</td>
+     <td><b>${fmt(m.confirmed)}</b>${m.confirmed_n ? ` <span class="muted small">(${m.confirmed_n})</span>` : ''}</td>
+     <td>${m.refunded ? fmt(m.refunded) : '—'}${m.refunded_n ? ` <span class="muted small">(${m.refunded_n})</span>` : ''}</td>
+     <td>${m.failed ? fmt(m.failed) : '—'}${m.failed_n ? ` <span class="muted small">(${m.failed_n})</span>` : ''}</td>
+     <td>${m.cancelled ? fmt(m.cancelled) : '—'}</td></tr>`).join('');
+  const tot = r.total || {};
+  $('#pay-rec-foot').innerHTML = `<tr><td><b>${t('total')}</b></td>
+    <td>${tot.pending ? fmt(tot.pending) : '—'}</td><td><b>${fmt(tot.confirmed || 0)}</b></td>
+    <td>${tot.refunded ? fmt(tot.refunded) : '—'}</td><td>${tot.failed ? fmt(tot.failed) : '—'}</td><td>${tot.cancelled ? fmt(tot.cancelled) : '—'}</td></tr>`;
+  $('#pay-rec-empty').style.display = rows.length ? 'none' : '';
+}
+
+async function payList() {
+  const rows = await api('/api/payments?limit=40');
+  $('#pay-list-body').innerHTML = rows.map((p) =>
+    `<tr><td>${p.id}</td><td>${esc(p.invoice_no || '')}</td><td>${esc(p.method)}</td><td>${fmt(p.amount)}</td>
+     <td><span class="pill">${esc(p.status)}</span></td><td>${esc(p.ref || '')}${p.external_ref ? ` · ${esc(p.external_ref)}` : ''}</td>
+     <td>${esc(p.cashier || '')}</td><td>${new Date(p.created_at).toLocaleString()}</td>
+     <td class="row" style="gap:4px">
+       ${p.status === 'pending' ? `<button class="btn small" data-act="confirm" data-id="${p.id}" data-i18n="confirm">Confirm</button>
+         <button class="btn ghost small" data-act="cancel" data-id="${p.id}" data-i18n="cancel">Cancel</button>` : ''}
+       ${p.status === 'confirmed' ? `<button class="btn ghost small" data-act="refund" data-id="${p.id}" data-i18n="refund">Refund</button>` : ''}
+     </td></tr>`).join('');
+  $('#pay-list-empty').style.display = rows.length ? 'none' : '';
+  $('#pay-list-body').querySelectorAll('button[data-act]').forEach((b) => {
+    b.onclick = async () => {
+      const id = b.dataset.id;
+      try {
+        if (b.dataset.act === 'confirm') {
+          const code = prompt(t('confirm_code') + '?');
+          if (!code) return;
+          await api(`/api/payments/${id}/confirm`, { method: 'POST', body: { code } });
+        } else if (b.dataset.act === 'cancel') {
+          await api(`/api/payments/${id}/cancel`, { method: 'POST', body: {} });
+        } else {
+          const note = prompt(t('note') + '?') || '';
+          await api(`/api/payments/${id}/refund`, { method: 'POST', body: { note } });
+        }
+        await loadPayments();
+      } catch (e) { alert(e.message); }
+    };
+  });
+}
+
+async function payDeposits() {
+  const regs = await api('/api/registers').catch(() => []);
+  if (!$('#dep-reg').options.length) {
+    $('#dep-reg').innerHTML = regs.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join('');
+  }
+  $('#dep-save').onclick = async () => {
+    try {
+      await api('/api/deposits', { method: 'POST', body: {
+        register_id: Number($('#dep-reg').value) || null,
+        amount: Number($('#dep-amount').value),
+        ref: $('#dep-ref').value.trim(), note: $('#dep-note').value.trim()
+      } });
+      $('#dep-amount').value = ''; $('#dep-ref').value = ''; $('#dep-note').value = '';
+      toast($('#dep-msg'), t('save_ok'), true);
+      payDeposits();
+    } catch (e) { toast($('#dep-msg'), e.message, false); }
+  };
+  const rows = await api('/api/deposits?limit=10').catch(() => []);
+  $('#dep-list').innerHTML = rows.map((x) =>
+    `<div class="r"><span>${fmt(x.amount)} · ${esc(x.ref || '')} · ${esc(x.register_name || x.branch_name || '—')}</span><span class="muted small">${new Date(x.created_at).toLocaleDateString()}</span></div>`).join('') || `<div class="muted small">${t('no_rows')}</div>`;
+}
+
+async function paySettings() {
+  const isOwner = ME && ME.role === 'owner';
+  $('#pay-settings').classList.toggle('hidden', !isOwner);
+  $('#pay-settings-locked').style.display = isOwner ? 'none' : '';
+  if (!isOwner) return;
+  const r = await api('/api/settings/payments');
+  $('#ps-mode').value = r.mpesa.mode;
+  $('#ps-shortcode').value = r.mpesa.shortcode || '';
+  $('#ps-paybill').value = r.mpesa.paybill || '';
+  $('#ps-ck').value = '';
+  $('#ps-cs').value = '';
+  $('#ps-ck').placeholder = r.mpesa.consumer_key ? '••••' : '';
+  $('#ps-cs').placeholder = '••••' || '';
+  const enabled = new Set(Object.keys(r.methods).filter((k) => r.methods[k]));
+  $('#ps-methods').innerHTML = Object.keys(r.methods).map((k) =>
+    `<label class="row" style="gap:6px"><input type="checkbox" value="${k}" ${enabled.has(k) ? 'checked' : ''}> ${esc(k.replace('_', ' '))}</label>`).join('');
+  $('#ps-save').onclick = async () => {
+    const body = {
+      mpesa: {
+        mode: $('#ps-mode').value,
+        shortcode: $('#ps-shortcode').value.trim(),
+        paybill: $('#ps-paybill').value.trim(),
+        consumer_key: $('#ps-ck').value.trim() || undefined,
+        consumer_secret: $('#ps-cs').value.trim() || undefined
+      },
+      methods: {}
+    };
+    $('#ps-methods').querySelectorAll('input').forEach((c) => { body.methods[c.value] = c.checked; });
+    try {
+      await api('/api/settings/payments', { method: 'PUT', body });
+      toast($('#ps-msg'), t('save_ok'), true);
+      paySettings();
+    } catch (e) { toast($('#ps-msg'), e.message, false); }
+  };
 }
 
 async function boot() {

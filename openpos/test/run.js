@@ -1509,7 +1509,7 @@ function section(title) { console.log(`\n${title}`); }
     pos.E = await mk({ name: 'POS Hold', barcode: '77705', cost: 90, price: 150 });
     pos.F = await mk({ name: 'POS Concurrent', barcode: '77706', cost: 60, price: 100 });
     pos.G = await mk({ name: 'POS Oversell', barcode: '77707', cost: 50, price: 100 });
-    await open(pos.A.id, 10, 100);
+    await open(pos.A.id, 60, 100); // 60: the Phase 8 suite splits A across many sales
     await open(pos.C.id, 5, 200);
     await open(pos.D.id, 3, 300);
     await open(pos.E.id, 10, 90);
@@ -1554,7 +1554,7 @@ function section(title) { console.log(`\n${title}`); }
     const raw = JSON.parse(r.body.payments[0].raw);
     assert.strictEqual(raw.change, 45, `change: ${raw.change}`);
     // stock decremented at the till's location
-    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.A.vid, pos.loc).qty, 8);
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.A.vid, pos.loc).qty, 58);
     // stock move carries the invoice ref (R-S2 trace)
     const mv = d.prepare("SELECT * FROM stock_moves WHERE type = 'sale' AND ref = ?").get('BR01-000001');
     assert.ok(mv, 'sale stock move with invoice ref');
@@ -1651,19 +1651,215 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(again.status, 400, 'double-pay refused');
   });
 
-  await test('M-Pesa manual: ref required; underpay leaves the sale partial', async () => {
+  await test('M-Pesa: pending until the code is recorded; underpay leaves the sale partial', async () => {
     const asA = (o) => withCookie(pos.cashA)(o);
-    const noRef = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 228, phone: '0700111222' } } });
-    assert.strictEqual(noRef.status, 400, JSON.stringify(noRef.body));
-    assert.match(noRef.body.error, /reference/);
-    const partial = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 100, phone: '0700111222', ref: 'MPX123' } } });
-    assert.strictEqual(partial.status, 200, JSON.stringify(partial.body));
-    assert.strictEqual(partial.body.sale.status, 'partial');
-    assert.strictEqual(partial.body.payments[0].method, 'mpesa');
-    assert.strictEqual(partial.body.payments[0].amount, 100);
-    const overpay = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 999, phone: '0700111222', ref: 'MPX999' } } });
+    // the price-freeze test above changed A's price; restore the 200 the amounts below assume
+    const back = await authJ({ path: `/api/products/${pos.A.id}`, method: 'PUT', body: { price: 200 } });
+    assert.strictEqual(back.status, 200, JSON.stringify(back.body));
+    const started = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 228, phone: '0700111222' } } });
+    assert.strictEqual(started.status, 200, JSON.stringify(started.body));
+    assert.strictEqual(started.body.sale.status, 'open', 'money promised, not yet received');
+    assert.strictEqual(started.body.payments[0].status, 'pending');
+    const done = await asA({ path: `/api/payments/${started.body.payments[0].id}/confirm`, method: 'POST', body: { code: 'MPX000' } });
+    assert.strictEqual(done.status, 200, JSON.stringify(done.body));
+    assert.strictEqual(done.body.sale.status, 'paid');
+    assert.strictEqual(done.body.payments[0].ref, 'MPX000', 'the code is the reference');
+    const under = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 100, phone: '0700111222' } } });
+    assert.strictEqual(under.status, 200, JSON.stringify(under.body));
+    const done2 = await asA({ path: `/api/payments/${under.body.payments[0].id}/confirm`, method: 'POST', body: { code: 'MPX123' } });
+    assert.strictEqual(done2.body.sale.status, 'partial');
+    assert.strictEqual(done2.body.payments[0].amount, 100);
+    const overpay = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 999, phone: '0700111222' } } });
     assert.strictEqual(overpay.status, 400, 'mpesa cannot overpay');
   });
+
+  // ---- Phase 8: payment engine ---------------------------------------------
+  await test('payment engine: split cash + M-Pesa (manual) + card reconciles', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const hold = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], hold: true } });
+    assert.strictEqual(hold.status, 200, JSON.stringify(hold.body));
+    const sid = hold.body.sale.id;
+    const inv = hold.body.sale.invoice_no;
+    const cash = await asA({ path: `/api/sales/${sid}/payments`, method: 'POST', body: { method: 'cash', amount: 155 } });
+    assert.strictEqual(cash.status, 200, JSON.stringify(cash.body));
+    assert.strictEqual(cash.body.sale.status, 'partial', '155 of 455');
+    assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM stock_moves WHERE type = 'sale' AND ref = ?").get(inv).n, 1, 'stock moved on first money in');
+    const mpsa = await asA({ path: `/api/sales/${sid}/payments`, method: 'POST', body: { method: 'mpesa', amount: 150, phone: '0700111222' } });
+    assert.strictEqual(mpsa.status, 200, JSON.stringify(mpsa.body));
+    const mp = mpsa.body.payments.find((p) => p.method === 'mpesa');
+    assert.strictEqual(mp.status, 'pending');
+    assert.strictEqual(mpsa.body.sale.status, 'partial', 'pending does not count as paid');
+    assert.match(mpsa.body.mpesa.instructions || '', /confirmation code/, 'manual mode tells the cashier what to do');
+    const conf = await asA({ path: `/api/payments/${mp.id}/confirm`, method: 'POST', body: { code: 'SFA123' } });
+    assert.strictEqual(conf.body.sale.status, 'partial');
+    const card = await asA({ path: `/api/sales/${sid}/payments`, method: 'POST', body: { method: 'card', amount: 150, ref: 'SLIP42' } });
+    assert.strictEqual(card.status, 200, JSON.stringify(card.body));
+    assert.strictEqual(card.body.sale.status, 'paid');
+    assert.strictEqual(card.body.payments.filter((p) => p.status === 'confirmed').length, 3);
+    const today = new Date().toISOString().slice(0, 10);
+    const rec = await asA({ path: `/api/payments/reconcile?date=${today}` });
+    assert.strictEqual(rec.status, 200, JSON.stringify(rec.body));
+    const by = Object.fromEntries(rec.body.by_method.map((m) => [m.method, m]));
+    assert.ok(by.cash && by.cash.confirmed >= 155, 'cash 155 reconciled');
+    assert.strictEqual(by.card.confirmed >= 150, true, 'card 150 reconciled');
+    assert.strictEqual(by.mpesa.confirmed >= 150, true, 'mpesa 150 reconciled');
+  });
+
+  await test('payment engine: duplicate M-Pesa callback is a no-op (no double count)', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const sw = await authJ({ path: '/api/settings/payments', method: 'PUT', body: { mpesa: { mode: 'sandbox' } } });
+    assert.strictEqual(sw.status, 200, JSON.stringify(sw.body));
+    const r = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 228, phone: '0700111222' } } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const mp = r.body.payments[0];
+    assert.strictEqual(mp.status, 'pending');
+    assert.ok(r.body.mpesa.checkout_request_id, 'sandbox issues a checkout request id');
+    const cqid = r.body.mpesa.checkout_request_id;
+    const sim = await authJ({ path: `/api/payments/${mp.id}/simulate-callback`, method: 'POST', body: { mpesa_ref: 'SFA888' } });
+    assert.strictEqual(sim.status, 200, JSON.stringify(sim.body));
+    assert.strictEqual(sim.body.sale.status, 'paid');
+    const dup1 = await authJ({ path: '/api/webhooks/mpesa', method: 'POST', body: { CheckoutRequestID: cqid, MpesaReceiptRef: 'SFA999', ResultCode: 0, ResultDesc: 'The service request is processed successfully' } });
+    assert.strictEqual(dup1.status, 200, JSON.stringify(dup1.body));
+    assert.strictEqual(dup1.body.idempotent, true, 'second callback is a no-op');
+    const dup2 = await authJ({ path: '/api/webhooks/mpesa', method: 'POST', body: { CheckoutRequestID: cqid, MpesaReceiptRef: 'SFA999', ResultCode: 0, ResultDesc: 'retry' } });
+    assert.strictEqual(dup2.body.idempotent, true, 'third callback is a no-op');
+    const fresh = (await asA({ path: `/api/sales/${r.body.sale.id}` })).body;
+    assert.strictEqual(fresh.sale.paid_at !== null, true, 'still paid');
+    assert.strictEqual(fresh.payments.filter((p) => p.method === 'mpesa' && p.status === 'confirmed').length, 1, 'exactly one confirmed mpesa payment');
+    const confirms = d.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE action IN ('payment/confirm', 'payment/simulate-callback') AND entity_id = ?`).get(String(mp.id)).n;
+    assert.strictEqual(confirms, 1, 'one confirm event, not three');
+    const back = await authJ({ path: '/api/settings/payments', method: 'PUT', body: { mpesa: { mode: 'manual' } } });
+    assert.strictEqual(back.status, 200);
+  });
+
+  await test('payment engine: provider failure fails the payment, not the sale', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    await authJ({ path: '/api/settings/payments', method: 'PUT', body: { mpesa: { mode: 'sandbox' } } });
+    const r = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 228, phone: '0700111222' } } });
+    const mp = r.body.payments[0];
+    const fail = await authJ({ path: '/api/webhooks/mpesa', method: 'POST', body: { CheckoutRequestID: r.body.mpesa.checkout_request_id, MpesaReceiptRef: '', ResultCode: 1014, ResultDesc: 'Insufficient balance' } });
+    assert.strictEqual(fail.status, 200, JSON.stringify(fail.body));
+    assert.strictEqual(fail.body.payment.status, 'failed');
+    const fresh = (await asA({ path: `/api/sales/${r.body.sale.id}` })).body;
+    assert.strictEqual(fresh.sale.status, 'suspended', 'failed money frees the sale — stock restored');
+    const cash = await asA({ path: `/api/sales/${r.body.sale.id}/payments`, method: 'POST', body: { method: 'cash', amount: 228 } });
+    assert.strictEqual(cash.body.sale.status, 'paid', 'cashier falls back to cash');
+    await authJ({ path: '/api/settings/payments', method: 'PUT', body: { mpesa: { mode: 'manual' } } });
+  });
+
+  await test('payment engine: overpay, duplicate reference and cancel guards', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const h1 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], hold: true } });
+    const s1 = h1.body.sale.id;
+    await asA({ path: `/api/sales/${s1}/payments`, method: 'POST', body: { method: 'cash', amount: 100 } });
+    const over = await asA({ path: `/api/sales/${s1}/payments`, method: 'POST', body: { method: 'card', amount: 200, ref: 'BIG1' } });
+    assert.strictEqual(over.status, 400, 'card 200 > remaining 128');
+    assert.match(over.body.error, /exceeds sale balance/);
+    const c1 = await asA({ path: `/api/sales/${s1}/payments`, method: 'POST', body: { method: 'card', amount: 50, ref: 'DUP1' } });
+    assert.strictEqual(c1.status, 200, JSON.stringify(c1.body));
+    const c2 = await asA({ path: `/api/sales/${s1}/payments`, method: 'POST', body: { method: 'card', amount: 78, ref: 'DUP1' } });
+    assert.strictEqual(c2.status, 409, 'same (sale, method, ref) twice is impossible');
+    // cash over-tender completes the sale with change (100 + 50 + 78 = 228)
+    const finish = await asA({ path: `/api/sales/${s1}/payments`, method: 'POST', body: { method: 'cash', amount: 100 } });
+    assert.strictEqual(finish.status, 200, JSON.stringify(finish.body));
+    assert.strictEqual(finish.body.sale.status, 'paid');
+    const finCash = finish.body.payments.filter((p) => p.method === 'cash').pop();
+    assert.strictEqual(Number(JSON.parse(finCash.raw).change), 22, '78 applied, 22 change');
+    const h2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], hold: true } });
+    const s2 = h2.body.sale.id;
+    const m2 = await asA({ path: `/api/sales/${s2}/payments`, method: 'POST', body: { method: 'mpesa', amount: 228, phone: '0700111222' } });
+    const cancel = await asA({ path: `/api/payments/${m2.body.payments[0].id}/cancel`, method: 'POST', body: {} });
+    assert.strictEqual(cancel.body.sale.status, 'suspended', 'cancelled pending money frees the sale');
+    const paid = await asA({ path: `/api/sales/${s2}/payments`, method: 'POST', body: { method: 'cash', amount: 228 } });
+    assert.strictEqual(paid.body.sale.status, 'paid');
+  });
+
+  await test('payment engine: refund to original method (manager act)', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const mgrCookie = await cashierLogin('Mwenyeji M', '2345');
+    const mgr = (o) => withCookie(mgrCookie)(o);
+    // build a paid split sale: cash + card
+    const h = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], hold: true } });
+    const sid = h.body.sale.id;
+    await asA({ path: `/api/sales/${sid}/payments`, method: 'POST', body: { method: 'cash', amount: 155 } });
+    const card = await asA({ path: `/api/sales/${sid}/payments`, method: 'POST', body: { method: 'card', amount: 300, ref: 'SLIP7' } });
+    assert.strictEqual(card.body.sale.status, 'paid');
+    const cardId = card.body.payments.find((p) => p.method === 'card').id;
+    const asCashier = await asA({ path: `/api/payments/${cardId}/refund`, method: 'POST', body: {} });
+    assert.strictEqual(asCashier.status, 403, 'cashiers cannot refund');
+    const ref = await mgr({ path: `/api/payments/${cardId}/refund`, method: 'POST', body: { note: 'customer dispute' } });
+    assert.strictEqual(ref.status, 200, JSON.stringify(ref.body));
+    assert.strictEqual(ref.body.sale.status, 'partial');
+    const p2 = (await mgr({ path: `/api/payments?sale_id=${sid}` })).body.find((p) => p.id === cardId);
+    assert.strictEqual(p2.status, 'refunded');
+    const again = await mgr({ path: `/api/payments/${cardId}/refund`, method: 'POST', body: {} });
+    assert.strictEqual(again.status, 409, 'cannot refund twice');
+    const h2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], hold: true } });
+    const m = await asA({ path: `/api/sales/${h2.body.sale.id}/payments`, method: 'POST', body: { method: 'mpesa', amount: 228, phone: '0700111222' } });
+    const pendRef = await mgr({ path: `/api/payments/${m.body.payments[0].id}/refund`, method: 'POST', body: {} });
+    assert.strictEqual(pendRef.status, 409, 'pending payments cannot be refunded');
+  });
+
+  await test('payment engine: credit (deni) limit enforced, refund releases it', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const mgrCookie = await cashierLogin('Mwenyeji M', '2345');
+    const mgr = (o) => withCookie(mgrCookie)(o);
+    const now = new Date().toISOString();
+    const cid = d.prepare(`INSERT INTO customers (business_id, name, phone, credit_limit, created_at) VALUES (1, 'POS Credit Customer', '0711222333', 500, ?)`).run(now).lastInsertRowid;
+    const s1 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: cid, payment: { method: 'credit', amount: 228 } } });
+    assert.strictEqual(s1.status, 200, JSON.stringify(s1.body));
+    assert.strictEqual(s1.body.sale.status, 'paid');
+    const led = d.prepare(`SELECT COUNT(*) AS n FROM customer_ledger WHERE customer_id = ? AND type = 'credit_sale' AND amount = 228`).get(cid).n;
+    assert.strictEqual(led, 1, 'credit sale leaves ledger evidence');
+    const s2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: cid, payment: { method: 'credit', amount: 455 } } });
+    assert.strictEqual(s2.status, 400, '228 + 455 > 500');
+    assert.match(s2.body.error, /credit limit exceeded/);
+    const cardId = s1.body.payments[0].id;
+    const ref = await mgr({ path: `/api/payments/${cardId}/refund`, method: 'POST', body: {} });
+    assert.strictEqual(ref.status, 200, JSON.stringify(ref.body));
+    const s3 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: cid, payment: { method: 'credit', amount: 455 } } });
+    assert.strictEqual(s3.status, 200, 'refunded credit frees the limit again');
+  });
+
+  await test('payment engine: store credit + method enable/disable', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const now = new Date().toISOString();
+    const cid = d.prepare(`INSERT INTO customers (business_id, name, phone, created_at) VALUES (1, 'POS SC Customer', '0711222444', ?)`).run(now).lastInsertRowid;
+    d.prepare('UPDATE customers SET store_credit = 300 WHERE id = ?').run(cid);
+    const on = await authJ({ path: '/api/settings/payments', method: 'PUT', body: { methods: { store_credit: true } } });
+    assert.strictEqual(on.status, 200);
+    const r = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: cid, payment: { method: 'store_credit', amount: 228 } } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(d.prepare('SELECT store_credit FROM customers WHERE id = ?').get(cid).store_credit, 72, 'balance debited');
+    const again = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: cid, payment: { method: 'store_credit', amount: 228 } } });
+    assert.strictEqual(again.status, 400, 'insufficient store credit');
+    const off = await authJ({ path: '/api/settings/payments', method: 'PUT', body: { methods: { card: false, store_credit: false } } });
+    assert.strictEqual(off.status, 200);
+    const list = await asA({ path: '/api/payments/methods' });
+    assert.ok(!list.body.methods.some((m) => m.key === 'card'), 'card hidden from the till');
+    assert.ok(list.body.methods.some((m) => m.key === 'cash'), 'cash always there');
+    const h = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], hold: true } });
+    const blocked = await asA({ path: `/api/sales/${h.body.sale.id}/payments`, method: 'POST', body: { method: 'card', amount: 228, ref: 'OFF1' } });
+    assert.strictEqual(blocked.status, 400, 'disabled method refused');
+    assert.match(blocked.body.error, /not enabled/);
+    await authJ({ path: '/api/settings/payments', method: 'PUT', body: { methods: { card: true } } });
+  });
+
+  await test('payment engine: deposits are a manager act with evidence', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const mgrCookie = await cashierLogin('Mwenyeji M', '2345');
+    const mgr = (o) => withCookie(mgrCookie)(o);
+    const denied = await asA({ path: '/api/deposits', method: 'POST', body: { amount: 500, ref: 'DEP-X' } });
+    assert.strictEqual(denied.status, 403, 'cashiers cannot record deposits');
+    const dep = await mgr({ path: '/api/deposits', method: 'POST', body: { amount: 500, ref: 'DEP-TEST-1', register_id: pos.till1, note: 'morning float' } });
+    assert.strictEqual(dep.status, 200, JSON.stringify(dep.body));
+    assert.strictEqual(dep.body.deposit.amount, 500);
+    const list = await mgr({ path: '/api/deposits' });
+    assert.ok(list.body.some((x) => x.ref === 'DEP-TEST-1'));
+    const aud = d.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE action = 'deposit/create'`).get().n;
+    assert.ok(aud >= 1, 'deposit audited');
+  });
+
 
   await test('two registers sell concurrently: no conflicts, stock exact, distinct tills', async () => {
     const asA = (o) => withCookie(pos.cashA)(o);

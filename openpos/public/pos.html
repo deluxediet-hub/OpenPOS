@@ -41,6 +41,8 @@
   .quick { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
   .quick button { border: 1px dashed var(--line); background: #fff; border-radius: 8px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
   .act-row { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 8px; margin-top: 10px; }
+  .followup { margin-top: 10px; padding: 10px; border: 1px dashed #94a3b8; border-radius: 8px; background: #f8fafc; }
+  .followup .row { gap: 6px; }
   .tip { background: var(--green-soft); border: 1px solid #bfe3d0; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; margin-bottom: 8px; }
   .tip b { color: var(--green-dark); }
   .tip button { float: right; border: none; background: none; cursor: pointer; color: var(--muted); font-size: 14px; }
@@ -114,11 +116,7 @@
       <div class="r"><span data-i18n="vat">VAT</span><span id="t-tax">Ksh 0</span></div>
       <div class="r big"><span data-i18n="total">Total</span><span id="t-total">Ksh 0</span></div>
     </div>
-    <div class="paytabs" id="p-tabs">
-      <button data-m="cash" class="on" data-i18n="cash">Cash</button>
-      <button data-m="mpesa" data-i18n="mpesa">M-Pesa</button>
-      <button data-m="card" data-i18n="card">Card</button>
-    </div>
+    <div class="paytabs" id="p-tabs"></div>
     <div id="p-payfields">
       <label class="f" id="pf-cash"><span data-i18n="tender">Tender</span><input id="p-amount" type="number" min="0" placeholder="0"></label>
       <div class="quick" id="p-quick"></div>
@@ -178,6 +176,8 @@ let ME = null, CTX = { branchId: null, register: null, registerName: '' };
 let PRODUCTS = [], CATEGORIES = [], CUSTOMERS = [], VAT_RATE = 16;
 let CART = [];            // {variant_id, product_id, name, sub, qty, unit_price, tax_type, age_min, line_discount, line_note, age_verified}
 let PAY_METHOD = 'cash';
+let PAY_METHODS = [{ key: 'cash', label: 'Cash', sw: 'Taslimu', async: false, ref: false, needsCustomer: false }];
+let MPESA_CFG = { mode: 'manual', shortcode: '', paybill: '', phone: '' };
 let PENDING_ADD = null;   // add waiting on age confirm
 let PIN_CB = null;        // supervisor PIN callback
 let RESUME_SALE = null;   // held sale being paid {id, gross}
@@ -189,6 +189,7 @@ let RESUME_SALE = null;   // held sale being paid {id, gross}
     setLang(OP.lang() === 'en' ? 'sw' : 'en');
     $('#p-lang').textContent = OP.lang() === 'en' ? 'SW' : 'EN';
     applyI18n();
+    drawPayTabs();
     if (!ME) { initLogin(); return; }
     drawCats(); drawGrid($('#cats .on') ? $('#cats .on').dataset.c : ''); drawCust(); drawCart(); loadHeld();
   };
@@ -248,6 +249,7 @@ async function initMain() {
   drawCats(); drawGrid(); drawCust(); drawCart(); loadHeld();
   applyI18n();
   wireCart();
+  loadPayMethods();
   if (!localStorage.getItem('op_till_tip_v1')) $('#p-tip').classList.remove('hidden');
   setTimeout(() => $('#scan').focus(), 50);
 }
@@ -366,15 +368,7 @@ function wireCart() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'F2') { e.preventDefault(); $('#scan').focus(); }
   });
-  $('#p-tabs').querySelectorAll('button').forEach((b) => {
-    b.onclick = () => {
-      PAY_METHOD = b.dataset.m;
-      $('#p-tabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
-      $('#pf-cash').classList.toggle('hidden', PAY_METHOD !== 'cash');
-      $('#pf-phone').classList.toggle('hidden', PAY_METHOD !== 'mpesa');
-      $('#pf-ref').classList.toggle('hidden', PAY_METHOD !== 'card' && PAY_METHOD !== 'mpesa');
-    };
-  });
+  drawPayTabs();
   $('#p-amount').oninput = drawQuick;
   $('#sell-btn').onclick = () => completeSale();
   $('#p-hold').onclick = () => holdSale('sale');
@@ -544,14 +538,44 @@ async function completeSale() {
   }
 }
 
+// What the till shows is whatever the business has enabled — the engine
+// (and only the engine) knows what a M-Pesa or a card actually is.
+async function loadPayMethods() {
+  try {
+    const r = await api('/api/payments/methods');
+    if (r.methods && r.methods.length) PAY_METHODS = r.methods;
+    if (r.mpesa) MPESA_CFG = r.mpesa;
+  } catch { /* offline: keep last list */ }
+  drawPayTabs();
+}
+
+function methodLabel(m) { return OP.lang() === 'sw' ? (m.sw || m.label) : m.label; }
+
+function drawPayTabs() {
+  if (!$('#p-tabs')) return;
+  if (!PAY_METHODS.some((m) => m.key === PAY_METHOD)) PAY_METHOD = PAY_METHODS[0].key;
+  $('#p-tabs').innerHTML = PAY_METHODS.map((m) =>
+    `<button data-m="${m.key}" class="${m.key === PAY_METHOD ? 'on' : ''}">${esc(methodLabel(m))}</button>`).join('');
+  $('#p-tabs').querySelectorAll('button').forEach((b) => {
+    b.onclick = () => {
+      PAY_METHOD = b.dataset.m;
+      const m = PAY_METHODS.find((x) => x.key === PAY_METHOD) || {};
+      $('#pf-cash').classList.toggle('hidden', PAY_METHOD !== 'cash');
+      $('#pf-phone').classList.toggle('hidden', PAY_METHOD !== 'mpesa');
+      $('#pf-ref').classList.toggle('hidden', !(m.ref && PAY_METHOD !== 'mpesa'));
+      $('#p-ref').placeholder = m.ref ? 'terminal slip / transfer ref' : '';
+      drawPayTabs(); drawCart();
+    };
+  });
+}
+
 function payBody(total) {
+  const m = PAY_METHODS.find((x) => x.key === PAY_METHOD) || {};
   const b = { method: PAY_METHOD };
   if (PAY_METHOD === 'cash') b.amount = Math.round(Number($('#p-amount').value) || total);
-  else {
-    b.amount = total;
-    if (PAY_METHOD === 'mpesa') { b.phone = $('#p-phone').value.trim(); b.ref = $('#p-ref').value.trim(); }
-    if (PAY_METHOD === 'card') b.ref = $('#p-ref').value.trim();
-  }
+  else b.amount = total;
+  if (PAY_METHOD === 'mpesa') b.phone = $('#p-phone').value.trim();
+  if (m.ref && PAY_METHOD !== 'mpesa') b.ref = $('#p-ref').value.trim();
   return b;
 }
 
@@ -610,7 +634,41 @@ function showReceipt(data) {
   const f = (n) => `${sym} ${Number(n || 0).toLocaleString('en-KE')}`;
   const itemLines = data.items.map((it) =>
     `<div class="rline"><span>${esc(it.name)} × ${it.qty}${it.line_discount ? ` (−${f(it.line_discount)})` : ''}</span><span>${f(it.gross)}</span></div>`).join('');
-  const payLines = data.payments.map((p) => `<div class="rline"><span>${esc(p.method)}${p.ref ? ` · ${esc(p.ref)}` : ''}</span><span>${f(p.amount)}</span></div>`).join('');
+  const payLines = data.payments.map((p) => `<div class="rline"><span>${esc(p.method)}${p.ref ? ` · ${esc(p.ref)}` : ''}${p.status !== 'confirmed' ? ` <span class="pill">${t(p.status)}</span>` : ''}</span><span>${f(p.amount)}</span></div>`).join('');
+  // Payment follow-up: money still coming (pending) or a balance left (split).
+  const confirmedSum = data.payments.filter((p) => p.status === 'confirmed').reduce((a, p) => a + Number(p.amount), 0);
+  const pendingPay = data.payments.find((p) => p.status === 'pending');
+  const balance = Math.max(0, s.gross - confirmedSum);
+  let followup = '';
+  if (pendingPay) {
+    const ml = PAY_METHODS.find((m) => m.key === pendingPay.method);
+    const note = (pendingPay.method === 'mpesa' && data.mpesa && data.mpesa.instructions)
+      ? esc(data.mpesa.instructions)
+      : (pendingPay.method === 'mpesa' && data.mpesa && data.mpesa.mode === 'sandbox')
+        ? t('sandbox_wait')
+        : t('awaiting_generic');
+    followup = `<div class="followup">
+      <div class="r"><b>${t('awaiting_payment')}</b><span class="pill">${esc(ml ? methodLabel(ml) : pendingPay.method)}</span></div>
+      <div class="muted small" style="margin:4px 0">${note}</div>
+      <div class="row">
+        <input id="async-code" placeholder="${t('confirm_code')}" style="flex:1">
+        <button class="btn small" id="async-confirm">${t('confirm_payment')}</button>
+        <button class="btn ghost small" id="async-cancel">${t('cancel_payment')}</button>
+        ${data.mpesa && data.mpesa.mode === 'sandbox' ? `<button class="btn ghost small" id="async-sim">${t('simulate_callback')}</button>` : ''}
+      </div>
+    </div>`;
+  } else if (balance > 0) {
+    followup = `<div class="followup">
+      <div class="r"><span>${t('balance')}</span><b>${f(balance)}</b></div>
+      <div class="row" style="margin-top:6px">
+        <select id="more-method" style="flex:1">${PAY_METHODS.map((m) => `<option value="${m.key}">${esc(methodLabel(m))}</option>`).join('')}</select>
+        <input id="more-amount" type="number" min="1" placeholder="${f(balance)}" style="width:110px">
+        <input id="more-ref" placeholder="${t('payment_ref')}" class="hidden" style="width:120px">
+        <input id="more-phone" placeholder="${t('phone')}" class="hidden" style="width:120px">
+      </div>
+      <div class="row" style="margin-top:6px"><button class="btn" id="more-pay">${t('add_payment')}</button></div>
+    </div>`;
+  }
   let changeLine = '';
   const tendered = data.payments.reduce((a, p) => a + (JSON.parse(p.raw || '{}').tendered || 0), 0);
   if (tendered > s.gross) changeLine = `<div class="rline"><b>${t('change')}</b><span><b>${f(tendered - s.gross)}</b></span></div>`;
@@ -632,6 +690,7 @@ function showReceipt(data) {
     <hr>
     ${payLines}
     ${changeLine}
+    ${followup}
     <hr>
     <div class="ctr">${esc(rc.footer || 'Asante!')}<br><span style="font-size:11px">OpenPOS v2 · eTIMS: ${esc(s.etims_status)}</span></div>`;
   $('#receipt-overlay').classList.remove('hidden');
@@ -639,7 +698,54 @@ function showReceipt(data) {
   CART = []; RESUME_SALE = null; $('#p-promo').value = '';
   if (CUST_ID()) $('#p-cust').value = '';
   drawCart(); $('#p-amount').value = '';
+  wireFollowup(data, pendingPay, balance);
   $('#scan').focus();
+}
+
+function wireFollowup(data, pendingPay, balance) {
+  const msg = $('#p-msg');
+  if (pendingPay) {
+    const asyncCode = $('#async-code');
+    $('#async-confirm').onclick = async () => {
+      try {
+        const r = await api(`/api/payments/${pendingPay.id}/confirm`, { method: 'POST', body: { code: asyncCode.value.trim() } });
+        showReceipt(r);
+      } catch (e) { toast(msg, e.message, false); }
+    };
+    $('#async-cancel').onclick = async () => {
+      try {
+        const r = await api(`/api/payments/${pendingPay.id}/cancel`, { method: 'POST', body: {} });
+        showReceipt(r);
+      } catch (e) { toast(msg, e.message, false); }
+    };
+    const sim = $('#async-sim');
+    if (sim) sim.onclick = async () => {
+      try {
+        const r = await api(`/api/payments/${pendingPay.id}/simulate-callback`, { method: 'POST', body: {} });
+        showReceipt(r);
+      } catch (e) { toast(msg, e.message, false); }
+    };
+    asyncCode.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#async-confirm').click(); });
+  }
+  if ($('#more-pay')) {
+    $('#more-method').onchange = () => {
+      const key = $('#more-method').value;
+      const m = PAY_METHODS.find((x) => x.key === key) || {};
+      $('#more-ref').classList.toggle('hidden', !(m.ref && key !== 'mpesa'));
+      $('#more-phone').classList.toggle('hidden', key !== 'mpesa');
+    };
+    $('#more-pay').onclick = async () => {
+      const key = $('#more-method').value;
+      const m = PAY_METHODS.find((x) => x.key === key) || {};
+      const body = { method: key, amount: Math.round(Number($('#more-amount').value) || balance) };
+      if (m.ref && key !== 'mpesa') body.ref = $('#more-ref').value.trim();
+      if (key === 'mpesa') body.phone = $('#more-phone').value.trim();
+      try {
+        const r = await api(`/api/sales/${data.sale.id}/payments`, { method: 'POST', body });
+        showReceipt(r);
+      } catch (e) { toast(msg, e.message, false); }
+    };
+  }
 }
 
 $('#rc-print').onclick = () => window.print();

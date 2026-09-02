@@ -952,6 +952,60 @@ function migrate(d) {
   // Phase 7 (Day 11): sale kind — 'sale' (default), 'quote', or 'invoice' (a quote
   // converted at payment). Quotes never touch stock until conversion.
   addCol(d, 'sales', 'kind', "TEXT NOT NULL DEFAULT 'sale'");
+
+  // ---- Phase 8: payment engine (additive) ----------------------------------
+  // The payments table is the per-sale payment ledger. Phase 8 widens it:
+  // a full state machine (pending → confirmed | cancelled | failed;
+  // confirmed → refunded), the adapter method set, provider-side refs, and
+  // the idempotency index — one (sale, method, ref) can only ever be a
+  // payment, so a duplicate provider callback can never double-count.
+  addCol(d, 'customers', 'store_credit', 'INTEGER NOT NULL DEFAULT 0');
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS deposits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      business_id INTEGER NOT NULL DEFAULT 1,
+      branch_id INTEGER,
+      register_id INTEGER,
+      amount INTEGER NOT NULL,
+      ref TEXT NOT NULL DEFAULT '',
+      note TEXT NOT NULL DEFAULT '',
+      user_id INTEGER,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deposits_at ON deposits(created_at);
+  `);
+  const paySql = (d.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'payments'`).get() || {}).sql || '';
+  if (!paySql.includes('external_ref')) {
+    d.exec(`
+      CREATE TABLE payments_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sale_id INTEGER NOT NULL REFERENCES sales(id),
+        method TEXT NOT NULL
+          CHECK(method IN ('cash','mpesa','card','bank','gift_card','loyalty','credit','store_credit','other')),
+        amount INTEGER NOT NULL,
+        ref TEXT NOT NULL DEFAULT '',
+        external_ref TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'confirmed'
+          CHECK(status IN ('pending','confirmed','cancelled','failed','refunded')),
+        note TEXT NOT NULL DEFAULT '',
+        user_id INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        raw TEXT NOT NULL DEFAULT '{}'
+      );
+      INSERT INTO payments_new (id, sale_id, method, amount, ref, external_ref, status, note, user_id, created_at, updated_at, raw)
+        SELECT id, sale_id, method, amount, ref, '',
+               CASE status WHEN 'pending' THEN 'pending' WHEN 'confirmed' THEN 'confirmed' ELSE status END,
+               '', user_id, created_at, NULL, raw
+        FROM payments;
+      DROP TABLE payments;
+      ALTER TABLE payments_new RENAME TO payments;
+    `);
+  }
+  d.exec(`
+    CREATE INDEX IF NOT EXISTS idx_payments_sale ON payments(sale_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_ref ON payments(sale_id, method, ref) WHERE ref != '';
+  `);
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

@@ -373,7 +373,7 @@ Hook points (core exposes these; modules plug in):
 | Pricing: chain, rules, guard, history | ✓ **Phase 6 done (Day 9):** server-side resolution chain (promo/time → customer → branch → pack → tier → default) with `source` on every answer; `price_rules` (one primary scope + combinable time window, HH:MM and/or date bounds); minimum-margin guard (R-PR1) on every price-writing surface — PIN or block, floors product → branch → global, approver recorded; append-only `price_history` (R-PR3) in the same transaction as the change; manager **Pricing** tab (rules, guard settings, history, EN/SW). Acceptance: same variant × 5 branches × 2 customer types + 1 promo = 11 correct prices, below-margin override demands manager PIN, every change leaves history — all in `npm test` |
 | Sales / checkout (engine + till UI) | ✅ **Phase 7 done (Day 10–11):** `POST /api/sales` = scan-to-receipt in one call — chain-frozen `unit_price` per line (never altered later), line discounts permissioned (`sales.discount`) or supervisor-PIN approved (approver recorded on the sale), age-gate on restricted items, VAT split per line (std/zero/exempt), stock moves **exactly once** through the Phase-4 move engine (FEFO per lot, `ref` = invoice no, oversell only as an audited manager/owner act R-S8), cash (change) / M-Pesa (manual ref) / card payments, partial payments, **hold → suspended** (no stock) → `POST /api/sales/:id/pay` (re-validates, single stock step), void reverses the exact lots taken. Till UI (`/pos.html`): barcode wedge + search, category chips, product grid, variant picker, cart (qty/discount/note), customer + promo attach, two tills concurrent, printable receipt with KRA fields, **quote → invoice** (quote = suspended sale, `kind` sale/quote/invoice; conversion re-validates, takes payment and moves stock exactly once — double-convert and pay-on-quote refused; UI: Quote button + convert-from-held-list), first-run till hint (dismissable, EN/SW) |
 | Audit hash chain + verify | ✓ R-A1/R-A4 done at core level |
-| Sales/payments schema | Phase 8 reshapes payments into the adapter engine (schema ready: `payments`, `mpesa_log`) |
+| Sales/payments schema | ✅ **Phase 8 done (Day 12):** the payment **engine** — checkout never knows what a payment is. Adapters: cash · M-Pesa · card · bank · credit (deni) · store credit · gift card · loyalty · other (enable/disable per business). State machine `pending → confirmed \| cancelled \| failed`, `confirmed → refunded`; idempotency is structural — `UNIQUE(sale_id, method, ref)` so a duplicate provider callback is a guaranteed no-op (proven in tests: 3 callbacks, 1 confirm). Split/partial payments via `POST /api/sales/:id/payments`; cash over-tender = change; non-cash can't exceed the balance; duplicate (sale, method, ref) refused. **M-Pesa lives only in `lib/mpesa.js`** (the only file that knows Daraja): manual mode (record the SMS code — works day one), sandbox (simulated STK + `simulate-callback` test hook replaying the real callback path), live (real OAuth + STK push, Phase 16 credentials). Refunds go to the original method (deni refunds release the credit limit; store credit is restored; M-Pesa leaves a reversal row). Cancelled/failed money **unwinds the stock step** (same lots, audited) so a declined prompt never leaks stock. Per-method reconcile (`/api/payments/reconcile`) + deposits (`/api/deposits`, manager act, audited) + payment settings (owner). Manager gets a Payments tab; the till gets method tabs, an awaiting-payment panel and add-a-second-payment |
 | EN/SW core strings, dashboard, manager UI | ✓ foundation; polished in Phase 34 |
 
 **No rework planned — all extensions are additive.**
@@ -400,6 +400,22 @@ Hook points (core exposes these; modules plug in):
 
 ## 9. Change log
 
+- **2026-09-02 (v9)** — **Phase 8 complete (Day 12):** payment engine.
+  `lib/payments.js` (provider-agnostic: method registry, state machine,
+  idempotency, evidence, balance recompute) + `lib/mpesa.js` (the ONLY file
+  that knows Daraja — manual / sandbox / live). `payments` rebuilt with the
+  full state machine, wider method set, `external_ref`, and the
+  `UNIQUE(sale_id, method, ref)` idempotency index. New routes:
+  `/api/payments/methods`, `POST /api/sales/:id/payments` (splits; a held
+  sale takes its one stock step on the first money in),
+  `POST /api/payments/:id/confirm|cancel|refund` (refund = manager act,
+  to the original method), `GET /api/payments[?filters]`,
+  `GET /api/payments/reconcile?date`, `POST|GET /api/deposits` (manager act),
+  `POST /api/webhooks/mpesa` (idempotent), `POST /api/payments/:id/simulate-callback`
+  (sandbox-only test hook), `GET|PUT /api/settings/payments`. Declined or
+  failed money unwinds the stock step (same lots, audited) and parks the
+  sale as suspended. 106 tests green (was 98) + 31-step UI smoke.
+  Health + banner now report Phase 8.
 - **2026-09-02 (v8)** — **Phase 7 complete (Day 11):** quote → invoice —
   `sales.kind` (sale/quote/invoice); a quote is a suspended sale that never
   touches stock; `POST /api/sales/:id/convert` re-validates, takes payment and

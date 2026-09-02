@@ -244,13 +244,29 @@ contradicts the doc without a change-log entry.**
   (EN/SW) so a new cashier's first unaided sale is a scan-and-tap exercise.
   **98 tests green** (was 96) + 30-step UI smoke green; health + banner report Phase 7.
 
-### Phase 8 — Payment Engine · Day 12
+### Phase 8 — Payment Engine · Day 12 ✅
 - Adapter architecture: cash · M-Pesa · card · bank · credit(deni) · store credit · other
 - State machine, idempotency, split/partial payments, deposits, refunds-to-original-method,
   per-method reconcile status, light ledger writes; M-Pesa adapter = sandbox-ready + manual
   code mode
 - **Acceptance:** split cash+M-Pesa(sandbox)+card sale reconciles; duplicate callback = no
   double-count; zero M-Pesa-specific code in checkout (adapter only).
+- **Done (Day 12):** `lib/payments.js` (engine: method registry, state machine
+  `pending → confirmed|cancelled|failed`, `confirmed → refunded`, split/partial balance
+  recompute, deni limit + store-credit evidence in `customer_ledger`) and `lib/mpesa.js`
+  (the only file that knows Daraja: manual = record the SMS code, sandbox = simulated STK
+  + `simulate-callback` hook replaying the real callback path, live = real OAuth + STK push
+  for Phase-16 credentials). `payments` rebuilt: wider method set, `external_ref`,
+  **`UNIQUE(sale_id, method, ref)`** — a duplicate provider callback is a structural no-op
+  (test: 3 callbacks → 1 confirm). Split via `POST /api/sales/:id/payments` (a held sale
+  takes its one stock step on the first money in); cash over-tender = change, non-cash can't
+  exceed balance, duplicate ref 409. Refunds to original method (manager act) — deni refund
+  releases the credit limit, store credit is restored, M-Pesa leaves a reversal row.
+  Cancelled/failed money **unwinds the stock step** (same lots, audited) — a declined prompt
+  never leaks stock. Per-method reconcile + deposits (manager act, audited) + owner payment
+  settings. Manager Payments tab; till: method tabs, awaiting-payment panel, add-a-second-
+  payment. **106 tests green** (was 98) + 31-step UI smoke green; health + banner report
+  Phase 8.
 
 ### Phase 9 — Cashier Shifts & Till Control · Day 13
 - Opening float, shift, cash movements, paid-outs, expenses, refunds, expected vs actual,

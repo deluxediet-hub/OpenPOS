@@ -8,6 +8,8 @@ const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const dbm = require('./db');
+const pme = require('./lib/payments');
+const mpesa = require('./lib/mpesa');
 const auth = require('./lib/auth');
 const perms = require('./lib/permissions');
 const caps = require('./lib/capabilities');
@@ -386,7 +388,7 @@ function createApp(d) {
   app.use(express.static(path.join(__dirname, 'public')));
 
   // ---- health / status ------------------------------------------------------
-  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 7 }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 8 }));
 
   app.get('/api/setup/status', (req, res) => {
     res.json({
@@ -3041,30 +3043,24 @@ function createApp(d) {
     }
   }
 
-  // Cash may be tendered (change computed); other methods pay the exact applied amount.
-  function applyPayment(d, { user, saleId, sale, payment, discountBy }) {
+  // Phase 8: payments go through the engine (lib/payments.js) — method
+  // validation, state machine, idempotency, evidence, balance recompute.
+  // M-Pesa comes back 'pending'; lib/mpesa.js (the only file that knows
+  // Daraja) is what initiates the collection for it.
+  function applyPayment(d, { user, saleId, sale, payment, discountBy, allowQuote }) {
     if (!payment) throw httpError(400, 'payment required');
-    const method = payment.method;
-    if (!['cash', 'mpesa', 'card', 'gift_card', 'credit'].includes(method)) throw httpError(400, 'bad payment method');
-    const tendered = intShillings(payment.amount);
-    if (tendered === null || tendered <= 0) throw httpError(400, 'payment amount must be whole shillings > 0');
-    const gross = sale.gross;
-    const overpay = tendered > gross && method !== 'cash';
-    if (overpay) throw httpError(400, `${method} cannot pay more than the balance`);
-    const applied = method === 'cash' ? Math.min(tendered, gross) : tendered;
-    const change = method === 'cash' ? Math.max(0, tendered - gross) : 0;
-    const ref = String(payment.ref || '').trim();
-    if ((method === 'mpesa' || method === 'card') && !ref) throw httpError(400, `${method} reference required`);
-    if (method === 'credit' && !sale.customer_id) throw httpError(400, 'credit (deni) needs a customer');
-    const t = new Date().toISOString();
-    d.prepare(
-      `INSERT INTO payments (sale_id, method, amount, ref, status, user_id, created_at, raw) VALUES (?, ?, ?, ?, 'confirmed', ?, ?, ?)`
-    ).run(saleId, method, applied, ref, user.id, t, JSON.stringify({ tendered, change, phone: String(payment.phone || '').trim() }));
-    const paid = d.prepare('SELECT COALESCE(SUM(amount), 0) AS s FROM payments WHERE sale_id = ? AND status = ?').get(saleId, 'confirmed').s;
-    const status = paid >= gross - 0 ? 'paid' : 'partial';
-    d.prepare('UPDATE sales SET status = ?, discount_by = ?, paid_at = ? WHERE id = ?')
-      .run(status, discountBy || d.prepare('SELECT discount_by FROM sales WHERE id = ?').get(saleId).discount_by, status === 'paid' ? t : null, saleId);
-    return status;
+    if (discountBy) d.prepare('UPDATE sales SET discount_by = ? WHERE id = ?').run(discountBy, saleId);
+    const r = pme.addPayment(d, {
+      user, sale,
+      method: String(payment.method || '').trim(),
+      amount: payment.amount, ref: payment.ref, phone: payment.phone,
+      tendered: payment.tendered !== undefined ? payment.tendered : payment.amount,
+      allowQuote
+    });
+    if (payment.method === 'mpesa' && r.payment.status === 'pending') {
+      r.mpesa = mpesa.initiate(d, { payment: r.payment, sale: r.sale, phone: String(payment.phone || '').trim(), amount: r.payment.amount });
+    }
+    return r;
   }
 
   function buildSalePayload(d, saleId) {
@@ -3127,6 +3123,7 @@ function createApp(d) {
       const orderNo = nextOrderNo(d, ctx.branchId);
       const invoiceNo = `${ctx.branch.code || 'BR'}-${String(orderNo).padStart(6, '0')}`;
       const discountBy = approver ? approver.id : null;
+      let payRes = null;
       const run = d.transaction(() => {
         const id = d
           .prepare(
@@ -3142,7 +3139,7 @@ function createApp(d) {
         if (!hold) {
           moveStockForSale(d, { user: req.user, ctx, lines, ref: invoiceNo, allowOversell: b.oversell === true });
           const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(id);
-          applyPayment(d, { user: req.user, saleId: id, sale, payment: b.payment, discountBy });
+          payRes = applyPayment(d, { user: req.user, saleId: id, sale, payment: b.payment, discountBy });
         }
         const ins = d.prepare(
           `INSERT INTO sale_items (sale_id, product_id, variant_id, name, qty, unit, line_discount, net, tax, gross, tax_type, kra_item_code, batch_id, line_note, age_verified, unit_price)
@@ -3160,12 +3157,12 @@ function createApp(d) {
         entity: 'sale', entityId: String(id),
         detail: {
           invoice: invoiceNo, items: lines.length, gross: totals.gross, discount: totals.discount,
-          hold, method: b.payment ? b.payment.method : null,
+          hold, method: b.payment ? b.payment.method : null, pending: payRes ? payRes.payment.status === 'pending' : undefined,
           oversell: b.oversell === true || undefined,
           discountApprover: discountBy ? 'PIN' : undefined, promo: b.promo_code || undefined
         }
       });
-      res.json({ ok: true, ...buildSalePayload(d, id) });
+      res.json({ ok: true, ...buildSalePayload(d, id), ...(payRes && payRes.mpesa ? { mpesa: payRes.mpesa } : {}) });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message });
       console.error('[error] POST /api/sales:', e.message);
@@ -3194,15 +3191,54 @@ function createApp(d) {
     const ctx = saleContext(d, user);
     if (!ctx.branchId || !ctx.locationId) throw httpError(400, 'no selling location for this user');
     if (ctx.branchId !== sale.branch_id) throw httpError(400, 'held sales can only be paid at the same branch');
+    let payRes = null;
     const run = d.transaction(() => {
       moveStockForSale(d, { user, ctx, lines, ref: sale.invoice_no, allowOversell: b.oversell === true });
       const fresh = d.prepare('SELECT * FROM sales WHERE id = ?').get(sale.id);
-      applyPayment(d, { user, saleId: sale.id, sale: fresh, payment: b.payment, discountBy: approver ? approver.id : null });
+      payRes = applyPayment(d, { user, saleId: sale.id, sale: fresh, payment: b.payment, discountBy: approver ? approver.id : null, allowQuote: markInvoice === true });
       if (markInvoice) d.prepare("UPDATE sales SET kind = 'invoice' WHERE id = ?").run(sale.id);
       const upd = d.prepare('UPDATE sale_items SET batch_id = ? WHERE id = ?');
       for (const L of lines) upd.run(L.batchId, L._rowId);
     });
     run();
+    return payRes;
+  }
+
+  // When a sale goes back to "never started" (its only money was cancelled or
+  // failed), the stock step must be reversed — same lots, audited, R-S1.
+  function restoreSaleStock(d, { sale, userId, note }) {
+    const items = d.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(sale.id);
+    for (const row of items) {
+      const variant = d.prepare('SELECT * FROM variants WHERE id = ?').get(row.variant_id);
+      const product = d.prepare('SELECT * FROM products WHERE id = ?').get(row.product_id);
+      if (!variant || !product) continue;
+      const taken = d.prepare(
+        `SELECT * FROM stock_moves WHERE ref = ? AND type = 'sale' AND variant_id = ? AND qty < 0 AND note NOT LIKE 'void:%'`
+      ).all(sale.invoice_no, row.variant_id);
+      for (const m of taken) {
+        addStockMove(d, {
+          product, variant, branchId: sale.branch_id, locationId: m.location_id,
+          qty: -m.qty, type: 'sale', reason: 'sale', ref: sale.invoice_no,
+          batchId: m.batch_id, userId, note: `void: ${note}`
+        });
+        if (m.batch_id) d.prepare('UPDATE batches SET qty = qty + ? WHERE id = ?').run(-m.qty, m.batch_id);
+        upsertStock(d, row.variant_id, m.location_id, -m.qty);
+      }
+    }
+  }
+
+  // True when a sale has no money left in it (confirmed or pending).
+  function saleHasMoney(d, saleId) {
+    return !!d.prepare("SELECT 1 FROM payments WHERE sale_id = ? AND status IN ('confirmed','pending') LIMIT 1").get(saleId);
+  }
+
+  // If the sale is now money-less, unwind its stock step and park it as suspended.
+  function maybeUnwindSale(d, { saleId, userId, note }) {
+    const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
+    if (!sale || sale.status === 'voided') return;
+    if (saleHasMoney(d, saleId)) return;
+    restoreSaleStock(d, { sale, userId, note });
+    d.prepare("UPDATE sales SET status = 'suspended', paid_at = NULL WHERE id = ?").run(saleId);
   }
 
   // Resume a held sale (kind 'sale'): stock moves exactly once, here.
@@ -3214,13 +3250,13 @@ function createApp(d) {
       if (sale.kind === 'quote') return res.status(400).json({ error: 'quotes convert via POST /api/sales/:id/convert' });
       const b = req.body || {};
       const approver = b.override_pin ? supervisorFromPin(b.override_pin) : null;
-      resumeHeldSale(d, { sale, user: req.user, b, approver });
+      const payRes = resumeHeldSale(d, { sale, user: req.user, b, approver });
       dbm.audit(d, {
         userId: req.user.id, branchId: sale.branch_id, action: 'sale/pay',
         entity: 'sale', entityId: String(sale.id),
         detail: { invoice: sale.invoice_no, method: b.payment ? b.payment.method : null, gross: sale.gross, oversell: b.oversell === true || undefined }
       });
-      res.json({ ok: true, ...buildSalePayload(d, sale.id) });
+      res.json({ ok: true, ...buildSalePayload(d, sale.id), ...(payRes && payRes.mpesa ? { mpesa: payRes.mpesa } : {}) });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message });
       console.error('[error] POST /api/sales/:id/pay:', e.message);
@@ -3238,13 +3274,13 @@ function createApp(d) {
       if (sale.status !== 'suspended') return res.status(400).json({ error: `quote is ${sale.status}, not pending` });
       const b = req.body || {};
       const approver = b.override_pin ? supervisorFromPin(b.override_pin) : null;
-      resumeHeldSale(d, { sale, user: req.user, b, approver, markInvoice: true });
+      const payRes = resumeHeldSale(d, { sale, user: req.user, b, approver, markInvoice: true });
       dbm.audit(d, {
         userId: req.user.id, branchId: sale.branch_id, action: 'sale/convert',
         entity: 'sale', entityId: String(sale.id),
         detail: { invoice: sale.invoice_no, method: b.payment ? b.payment.method : null, gross: sale.gross, oversell: b.oversell === true || undefined }
       });
-      res.json({ ok: true, ...buildSalePayload(d, sale.id) });
+      res.json({ ok: true, ...buildSalePayload(d, sale.id), ...(payRes && payRes.mpesa ? { mpesa: payRes.mpesa } : {}) });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message });
       console.error('[error] POST /api/sales/:id/convert:', e.message);
@@ -3293,7 +3329,7 @@ function createApp(d) {
       const b = req.body || {};
       const note = String(b.note || 'voided').trim();
       const items = d.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(sale.id);
-      const hadStock = ['paid', 'partial'].includes(sale.status);
+      const hadStock = ['paid', 'partial', 'open'].includes(sale.status);
       const ctx = { branchId: sale.branch_id, locationId: sale.location_id };
       const run = d.transaction(() => {
         for (const row of items) {
@@ -3320,6 +3356,7 @@ function createApp(d) {
         d.prepare("UPDATE sales SET status = 'voided' WHERE id = ?").run(sale.id);
         if (hadStock) {
           d.prepare("UPDATE payments SET status = 'refunded' WHERE sale_id = ? AND status = 'confirmed'").run(sale.id);
+          d.prepare("UPDATE payments SET status = 'cancelled', note = 'voided' WHERE sale_id = ? AND status = 'pending'").run(sale.id);
         }
       });
       run();
@@ -3334,6 +3371,330 @@ function createApp(d) {
       return res.status(500).json({ error: 'internal error' });
     }
   });
+
+  // ---- Phase 8: payment engine routes --------------------------------------
+  // The till talks to these; it never talks to a provider.
+
+  // Enabled payment methods (what the till shows) + non-secret M-Pesa config.
+  app.get('/api/payments/methods', me, (req, res) => {
+    const cfg = pme.paymentConfig(d);
+    res.json({
+      methods: pme.enabledMethods(d).map((m) => ({ ...m, ref: !!pme.METHODS[m.key].ref, needsCustomer: !!pme.METHODS[m.key].needsCustomer })),
+      mpesa: { mode: cfg.mpesa.mode, shortcode: cfg.mpesa.shortcode, paybill: cfg.mpesa.paybill, phone: cfg.mpesa.phone }
+    });
+  });
+
+  // Add a payment line to a sale (split / partial payments). A suspended sale
+  // takes its stock step here — exactly once, on the first money in.
+  app.post('/api/sales/:id/payments', me, (req, res) => {
+    try {
+      const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(req.params.id));
+      if (!sale) return res.status(404).json({ error: 'not found' });
+      if (['voided', 'refunded', 'paid'].includes(sale.status)) {
+        return res.status(400).json({ error: `cannot add a payment to a ${sale.status} sale` });
+      }
+      if (sale.kind === 'quote') return res.status(400).json({ error: 'quotes convert via POST /api/sales/:id/convert' });
+      const b = req.body || {};
+      const ctx = saleContext(d, req.user);
+      const visible = visibleBranches(d, req.user);
+      if (!visible.some((x) => x.id === sale.branch_id)) {
+        return res.status(403).json({ error: 'that sale belongs to another branch' });
+      }
+      let payRes = null;
+      const run = d.transaction(() => {
+        const fresh = d.prepare('SELECT * FROM sales WHERE id = ?').get(sale.id);
+        if (fresh.status === 'suspended') {
+          // first money in: the single stock-moving step (FEFO at this register)
+          const rows = d.prepare('SELECT * FROM sale_items WHERE sale_id = ? ORDER BY id').all(sale.id);
+          const lines = rows.map((row) => {
+            const variant = d.prepare('SELECT * FROM variants WHERE id = ? AND active = 1').get(row.variant_id);
+            if (!variant) throw httpError(409, `held item no longer available (variant ${row.variant_id} deactivated)`);
+            const product = d.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(variant.product_id);
+            if (!product) throw httpError(409, `held item no longer available (${row.name} deactivated)`);
+            return {
+              variant, product, qty: row.qty, unitPrice: row.unit_price || 0, source: 'frozen',
+              disc: row.line_discount, net: row.net, tax: row.tax, gross: row.gross,
+              taxType: row.tax_type, kra: row.kra_item_code, age: row.age_verified, batchId: null, note: row.line_note, _rowId: row.id
+            };
+          });
+          if (!ctx.branchId || !ctx.locationId) throw httpError(400, 'no selling location for this user');
+          if (ctx.branchId !== sale.branch_id) throw httpError(400, 'held sales can only be paid at the same branch');
+          moveStockForSale(d, { user: req.user, ctx, lines, ref: fresh.invoice_no, allowOversell: false });
+          const upd = d.prepare('UPDATE sale_items SET batch_id = ? WHERE id = ?');
+          for (const L of lines) upd.run(L.batchId, L._rowId);
+        }
+        const after = d.prepare('SELECT * FROM sales WHERE id = ?').get(sale.id);
+        payRes = pme.addPayment(d, {
+          user: req.user, sale: after,
+          method: String(b.method || '').trim(),
+          amount: b.amount, ref: b.ref, phone: b.phone,
+          tendered: b.tendered !== undefined ? b.tendered : b.amount
+        });
+        if (b.method === 'mpesa' && payRes.payment.status === 'pending') {
+          payRes.mpesa = mpesa.initiate(d, { payment: payRes.payment, sale: payRes.sale, phone: String(b.phone || '').trim(), amount: payRes.payment.amount });
+        }
+      });
+      run();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: sale.branch_id, action: 'payment/add',
+        entity: 'payment', entityId: String(payRes.payment.id),
+        detail: { invoice: sale.invoice_no, method: b.method, amount: payRes.payment.amount, status: payRes.payment.status, pending: payRes.payment.status === 'pending' || undefined }
+      });
+      res.json({ ok: true, ...buildSalePayload(d, sale.id), ...(payRes.mpesa ? { mpesa: payRes.mpesa } : {}) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/sales/:id/payments:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Confirm a pending payment (manual code, or the provider callback shape).
+  app.post('/api/payments/:id/confirm', me, (req, res) => {
+    try {
+      const p = d.prepare('SELECT * FROM payments WHERE id = ?').get(numOrNull(req.params.id));
+      if (!p) return res.status(404).json({ error: 'payment not found' });
+      const b = req.body || {};
+      const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(p.sale_id);
+      const visible = visibleBranches(d, req.user);
+      if (!visible.some((x) => x.id === sale.branch_id)) return res.status(403).json({ error: 'that sale belongs to another branch' });
+      const origRef = p.ref; // '' for manual-mode payments; the checkout id otherwise
+      const run = d.transaction(() => {
+        const r = pme.confirmPayment(d, {
+          paymentId: p.id, user: req.user, code: b.code, externalRef: b.external_ref, via: b.via || 'manual'
+        });
+        if (p.method === 'mpesa') {
+          const mref = r.payment.external_ref || r.payment.ref || '';
+          const row = origRef
+            ? d.prepare('SELECT id FROM mpesa_log WHERE checkout_request_id = ? ORDER BY id DESC LIMIT 1').get(origRef)
+            : d.prepare(`SELECT id FROM mpesa_log WHERE sale_id = ? AND checkout_request_id = '' ORDER BY id DESC LIMIT 1`).get(p.sale_id);
+          if (row) d.prepare(`UPDATE mpesa_log SET status = 'confirmed', mpesa_ref = ?, updated_at = ? WHERE id = ?`)
+            .run(mref, new Date().toISOString(), row.id);
+        }
+        return r;
+      });
+      const r = run();
+      if (!r.already) {
+        dbm.audit(d, {
+          userId: req.user.id, branchId: sale.branch_id, action: 'payment/confirm',
+          entity: 'payment', entityId: String(p.id),
+          detail: { invoice: sale.invoice_no, method: p.method, amount: p.amount, code: b.code ? 'entered' : undefined, via: b.via || 'manual' }
+        });
+      }
+      res.json({ ok: true, already: !!r.already, ...buildSalePayload(d, p.sale_id), ...(r.mpesa ? { mpesa: r.mpesa } : {}) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/payments/:id/confirm:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Cancel a pending payment (customer declined / prompt timed out).
+  app.post('/api/payments/:id/cancel', me, (req, res) => {
+    try {
+      const p = d.prepare('SELECT * FROM payments WHERE id = ?').get(numOrNull(req.params.id));
+      if (!p) return res.status(404).json({ error: 'payment not found' });
+      const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(p.sale_id);
+      const visible = visibleBranches(d, req.user);
+      if (!visible.some((x) => x.id === sale.branch_id)) return res.status(403).json({ error: 'that sale belongs to another branch' });
+      const run = d.transaction(() => {
+        const r = pme.cancelPayment(d, { paymentId: p.id, user: req.user, note: (req.body || {}).note });
+        if (p.method === 'mpesa') {
+          const row = d.prepare(`SELECT id FROM mpesa_log WHERE sale_id = ? ORDER BY id DESC LIMIT 1`).get(p.sale_id);
+          if (row) d.prepare(`UPDATE mpesa_log SET status = 'cancelled', updated_at = ? WHERE id = ?`).run(new Date().toISOString(), row.id);
+        }
+        maybeUnwindSale(d, { saleId: p.sale_id, userId: req.user.id, note: 'payment cancelled' });
+        return r;
+      });
+      run();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: sale.branch_id, action: 'payment/cancel',
+        entity: 'payment', entityId: String(p.id),
+        detail: { invoice: sale.invoice_no, method: p.method, amount: p.amount }
+      });
+      res.json({ ok: true, ...buildSalePayload(d, p.sale_id) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/payments/:id/cancel:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Refund a CONFIRMED payment to its original method (sales.refund = manager+).
+  app.post('/api/payments/:id/refund', me, can('sales.refund'), (req, res) => {
+    try {
+      const p = d.prepare('SELECT * FROM payments WHERE id = ?').get(numOrNull(req.params.id));
+      if (!p) return res.status(404).json({ error: 'payment not found' });
+      const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(p.sale_id);
+      const run = d.transaction(() =>
+        pme.refundPayment(d, { paymentId: p.id, user: req.user, note: (req.body || {}).note }));
+      run();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: sale.branch_id, action: 'payment/refund',
+        entity: 'payment', entityId: String(p.id),
+        detail: { invoice: sale.invoice_no, method: p.method, amount: p.amount, note: (req.body || {}).note || undefined }
+      });
+      res.json({ ok: true, ...buildSalePayload(d, p.sale_id) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/payments/:id/refund:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Payment ledger (evidence for every shilling).
+  app.get('/api/payments', me, (req, res) => {
+    const q = req.query;
+    const branches = visibleBranches(d, req.user);
+    if (!branches.length) return res.json([]);
+    const where = ['s.branch_id IN (' + branches.map((x) => x.id).join(',') + ')'];
+    const args = [];
+    if (q.method) { where.push('p.method = ?'); args.push(String(q.method)); }
+    if (q.status) { where.push('p.status = ?'); args.push(String(q.status)); }
+    if (q.sale_id) { where.push('p.sale_id = ?'); args.push(String(q.sale_id)); }
+    if (q.from) { where.push('p.created_at >= ?'); args.push(String(q.from)); }
+    if (q.to) { where.push('p.created_at < ?'); args.push(String(q.to)); }
+    const limit = Math.min(Math.max(Number(q.limit) || 100, 1), 500);
+    const users = d.prepare('SELECT id, name FROM users').all();
+    const names = Object.fromEntries(users.map((u) => [u.id, u.name]));
+    const rows = d.prepare(
+      `SELECT p.*, s.invoice_no, b.name AS branch_name,
+         (SELECT c.name FROM customers c WHERE c.id = s.customer_id) AS customer_name
+        FROM payments p JOIN sales s ON s.id = p.sale_id JOIN branches b ON b.id = s.branch_id
+        WHERE ${where.join(' AND ')} ORDER BY p.id DESC LIMIT ?`
+    ).all(...args, limit);
+    res.json(rows.map((r) => ({ ...r, cashier: names[r.user_id] || `#${r.user_id}` })));
+  });
+
+  // Per-method reconcile for a date (default: today) — the end-of-day number.
+  app.get('/api/payments/reconcile', me, (req, res) => {
+    const q = req.query;
+    const branches = visibleBranches(d, req.user);
+    if (!branches.length) return res.json({ date: q.date || null, by_method: [], total: {} });
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(q.date || '')) ? String(q.date) : new Date().toISOString().slice(0, 10);
+    const rows = d.prepare(
+      `SELECT p.method, p.status, COUNT(*) AS n, COALESCE(SUM(p.amount), 0) AS amount
+       FROM payments p JOIN sales s ON s.id = p.sale_id
+       WHERE s.branch_id IN (${branches.map((x) => x.id).join(',')})
+         AND substr(p.created_at, 1, 10) = ?
+       GROUP BY p.method, p.status`
+    ).all(date);
+    const byMethod = {};
+    for (const r of rows) {
+      byMethod[r.method] = byMethod[r.method] || { method: r.method, pending: 0, confirmed: 0, refunded: 0, failed: 0, cancelled: 0, pending_n: 0, confirmed_n: 0, refunded_n: 0 };
+      byMethod[r.method][r.status] = r.amount;
+      byMethod[r.method][`${r.status}_n`] = r.n;
+    }
+    const by_method = Object.values(byMethod);
+    const total = by_method.reduce((a, m) => ({
+      pending: a.pending + m.pending, confirmed: a.confirmed + m.confirmed,
+      refunded: a.refunded + m.refunded, failed: a.failed + m.failed, cancelled: a.cancelled + m.cancelled
+    }), { pending: 0, confirmed: 0, refunded: 0, failed: 0, cancelled: 0 });
+    res.json({ date, by_method, total });
+  });
+
+  // Deposits: till cash handed to the bank (manager act, evidence kept).
+  app.post('/api/deposits', me, can('settings.manage'), (req, res) => {
+    const b = req.body || {};
+    const amount = intShillings(b.amount);
+    if (amount === null || amount <= 0) return res.status(400).json({ error: 'deposit amount must be whole shillings > 0' });
+    const registerId = numOrNull(b.register_id);
+    let branchId = null;
+    if (registerId) {
+      const reg = d.prepare('SELECT * FROM registers WHERE id = ?').get(registerId);
+      if (!reg) return res.status(404).json({ error: 'register not found' });
+      branchId = reg.branch_id;
+    }
+    const id = d.prepare(
+      `INSERT INTO deposits (branch_id, register_id, amount, ref, note, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(branchId, registerId, amount, String(b.ref || '').trim(), String(b.note || '').trim(), req.user.id, new Date().toISOString()).lastInsertRowid;
+    dbm.audit(d, {
+      userId: req.user.id, branchId, action: 'deposit/create',
+      entity: 'deposit', entityId: String(id), detail: { amount, ref: b.ref || undefined, register: registerId || undefined }
+    });
+    res.json({ ok: true, deposit: d.prepare('SELECT * FROM deposits WHERE id = ?').get(id) });
+  });
+
+  app.get('/api/deposits', me, (req, res) => {
+    const branches = visibleBranches(d, req.user);
+    if (!branches.length) return res.json([]);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    const users = d.prepare('SELECT id, name FROM users').all();
+    const names = Object.fromEntries(users.map((u) => [u.id, u.name]));
+    const rows = d.prepare(
+      `SELECT dep.*, b.name AS branch_name, reg.name AS register_name
+       FROM deposits dep LEFT JOIN branches b ON b.id = dep.branch_id LEFT JOIN registers reg ON reg.id = dep.register_id
+       WHERE dep.branch_id IN (${branches.map((x) => x.id).join(',')}) OR dep.branch_id IS NULL
+       ORDER BY dep.id DESC LIMIT ?`
+    ).all(limit);
+    res.json(rows.map((r) => ({ ...r, user: names[r.user_id] || `#${r.user_id}` })));
+  });
+
+  // Provider webhook (Daraja posts here in live mode; the sandbox simulate hook
+  // exercises the exact same path). No auth — the idempotency guarantee means
+  // a retry storm is harmless.
+  app.post('/api/webhooks/mpesa', (req, res) => {
+    const b = req.body || {};
+    const Body = b.Body && b.Body.stkCallback ? b.Body.stkCallback : b;
+    const r = d.transaction(() => {
+      const out = mpesa.onCallback(d, {
+        checkoutRequestId: Body.CheckoutRequestID || Body.MerchantRequestID || b.checkout_request_id,
+        mpesaRef: Body.MpesaReceiptRef || b.mpesa_ref,
+        result: Body.ResultCode !== undefined ? Body.ResultCode : b.result,
+        description: Body.ResultDesc || b.description
+      });
+      if (out.payment && out.payment.status === 'failed') {
+        maybeUnwindSale(d, { saleId: out.payment.sale_id, userId: null, note: 'provider failure' });
+      }
+      return out;
+    })();
+    res.json({ ok: true, ...r });
+  });
+
+  // Sandbox-only test hook: replay the provider callback for a pending payment.
+  app.post('/api/payments/:id/simulate-callback', me, can('settings.manage'), (req, res) => {
+    const cfg = pme.paymentConfig(d);
+    if (cfg.mpesa.mode !== 'sandbox') return res.status(400).json({ error: 'simulate-callback is available in M-Pesa sandbox mode only' });
+    const p = d.prepare('SELECT * FROM payments WHERE id = ?').get(numOrNull(req.params.id));
+    if (!p) return res.status(404).json({ error: 'payment not found' });
+    if (p.method !== 'mpesa') return res.status(400).json({ error: 'payment is not M-Pesa' });
+    const b = req.body || {};
+    const r = d.transaction(() => mpesa.onCallback(d, {
+      checkoutRequestId: p.ref,
+      mpesaRef: String(b.mpesa_ref || 'SIM' + Date.now().toString().slice(-9)),
+      result: b.result !== undefined ? b.result : 0,
+      description: b.description
+    }))();
+    dbm.audit(d, {
+      userId: req.user.id, branchId: (d.prepare('SELECT branch_id FROM sales WHERE id = ?').get(p.sale_id) || {}).branch_id,
+      action: 'payment/simulate-callback', entity: 'payment', entityId: String(p.id),
+      detail: { ref: p.ref, result: b.result !== undefined ? b.result : 0 }
+    });
+    res.json({ ok: true, ...r });
+  });
+
+  // Payment settings (owner): method toggles + M-Pesa adapter config.
+  app.get('/api/settings/payments', me, (req, res) => {
+    const cfg = pme.paymentConfig(d);
+    const out = { methods: cfg.methods, mpesa: { ...cfg.mpesa } };
+    out.mpesa.consumer_secret = cfg.mpesa.consumer_secret ? '••••' : '';
+    res.json(out);
+  });
+
+  app.put('/api/settings/payments', me, can('settings.manage'), (req, res) => {
+    const b = req.body || {};
+    if (b.mpesa && b.mpesa.consumer_secret && b.mpesa.consumer_secret !== '••••') {
+      b.mpesa = { ...b.mpesa };
+    } else if (b.mpesa) {
+      delete b.mpesa.consumer_secret; // never overwrite the secret with a mask
+    }
+    const next = d.transaction(() => pme.setPaymentConfig(d, b))();
+    dbm.audit(d, {
+      userId: req.user.id, action: 'settings/payments', entity: 'setting', entityId: 'payments',
+      detail: { mpesa_mode: next.mpesa.mode, methods: next.methods }
+    });
+    res.json({ ok: true });
+  });
+
 
   // ---- CSV import/export (products + variants + packs in one file) --------------------------------
   const CSV_COLUMNS = [
@@ -3580,7 +3941,7 @@ if (require.main === module) {
   auth.pruneSessions(db);
   app.listen(PORT, '0.0.0.0', () => {
     const s = dbm.getSetting(db, 'business', {});
-    console.log(`OpenPOS v2 (Phase 7)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
+    console.log(`OpenPOS v2 (Phase 8)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
   });
 }
 
