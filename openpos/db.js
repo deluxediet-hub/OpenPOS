@@ -890,6 +890,59 @@ function migrate(d) {
        created_at TEXT NOT NULL
      )`
   );
+
+  // ---- Phase 6: pricing engine (additive; R-PR) -----------------------------------
+  // Price rules — one row per override. Primary scope (exactly one): promo_code,
+  // customer, branch or tier; a time window (dates and/or HH:MM) may combine with any.
+  // The resolver walks the R-PR chain: promo/time → customer → branch → pack → level → default.
+  d.exec(
+    `CREATE TABLE IF NOT EXISTS price_rules (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       business_id INTEGER NOT NULL DEFAULT 1,
+       variant_id INTEGER NOT NULL REFERENCES variants(id),
+       branch_id INTEGER REFERENCES branches(id),
+       customer_id INTEGER REFERENCES customers(id),
+       tier TEXT CHECK(tier IS NULL OR tier IN ('retail','wholesale','member')),
+       promo_code TEXT,
+       price INTEGER NOT NULL,
+       valid_from TEXT,
+       valid_to TEXT,
+       time_start TEXT,
+       time_end TEXT,
+       note TEXT NOT NULL DEFAULT '',
+       active INTEGER NOT NULL DEFAULT 1,
+       created_by INTEGER,
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL
+     )`
+  );
+  d.exec('CREATE INDEX IF NOT EXISTS idx_price_rules_variant ON price_rules(variant_id, active)');
+
+  // R-PR3: append-only price history (who/when/from/to/scope). No update/delete routes.
+  d.exec(
+    `CREATE TABLE IF NOT EXISTS price_history (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       business_id INTEGER NOT NULL DEFAULT 1,
+       product_id INTEGER NOT NULL,
+       variant_id INTEGER,
+       pack_id INTEGER,
+       scope TEXT NOT NULL,
+       field TEXT NOT NULL DEFAULT 'price',
+       old_price INTEGER,
+       new_price INTEGER,
+       note TEXT NOT NULL DEFAULT '',
+       user_id INTEGER,
+       approved_by INTEGER,
+       created_at TEXT NOT NULL
+     )`
+  );
+  d.exec('CREATE INDEX IF NOT EXISTS idx_price_history_product ON price_history(product_id, id)');
+
+  // R-PR1: per-product margin floor (branch floors live in branches.settings,
+  // the global floor in settings.pricing). Frozen unit price on sale lines:
+  // written at line add (Phase 7), never altered afterwards.
+  addCol(d, 'products', 'min_margin_pct', 'INTEGER');
+  addCol(d, 'sale_items', 'unit_price', 'INTEGER');
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

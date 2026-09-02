@@ -196,12 +196,24 @@ contradicts the doc without a change-log entry.**
   invoices/payments → returns → suppliers. **71 tests green** (was 60) incl. the full
   acceptance flow; 47-step UI smoke green.
 
-### Phase 6 — Pricing Engine · Day 9
+### Phase 6 — Pricing Engine · Day 9 ✅
 - Resolution chain (promo → customer → branch → pack → level → default); branch &
   customer-specific prices; time-based prices; **minimum-margin guard** (PIN/block); manual
   override + permission; immutable price history; price frozen onto sale lines
 - **Acceptance:** same variant × 5 branches × 2 customer types × 1 promo = 11 correct
   prices; below-margin override demands manager PIN; every change leaves history.
+- **Done (Day 9):** server-side chain — promo/time → customer → branch → pack → tier →
+  default — with `source` on every answer (`GET /api/pricing/resolve`, testable with `now`).
+  `price_rules`: one primary scope (promo code / customer / branch / tier) + combinable time
+  window (date bounds and/or HH:MM of day); full CRUD, one-rule-per-scope validated at the
+  door. **Margin guard (R-PR1):** floor precedence product → branch → global settings;
+  policy `pin` or `block`; guarded on product/variant/pack/rule price writes; refusals are
+  `403 margin_pin` / `403 margin_blocked`; the approving manager is recorded. **History
+  (R-PR3):** append-only `price_history` (scope, field, old→new, user, approver, note)
+  written in the same transaction as every price change; no update/delete route. Manager
+  **Pricing** tab (EN/SW): rules, guard settings, history. Read-only `GET /api/customers`
+  (module proper in Phase 11). **83 tests green** (was 71) incl. the full acceptance grid,
+  PIN flow, block policy, floor precedence, history immutability and cashier permissions.
 
 ### Phase 7 — POS / Checkout Engine · Days 10–11
 - Barcode scan (wedge), fast search, product grid, variant picker, cart, qty, discounts

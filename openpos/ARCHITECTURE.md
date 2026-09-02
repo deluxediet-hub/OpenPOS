@@ -173,12 +173,30 @@ payment, **frozen onto the sale line**:
 
 - **R-PR1** Minimum-margin guard: a manual override that would push margin below the
   configured floor (per product or branch) requires a manager PIN (or is blocked — configurable).
+  *Done (Day 9):* floor precedence = product `min_margin_pct` → branch `settings.min_margin_pct` →
+  global `settings.pricing.min_margin_pct`; policy `settings.pricing.margin_policy` = `pin`
+  (manager/owner PIN via `pin` or `override_pin` on the same request) or `block`. Refusals are
+  `403 {code:'margin_pin'}` / `403 {code:'margin_blocked'}`. Guarded surfaces: product
+  price/wholesale/member (create + edit), variant prices, pack prices (create + edit), price-rule
+  create + edit — the approver is recorded on the resulting history row.
 - **R-PR2** Discounts are separate from prices (line discount, order discount), each permissioned,
-  each audited.
+  each audited. *Phase 7 (Day 10), at checkout.*
 - **R-PR3** `price_history` is append-only (who/when/from/to, scope). A sale line's frozen price
-  is never altered by later price changes.
+  is never altered by later price changes. *Done (Day 9):* one row per change —
+  `scope` = product / variant / pack / rule, `field`, `old_price` → `new_price`, `user_id`,
+  `approved_by` (the PIN that approved a below-margin change), `note`. No update/delete route
+  exists. Every surface that writes a price (product create/edit, variant edit, pack create/edit,
+  rule create/edit/delete) writes history in the same transaction.
 - **R-PR4** Pack ≠ duplicate product: case price can be 12× bottle price *or less*; both sell
-  from the same stock.
+  from the same stock. *Done (Day 9):* step 4 of the chain; a branch rule still outranks the pack.
+- **Done (Day 9) — resolution engine:** `GET /api/pricing/resolve?variant_id&branch_id&customer_id&pack_id&promo_code&now`
+  runs the chain above server-side and returns `{price, cost, margin_pct, floor_pct,
+  below_margin, source, source_ref, rule_id}` (`source` = promo | time | customer | branch |
+  pack | level | default). Rules = `price_rules` rows (one primary scope: promo code, customer,
+  branch or tier; a time window — dates and/or HH:MM of day — may combine with any).
+  Price is frozen onto the sale line at Phase 7 (line add) and re-validated at payment;
+  Day 9 ships the engine + guard + history + `GET /api/price-rules` CRUD + `GET /api/customers`
+  (read-only until Phase 11) + the manager **Pricing** tab (rules, guard settings, history).
 
 ### 3.3 Stock ledger (R-S) — *the heart of the system*
 
@@ -346,6 +364,7 @@ Hook points (core exposes these; modules plug in):
 | Products (flat), categories | ✓ **Phase 3 done (Day 3–4):** variants + canonical axes keys (flat product → implicit variant, additive migration), packs-as-model drawing from base stock, multiple barcodes per variant (unit/pack/custom), single `GET /api/scan/:barcode` resolving unit **and** pack (R-P3), serials, industry attribute defs in variant `meta` (R-C9), open-priced + fractional base units, CSV import/export, supplier link + reorder level. UoM kept simple (unit label + open-priced flag); full multi-UoM conversion deferred to Phase 6 pricing |
 | Stock + moves (opening/purchase/sale/adjust) | ✓ **Phase 4 done (Day 5–6):** single move engine (15 types + per-type reason codes) is the only door for quantity changes; FEFO per-batch ledger rows; serial allocation; R-S8 oversell = explicit audited manager/owner act; `stock_ledger_balances` view + integrity job (R-S7: alert, audited repair); R-S2 five-question trace API; stocktakes (per-batch + residual, variance-only moves, evidence kept); ageing + dead stock; expiry write-off |
 | Suppliers, POs, GR, supplier invoices/returns (schema stubs) | ✓ **Phase 5 done (Day 7–8), capability-gated (R-C):** suppliers (KRA PIN, terms, lead days, live balance, delete-blocked on open POs/owed money); suggested POs from 30-day sales velocity `ceil(v × (lead + cover) − stock)`; POs → partial GR with batch/serial + per-line cost at the door; receiving discrepancies (over-qty / price) pending → **reject over-receipt auto-writes the supplier return** (FEFO `return_out`, PO line restored); invoices with evidence-backed payments (R-PAY: method + channel_ref, overpay refused, dispute blocks payment); supplier balance = Σ invoices − Σ payments; per-lot purchase price history from the ledger. All quantities move through the Phase-4 move engine (`purchase` / `return_out`), so trace + integrity cover purchasing unchanged |
+| Pricing: chain, rules, guard, history | ✓ **Phase 6 done (Day 9):** server-side resolution chain (promo/time → customer → branch → pack → tier → default) with `source` on every answer; `price_rules` (one primary scope + combinable time window, HH:MM and/or date bounds); minimum-margin guard (R-PR1) on every price-writing surface — PIN or block, floors product → branch → global, approver recorded; append-only `price_history` (R-PR3) in the same transaction as the change; manager **Pricing** tab (rules, guard settings, history, EN/SW). Acceptance: same variant × 5 branches × 2 customer types + 1 promo = 11 correct prices, below-margin override demands manager PIN, every change leaves history — all in `npm test` |
 | Audit hash chain + verify | ✓ R-A1/R-A4 done at core level |
 | Sales/payments schema | Phase 8 reshapes payments into the adapter engine (schema ready: `payments`, `mpesa_log`) |
 | EN/SW core strings, dashboard, manager UI | ✓ foundation; polished in Phase 34 |
@@ -374,6 +393,12 @@ Hook points (core exposes these; modules plug in):
 
 ## 9. Change log
 
+- **2026-09-02 (v6)** — **Phase 6 implemented (Day 9):** pricing resolution engine
+  (chain + `price_rules` + time windows), minimum-margin guard (R-PR1: PIN or block,
+  floor precedence product → branch → global, approver recorded), append-only
+  `price_history` (R-PR3) wired into every price-writing surface, `GET /api/pricing/resolve`,
+  `GET/POST/PUT/DELETE /api/price-rules`, `GET /api/pricing/history`, read-only
+  `GET /api/customers`, manager Pricing tab (EN/SW). Contracts in §3.2/§6.
 - **2026-09-02 (v2)** — **Capabilities & progressive disclosure model added (R-C, §3.0)**
   per founder direction: "the POS should not feel like an ERP". Product thesis adopted
   (§1): a configurable retail operating system that starts incredibly small and grows into a

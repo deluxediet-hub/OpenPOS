@@ -349,6 +349,9 @@ function cleanProduct(p) {
     openPriced: p.open_priced ? 1 : 0,
     supplierId: numOrNull(p.supplier_id),
     reorderLevel: num(p.reorder_level),
+    minMarginPct: p.min_margin_pct === undefined || p.min_margin_pct === null || p.min_margin_pct === ''
+      ? null
+      : (Number.isFinite(Number(p.min_margin_pct)) && Number(p.min_margin_pct) >= 0 ? Number(p.min_margin_pct) : 0),
     image: String(p.image || '').trim()
   };
 }
@@ -383,7 +386,7 @@ function createApp(d) {
   app.use(express.static(path.join(__dirname, 'public')));
 
   // ---- health / status ------------------------------------------------------
-  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 5 }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 6 }));
 
   app.get('/api/setup/status', (req, res) => {
     res.json({
@@ -1072,6 +1075,13 @@ function createApp(d) {
       return res.status(400).json({ error: 'unknown supplier' });
     }
     const now = new Date().toISOString();
+    // R-PR1: below-floor guard (PIN/block) on every price being set
+    let approver = null;
+    for (const [field, price] of [['price', p.price], ['wholesale_price', p.wholesalePrice], ['member_price', p.memberPrice]]) {
+      const g = marginGuard(req, { min_margin_pct: p.minMarginPct }, null, price, p.cost);
+      if (g && g.status) return res.status(g.status).json({ code: g.code, error: g.error });
+      if (g && g.approver) approver = g.approver;
+    }
     const run = d.transaction(() => {
       const id = d
         .prepare(
@@ -1079,14 +1089,14 @@ function createApp(d) {
              (branch_id, sku, barcode, name, name_sw, category_id, brand, unit, pack_size, pack_name,
               cost, price, wholesale_price, member_price, tax_type, kra_item_code,
               age_min, requires_rx, is_controlled, track_batches, track_serials, open_priced,
-              supplier_id, reorder_level, image, active, created_at, updated_at)
-           VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+              supplier_id, reorder_level, min_margin_pct, image, active, created_at, updated_at)
+           VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
         )
         .run(
           p.sku, p.barcode, p.name, p.name_sw, p.categoryId, p.brand, p.unit, p.packSize, p.packName,
           p.cost, p.price, p.wholesalePrice, p.memberPrice, p.taxType, p.kraCode,
           p.ageMin, p.requiresRx, p.isControlled, p.trackBatches, p.trackSerials, p.openPriced,
-          p.supplierId, p.reorderLevel, p.image, now, now
+          p.supplierId, p.reorderLevel, p.minMarginPct, p.image, now, now
         ).lastInsertRowid;
       // R-P1: every product carries at least its implicit variant
       const vid = d
@@ -1096,6 +1106,10 @@ function createApp(d) {
       if (p.barcode) {
         d.prepare(`INSERT OR IGNORE INTO variant_barcodes (variant_id, barcode, kind, active) VALUES (?, ?, 'unit', 1)`)
           .run(vid, p.barcode);
+      }
+      // R-PR3: every price leaves history from the first moment
+      for (const [field, price] of [['price', p.price], ['wholesale_price', p.wholesalePrice], ['member_price', p.memberPrice]]) {
+        if (price > 0) priceHist({ id }, { variantId: vid, scope: 'product', field, oldPrice: null, newPrice: price, user: req.user, approver });
       }
       return id;
     });
@@ -1115,23 +1129,38 @@ function createApp(d) {
       const clash = d.prepare('SELECT id FROM variant_barcodes WHERE barcode = ? AND active = 1').get(merged.barcode);
       if (clash) return res.status(409).json({ error: 'barcode already in use by another product/variant' });
     }
+    // R-PR1: guard + R-PR3: history for each price that actually changes
+    const priceChanges = [
+      ['price', cur.price, merged.price],
+      ['wholesale_price', cur.wholesale_price, merged.wholesalePrice],
+      ['member_price', cur.member_price, merged.memberPrice]
+    ].filter(([, o, n]) => o !== n);
+    let approver = null;
+    for (const [field, , newPrice] of priceChanges) {
+      const g = marginGuard(req, { ...cur, min_margin_pct: merged.minMarginPct }, null, newPrice, merged.cost);
+      if (g && g.status) return res.status(g.status).json({ code: g.code, error: g.error });
+      if (g && g.approver) approver = g.approver;
+    }
     const run = d.transaction(() => {
       d.prepare(
         `UPDATE products SET sku = ?, barcode = ?, name = ?, name_sw = ?, category_id = ?, brand = ?,
           unit = ?, pack_size = ?, pack_name = ?, cost = ?, price = ?, wholesale_price = ?, member_price = ?,
           tax_type = ?, kra_item_code = ?, age_min = ?, requires_rx = ?, is_controlled = ?,
-          track_batches = ?, track_serials = ?, open_priced = ?, supplier_id = ?, reorder_level = ?, image = ?,
+          track_batches = ?, track_serials = ?, open_priced = ?, supplier_id = ?, reorder_level = ?, min_margin_pct = ?, image = ?,
           active = ?, updated_at = ? WHERE id = ?`
       ).run(
         merged.sku, merged.barcode, merged.name, merged.name_sw, merged.categoryId, merged.brand,
         merged.unit, merged.packSize, merged.packName, merged.cost, merged.price, merged.wholesalePrice,
         merged.memberPrice, merged.taxType, merged.kraCode, merged.ageMin, merged.requiresRx,
         merged.isControlled, merged.trackBatches, merged.trackSerials, merged.openPriced,
-        merged.supplierId, merged.reorderLevel, merged.image,
+        merged.supplierId, merged.reorderLevel, merged.minMarginPct, merged.image,
         b.active !== undefined ? (b.active ? 1 : 0) : cur.active,
         new Date().toISOString(),
         cur.id
       );
+      for (const [field, oldPrice, newPrice] of priceChanges) {
+        priceHist(cur, { scope: 'product', field, oldPrice, newPrice, user: req.user, approver });
+      }
       // keep the implicit variant in sync with the product's master barcode
       const iv = implicitVariant(d, cur.id);
       if (iv) {
@@ -1704,11 +1733,27 @@ function createApp(d) {
       active: b.active !== undefined ? (b.active ? 1 : 0) : v.active
     };
     if (patch.price === null && b.price !== undefined && b.price !== '') return res.status(400).json({ error: 'variant price must be a whole number of shillings' });
+    // R-PR1 + R-PR3: guard and history for the variant's concrete prices (NULL = inherit, not a price)
+    const vPriceChanges = [
+      ['price', v.price, patch.price],
+      ['wholesale_price', v.wholesale_price, patch.wholesale_price],
+      ['member_price', v.member_price, patch.member_price]
+    ].filter(([, o, n]) => o !== n && n !== null);
+    const vCost = (patch.cost !== v.cost && patch.cost != null) ? patch.cost : (v.cost != null ? v.cost : product.cost);
+    let approver = null;
+    for (const [field, , newPrice] of vPriceChanges) {
+      const g = marginGuard(req, product, null, newPrice, vCost);
+      if (g && g.status) return res.status(g.status).json({ code: g.code, error: g.error });
+      if (g && g.approver) approver = g.approver;
+    }
     d.prepare(
       `UPDATE variants SET name = ?, sku = ?, price = ?, cost = ?, wholesale_price = ?, member_price = ?,
         tax_type = ?, kra_item_code = ?, meta = ?, active = ?, updated_at = ? WHERE id = ?`
     ).run(patch.name, patch.sku, patch.price, patch.cost, patch.wholesale_price, patch.member_price,
       patch.tax_type, patch.kra_item_code, patch.meta, patch.active, new Date().toISOString(), v.id);
+    for (const [field, oldPrice, newPrice] of vPriceChanges) {
+      priceHist(product, { variantId: v.id, scope: 'variant', field, oldPrice, newPrice, user: req.user, approver });
+    }
     if (patch.active === 0) {
       d.prepare('UPDATE variant_barcodes SET active = 0 WHERE variant_id = ?').run(v.id);
       d.prepare('UPDATE packs SET active = 0 WHERE variant_id = ?').run(v.id);
@@ -1774,16 +1819,21 @@ function createApp(d) {
     if (barcode && d.prepare('SELECT id FROM variant_barcodes WHERE barcode = ? AND active = 1').get(barcode)) {
       return res.status(409).json({ error: 'barcode already in use' });
     }
+    const product = productRow(d, v.product_id);
+    const packCost = intShillings(b.cost) || 0;
+    const g = marginGuard(req, product, null, price, packCost > 0 ? packCost : Number(v.cost != null ? v.cost : product.cost || 0) * multiple);
+    if (g && g.status) return res.status(g.status).json({ code: g.code, error: g.error });
     const run = d.transaction(() => {
       const pid = d
         .prepare(`INSERT INTO packs (variant_id, name, multiple, unit, price, cost, description, active, created_at)
                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`)
-        .run(v.id, name, multiple, String(b.unit || '').trim(), price, intShillings(b.cost) || 0, String(b.description || '').trim(), new Date().toISOString())
+        .run(v.id, name, multiple, String(b.unit || '').trim(), price, packCost, String(b.description || '').trim(), new Date().toISOString())
         .lastInsertRowid;
       if (barcode) {
         d.prepare(`INSERT INTO variant_barcodes (variant_id, barcode, kind, pack_id, label, active) VALUES (?, ?, 'pack', ?, ?, 1)`)
           .run(v.id, barcode, pid, name);
       }
+      priceHist(product, { variantId: v.id, packId: pid, scope: 'pack', oldPrice: null, newPrice: price, user: req.user, approver: g && g.approver });
       return pid;
     });
     const pid = run();
@@ -1797,6 +1847,16 @@ function createApp(d) {
     const b = req.body || {};
     const price = b.price !== undefined ? intShillings(b.price) : null;
     if (b.price !== undefined && price === null) return res.status(400).json({ error: 'pack price must be a whole number of shillings' });
+    let approver = null;
+    if (b.price !== undefined) {
+      const v = d.prepare('SELECT * FROM variants WHERE id = ?').get(p.variant_id);
+      const product = productRow(d, v.product_id);
+      const newCost = b.cost !== undefined ? (intShillings(b.cost) || 0) : p.cost;
+      const g = marginGuard(req, product, null, price, newCost > 0 ? newCost : Number(v.cost != null ? v.cost : product.cost || 0) * p.multiple);
+      if (g && g.status) return res.status(g.status).json({ code: g.code, error: g.error });
+      approver = g && g.approver;
+      priceHist(product, { variantId: v.id, packId: p.id, scope: 'pack', field: 'price', oldPrice: p.price, newPrice: price, user: req.user, approver });
+    }
     d.prepare(
       `UPDATE packs SET name = ?, multiple = ?, unit = ?, price = ?, cost = ?, description = ?, active = ? WHERE id = ?`
     ).run(
@@ -2565,6 +2625,319 @@ function createApp(d) {
     res.json({ product: product.name, current_cost: product.cost, purchases: moves });
   });
 
+  // ============================================================================
+  // ---- Phase 6: pricing engine (R-PR) -------------------------------------------
+  // Resolution chain, first match wins: promo/time → customer → branch → pack →
+  // level → default. Computed server-side at line add, re-validated at payment,
+  // frozen onto the sale line (sale_items.unit_price) — later changes never touch it.
+  // ============================================================================
+  const TIERS = ['retail', 'wholesale', 'member'];
+
+  const marginPct = (price, cost) => {
+    const p = Number(price || 0);
+    if (p <= 0) return null;
+    return Math.round(((p - Number(cost || 0)) / p) * 1000) / 10;
+  };
+
+  const pricingSettings = (d) => {
+    const s = dbm.getSettings(d).pricing || {};
+    const f = Number(s.min_margin_pct);
+    return {
+      min_margin_pct: Number.isFinite(f) && f >= 0 ? f : null,
+      margin_policy: s.margin_policy === 'block' ? 'block' : 'pin'
+    };
+  };
+
+  // R-PR1 floor, most specific wins: product → branch (branches.settings) → global.
+  function marginFloor(d, product, branchId) {
+    if (product && product.min_margin_pct != null) return Number(product.min_margin_pct) || 0;
+    if (branchId) {
+      const b = d.prepare('SELECT settings FROM branches WHERE id = ?').get(branchId);
+      if (b) {
+        try {
+          const s = JSON.parse(b.settings || '{}');
+          if (s.min_margin_pct != null) return Number(s.min_margin_pct) || 0;
+        } catch { /* fall through */ }
+      }
+    }
+    return pricingSettings(d).min_margin_pct || 0;
+  }
+
+  const hasWindow = (r) => !!(r.valid_from || r.valid_to || r.time_start || r.time_end);
+
+  function ruleWindowActive(r, t) {
+    const iso = t.toISOString();
+    if (r.valid_from && iso.slice(0, 10) < r.valid_from) return false;
+    if (r.valid_to && iso.slice(0, 10) > r.valid_to) return false;
+    if (r.time_start && r.time_end) {
+      const hm = iso.slice(11, 16);
+      if (r.time_start <= r.time_end) {
+        if (hm < r.time_start || hm > r.time_end) return false;
+      } else if (!(hm >= r.time_start || hm <= r.time_end)) return false; // overnight wrap
+    }
+    return true;
+  }
+
+  function resolvePrice(d, { variantId, branchId = null, customerId = null, packId = null, promoCode = null, now = null }) {
+    const variant = d.prepare('SELECT * FROM variants WHERE id = ? AND active = 1').get(variantId);
+    if (!variant) return { error: 'unknown variant', status: 404 };
+    const product = d.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(variant.product_id);
+    if (!product) return { error: 'unknown product', status: 404 };
+    const customer = customerId ? d.prepare('SELECT * FROM customers WHERE id = ?').get(customerId) : null;
+    const pack = packId ? d.prepare('SELECT * FROM packs WHERE id = ? AND active = 1').get(packId) : null;
+    if (packId && (!pack || pack.variant_id !== variant.id)) return { error: 'pack does not belong to this variant', status: 400 };
+    const t = now ? new Date(now) : new Date();
+    if (now && Number.isNaN(t.getTime())) return { error: 'bad now timestamp', status: 400 };
+    const bId = branchId || null;
+    const cId = customer ? customer.id : null;
+    const tier = customer ? (TIERS.includes(customer.tier) ? customer.tier : 'retail') : 'retail';
+
+    const candidates = (extra, args) =>
+      d.prepare(
+        `SELECT * FROM price_rules
+          WHERE variant_id = ? AND active = 1
+            AND (branch_id IS NULL OR branch_id = ?)
+            AND (customer_id IS NULL OR customer_id = ?)
+            AND (tier IS NULL OR tier = ?)
+            ${extra}
+          ORDER BY (customer_id IS NOT NULL) DESC, (branch_id IS NOT NULL) DESC, id`
+      ).all(variant.id, bId, cId, tier, ...args);
+
+    const baseCost = variant.cost != null ? variant.cost : product.cost;
+    const finish = (price, source, sourceRef, ruleId, cost) => {
+      const p = Number(price || 0);
+      const m = marginPct(p, cost);
+      const floor = marginFloor(d, product, bId);
+      return {
+        variant_id: variant.id, product_id: product.id, product_name: product.name,
+        price: p, cost: Number(cost || 0), margin_pct: m, floor_pct: floor,
+        below_margin: m !== null && floor > 0 && m < floor - 1e-9,
+        source, source_ref: sourceRef || '', rule_id: ruleId
+      };
+    };
+
+    // 1 — active promo / time-based price (applies to variant + customer + branch)
+    for (const r of candidates('AND ((promo_code IS NOT NULL AND promo_code = ?) OR (promo_code IS NULL AND (valid_from IS NOT NULL OR valid_to IS NOT NULL OR time_start IS NOT NULL)))', [promoCode || ''])) {
+      if (ruleWindowActive(r, t)) return finish(r.price, r.promo_code ? 'promo' : 'time', r.promo_code || 'time-based', r.id);
+    }
+    // 2 — customer-specific price (deni / VIP agreement)
+    for (const r of candidates('AND customer_id IS NOT NULL AND promo_code IS NULL', [])) {
+      if (ruleWindowActive(r, t)) return finish(r.price, 'customer', `customer #${r.customer_id}`, r.id);
+    }
+    // 3 — branch price override
+    for (const r of candidates('AND branch_id IS NOT NULL AND customer_id IS NULL AND promo_code IS NULL', [])) {
+      if (ruleWindowActive(r, t)) return finish(r.price, 'branch', `branch #${r.branch_id}`, r.id);
+    }
+    // 4 — pack price (R-PR4: a case is 12× the bottle price *or less*)
+    if (pack) {
+      const packCost = pack.cost > 0 ? pack.cost : Number(baseCost || 0) * pack.multiple;
+      const out = finish(pack.price, 'pack', pack.name, null, packCost);
+      out.multiple = pack.multiple;
+      out.price_per_unit = Math.round(pack.price / pack.multiple);
+      return out;
+    }
+    // 5 — price level (customer's tier: wholesale / member)
+    if (customer && tier !== 'retail') {
+      for (const r of candidates('AND tier IS NOT NULL AND customer_id IS NULL AND promo_code IS NULL', [])) {
+        if (ruleWindowActive(r, t)) return finish(r.price, 'level', `tier ${tier}`, r.id);
+      }
+      const lvl = effPrice(product, variant, tier);
+      if (lvl > 0) return finish(lvl, 'level', `tier ${tier}`, null);
+    }
+    // 6 — default selling price
+    return finish(effPrice(product, variant, 'retail'), 'default', '', null, baseCost);
+  }
+
+  // ---- R-PR1: minimum-margin guard on manual price changes ---------------------------------
+  function findManagerByPin(pin) {
+    if (!pin || !/^\d{4,8}$/.test(String(pin))) return null;
+    const cands = d.prepare("SELECT * FROM users WHERE active = 1 AND role IN ('manager','owner')").all();
+    for (const u of cands) {
+      try { if (auth.verifyPin(String(pin), u.salt, u.pin_hash)) return u; } catch { /* next */ }
+    }
+    return null;
+  }
+
+  // null = ok · { status, code, error } = refuse · { approver } = PIN-verified override
+  function marginGuard(req, product, branchId, price, cost) {
+    if (price == null || price <= 0) return null;
+    if (cost == null || Number(cost) < 0) return null;
+    const floor = marginFloor(d, product, branchId);
+    if (!floor) return null;
+    const m = marginPct(price, cost);
+    if (m === null || m >= floor - 1e-9) return null;
+    if (pricingSettings(d).margin_policy === 'block') {
+      return { status: 403, code: 'margin_blocked', error: `${price} gives ${m}% margin, below the ${floor}% floor — overrides are blocked` };
+    }
+    const mgr = findManagerByPin((req.body && (req.body.pin || req.body.override_pin)) || '');
+    if (!mgr) return { status: 403, code: 'margin_pin', error: `${price} gives ${m}% margin, below the ${floor}% floor — a manager/owner PIN is required` };
+    return { approver: mgr, margin: m, floor };
+  }
+
+  function priceHist(product, { variantId = null, packId = null, scope, field = 'price', oldPrice = null, newPrice = null, user, approver = null, note = '' }) {
+    d.prepare(
+      `INSERT INTO price_history (product_id, variant_id, pack_id, scope, field, old_price, new_price, note, user_id, approved_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(product.id, variantId, packId, scope, field, oldPrice, newPrice, note, user ? user.id : null, approver ? approver.id : null, new Date().toISOString());
+  }
+
+  const ruleLabel = (p) => [p.promo ? `promo ${p.promo}` : null, p.branchId ? `branch ${p.branchId}` : null,
+    p.customerId ? `customer ${p.customerId}` : null, p.tier ? `tier ${p.tier}` : null,
+    (p.validFrom || p.validTo || p.timeStart) ? 'time-bound' : null].filter(Boolean).join(' · ') || 'time-bound';
+
+  // ---- pricing surface ------------------------------------------------------------------------
+  app.get('/api/pricing/resolve', me, (req, res) => {
+    const out = resolvePrice(d, {
+      variantId: numOrNull(req.query.variant_id),
+      branchId: numOrNull(req.query.branch_id),
+      customerId: numOrNull(req.query.customer_id),
+      packId: numOrNull(req.query.pack_id),
+      promoCode: req.query.promo_code ? String(req.query.promo_code).trim() : null,
+      now: req.query.now || null
+    });
+    if (out.error) return res.status(out.status).json({ error: out.error });
+    res.json(out);
+  });
+
+  function rulePayload(b) {
+    const variantId = numOrNull(b.variant_id);
+    const price = intShillings(b.price);
+    const branchId = numOrNull(b.branch_id);
+    const customerId = numOrNull(b.customer_id);
+    const tier = b.tier ? (TIERS.includes(b.tier) ? b.tier : null) : null;
+    const promo = String(b.promo_code || '').trim();
+    const validFrom = String(b.valid_from || '').trim();
+    const validTo = String(b.valid_to || '').trim();
+    const timeStart = String(b.time_start || '').trim();
+    const timeEnd = String(b.time_end || '').trim();
+    if (b.tier && !tier) return { error: 'tier must be retail, wholesale or member' };
+    if (validFrom && !/^\d{4}-\d{2}-\d{2}$/.test(validFrom)) return { error: 'valid_from must be YYYY-MM-DD' };
+    if (validTo && !/^\d{4}-\d{2}-\d{2}$/.test(validTo)) return { error: 'valid_to must be YYYY-MM-DD' };
+    if (timeStart && !/^\d{2}:\d{2}$/.test(timeStart)) return { error: 'time_start must be HH:MM' };
+    if (timeEnd && !/^\d{2}:\d{2}$/.test(timeEnd)) return { error: 'time_end must be HH:MM' };
+    if (!variantId) return { error: 'variant_id required' };
+    if (price === null) return { error: 'price required (whole shillings)' };
+    const primaries = [branchId ? 'branch' : null, customerId ? 'customer' : null, tier ? 'tier' : null].filter(Boolean);
+    if (primaries.length > 1) return { error: 'one primary scope per rule (branch, customer or tier) — a promo code and time window may combine with any' };
+    if (!primaries.length && !promo && !validFrom && !validTo && !timeStart && !timeEnd) {
+      return { error: 'a rule needs a scope: promo code, time window, customer, branch or tier' };
+    }
+    return { variantId, price, branchId, customerId, tier, promo: promo || null, validFrom: validFrom || null, validTo: validTo || null, timeStart: timeStart || null, timeEnd: timeEnd || null, note: String(b.note || '').trim() };
+  }
+
+  app.get('/api/price-rules', me, can('products.view'), (req, res) => {
+    const q = req.query;
+    const where = ['pr.active = 1'];
+    const args = [];
+    if (q.variant_id) { where.push('pr.variant_id = ?'); args.push(numOrNull(q.variant_id)); }
+    if (q.product_id) { where.push('pr.variant_id IN (SELECT id FROM variants WHERE product_id = ?)'); args.push(numOrNull(q.product_id)); }
+    res.json(
+      d.prepare(
+        `SELECT pr.*, p.name AS product_name, v.name AS variant_name, b.name AS branch_name, c.name AS customer_name
+           FROM price_rules pr
+           JOIN variants v ON v.id = pr.variant_id
+           JOIN products p ON p.id = v.product_id
+           LEFT JOIN branches b ON b.id = pr.branch_id
+           LEFT JOIN customers c ON c.id = pr.customer_id
+          ${where.length > 1 ? 'WHERE ' + where.join(' AND ') : ''}
+          ORDER BY pr.id DESC LIMIT 200`
+      ).all(...args)
+    );
+  });
+
+  app.post('/api/price-rules', me, can('products.manage'), (req, res) => {
+    const payload = rulePayload(req.body || {});
+    if (payload.error) return res.status(400).json({ error: payload.error });
+    const variant = d.prepare('SELECT * FROM variants WHERE id = ? AND active = 1').get(payload.variantId);
+    if (!variant) return res.status(404).json({ error: 'unknown variant' });
+    const product = productRow(d, variant.product_id);
+    const guard = marginGuard(req, product, payload.branchId, payload.price, variant.cost != null ? variant.cost : product.cost);
+    if (guard && guard.status) return res.status(guard.status).json({ code: guard.code, error: guard.error });
+    const t = new Date().toISOString();
+    const id = d
+      .prepare(`INSERT INTO price_rules (variant_id, branch_id, customer_id, tier, promo_code, price, valid_from, valid_to, time_start, time_end, note, active, created_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`)
+      .run(payload.variantId, payload.branchId, payload.customerId, payload.tier, payload.promo, payload.price,
+        payload.validFrom, payload.validTo, payload.timeStart, payload.timeEnd, payload.note, req.user.id, t, t)
+      .lastInsertRowid;
+    priceHist(product, { variantId: variant.id, scope: 'rule', oldPrice: null, newPrice: payload.price, user: req.user, approver: guard && guard.approver, note: ruleLabel(payload) });
+    dbm.audit(d, { userId: req.user.id, action: 'rule/create', entity: 'price_rule', entityId: String(id), detail: { ...payload, margin: guard && guard.margin } });
+    res.json({ ok: true, id });
+  });
+
+  app.put('/api/price-rules/:id', me, can('products.manage'), (req, res) => {
+    const cur = d.prepare('SELECT * FROM price_rules WHERE id = ? AND active = 1').get(numOrNull(req.params.id));
+    if (!cur) return res.status(404).json({ error: 'not found' });
+    const b = req.body || {};
+    const variant = d.prepare('SELECT * FROM variants WHERE id = ?').get(cur.variant_id);
+    const product = productRow(d, variant.product_id);
+    const price = b.price !== undefined ? intShillings(b.price) : cur.price;
+    if (b.price !== undefined && price === null) return res.status(400).json({ error: 'price must be whole shillings' });
+    for (const [k, re] of [['valid_from', /^\d{4}-\d{2}-\d{2}$/], ['valid_to', /^\d{4}-\d{2}-\d{2}$/], ['time_start', /^\d{2}:\d{2}$/], ['time_end', /^\d{2}:\d{2}$/]]) {
+      if (b[k] !== undefined && String(b[k]).trim() && !re.test(String(b[k]).trim())) return res.status(400).json({ error: `bad ${k} format` });
+    }
+    if (b.tier !== undefined && b.tier && !TIERS.includes(b.tier)) return res.status(400).json({ error: 'bad tier' });
+    const guard = b.price !== undefined ? marginGuard(req, product, b.branch_id !== undefined ? numOrNull(b.branch_id) : cur.branch_id, price, variant.cost != null ? variant.cost : product.cost) : null;
+    if (guard && guard.status) return res.status(guard.status).json({ code: guard.code, error: guard.error });
+    d.prepare(
+      `UPDATE price_rules SET branch_id = ?, customer_id = ?, tier = ?, promo_code = ?, price = ?,
+         valid_from = ?, valid_to = ?, time_start = ?, time_end = ?, note = ?, active = ?, updated_at = ? WHERE id = ?`
+    ).run(
+      b.branch_id !== undefined ? numOrNull(b.branch_id) : cur.branch_id,
+      b.customer_id !== undefined ? numOrNull(b.customer_id) : cur.customer_id,
+      b.tier !== undefined ? (b.tier ? b.tier : null) : cur.tier,
+      b.promo_code !== undefined ? (String(b.promo_code || '').trim() || null) : cur.promo_code,
+      price,
+      b.valid_from !== undefined ? (String(b.valid_from || '').trim() || null) : cur.valid_from,
+      b.valid_to !== undefined ? (String(b.valid_to || '').trim() || null) : cur.valid_to,
+      b.time_start !== undefined ? (String(b.time_start || '').trim() || null) : cur.time_start,
+      b.time_end !== undefined ? (String(b.time_end || '').trim() || null) : cur.time_end,
+      b.note !== undefined ? String(b.note).trim() : cur.note,
+      b.active !== undefined ? (b.active ? 1 : 0) : cur.active,
+      new Date().toISOString(), cur.id
+    );
+    if (b.price !== undefined) priceHist(product, { variantId: variant.id, scope: 'rule', oldPrice: cur.price, newPrice: price, user: req.user, approver: guard && guard.approver, note: 'rule update' });
+    dbm.audit(d, { userId: req.user.id, action: 'rule/update', entity: 'price_rule', entityId: String(cur.id), detail: { keys: Object.keys(b) } });
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/price-rules/:id', me, can('products.manage'), (req, res) => {
+    const cur = d.prepare('SELECT * FROM price_rules WHERE id = ? AND active = 1').get(numOrNull(req.params.id));
+    if (!cur) return res.status(404).json({ error: 'not found' });
+    const variant = d.prepare('SELECT * FROM variants WHERE id = ?').get(cur.variant_id);
+    d.prepare('UPDATE price_rules SET active = 0, updated_at = ? WHERE id = ?').run(new Date().toISOString(), cur.id);
+    priceHist(productRow(d, variant.product_id), { variantId: variant.id, scope: 'rule', oldPrice: cur.price, newPrice: null, user: req.user, note: 'rule removed' });
+    dbm.audit(d, { userId: req.user.id, action: 'rule/delete', entity: 'price_rule', entityId: String(cur.id) });
+    res.json({ ok: true });
+  });
+
+  // R-PR3 — append-only price history (who / when / from / to / scope). Evidence is readable by any signed-in user (dispute checks at the till).
+  app.get('/api/pricing/history', me, (req, res) => {
+    const q = req.query;
+    const where = [];
+    const args = [];
+    if (q.product_id) { where.push('h.product_id = ?'); args.push(numOrNull(q.product_id)); }
+    if (q.variant_id) { where.push('h.variant_id = ?'); args.push(numOrNull(q.variant_id)); }
+    const limit = Math.min(Math.max(Number(q.limit) || 100, 1), 500);
+    res.json(
+      d.prepare(
+        `SELECT h.*, p.name AS product_name, v.name AS variant_name, u.name AS user_name, a.name AS approver_name
+           FROM price_history h
+           JOIN products p ON p.id = h.product_id
+           LEFT JOIN variants v ON v.id = h.variant_id
+           LEFT JOIN users u ON u.id = h.user_id
+           LEFT JOIN users a ON a.id = h.approved_by
+          ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+          ORDER BY h.id DESC LIMIT ?`
+      ).all(...args, limit)
+    );
+  });
+
+  // Read-only customer list (the full customer module lands in Phase 11).
+  app.get('/api/customers', me, can('customers.view'), (req, res) => {
+    res.json(d.prepare('SELECT * FROM customers ORDER BY name LIMIT 500').all());
+  });
+
   // ---- CSV import/export (products + variants + packs in one file) --------------------------------
   const CSV_COLUMNS = [
     'section', 'product_id', 'product_sku', 'product_name', 'product_name_sw', 'category', 'brand',
@@ -2742,14 +3115,24 @@ function createApp(d) {
   app.put('/api/settings', me, can('settings.manage'), (req, res) => {
     const cur = dbm.getSettings(d);
     const p = req.body || {};
+    if (p.pricing && p.pricing.min_margin_pct !== undefined) {
+      const f = Number(p.pricing.min_margin_pct);
+      if (!Number.isFinite(f) || f < 0 || f > 99) return res.status(400).json({ error: 'min_margin_pct must be 0–99' });
+      p.pricing = { ...p.pricing, min_margin_pct: f };
+    }
+    if (p.pricing && p.pricing.margin_policy !== undefined && !['pin', 'block'].includes(p.pricing.margin_policy)) {
+      return res.status(400).json({ error: 'margin_policy must be pin or block' });
+    }
     const next = {
       business: { ...cur.business, ...(p.business || {}) },
       tax: { ...cur.tax, ...(p.tax || {}) },
-      receipt: { ...cur.receipt, ...(p.receipt || {}) }
+      receipt: { ...cur.receipt, ...(p.receipt || {}) },
+      pricing: { ...cur.pricing, ...(p.pricing || {}) }
     };
     dbm.setSetting(d, 'business', next.business);
     dbm.setSetting(d, 'tax', next.tax);
     dbm.setSetting(d, 'receipt', next.receipt);
+    dbm.setSetting(d, 'pricing', next.pricing);
     dbm.audit(d, { userId: req.user.id, action: 'settings/update', entity: 'settings', detail: { keys: Object.keys(p) } });
     res.json(next);
   });
@@ -2800,7 +3183,7 @@ if (require.main === module) {
   auth.pruneSessions(db);
   app.listen(PORT, '0.0.0.0', () => {
     const s = dbm.getSetting(db, 'business', {});
-    console.log(`OpenPOS v2 (Phase 5)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
+    console.log(`OpenPOS v2 (Phase 6)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
   });
 }
 

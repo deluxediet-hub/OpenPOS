@@ -1257,6 +1257,232 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(del.status, 200, 'settled supplier with closed POs deletes');
   });
 
+  // ================= Phase 6 — pricing engine (R-PR) =================
+  section('Phase 6 — pricing engine (R-PR)');
+
+  // Shared fixtures (created once, resolved many times). Live suite branches after Phase 2's delete tests: 1=Main, 2=Eastleigh only; we add three more.
+  let priceProduct, priceVariant, brs, custStd, custWhole, custVip, packId, ruleVip, rulePromo, ruleMain60;
+
+  await test('setup: 5 branches, 3 customers, chain product, rules, case pack (R-PR fixtures)', async () => {
+    brs = [1, 2];
+    for (const n of ['Acceptance BR05', 'Acceptance BR06', 'Acceptance BR07']) {
+      const nb = await authJ({ path: '/api/branches', method: 'POST', body: { name: n } });
+      assert.strictEqual(nb.status, 200, JSON.stringify(nb.body));
+      brs.push(nb.body.id);
+    }
+    const prod = await authJ({ path: '/api/products', method: 'POST', body: {
+      name: 'Chain Test', barcode: '99991', category: 'Pricing',
+      cost: 500, price: 1000, wholesale_price: 900, member_price: 850
+    } });
+    assert.strictEqual(prod.status, 200, JSON.stringify(prod.body));
+    priceProduct = prod.body.id;
+    priceVariant = d.prepare("SELECT v.id FROM variants v WHERE v.product_id = ? AND v.axes_key = '{}'").get(priceProduct).id;
+    const insC = d.prepare('INSERT INTO customers (name, phone, tier, created_at) VALUES (?, ?, ?, ?)');
+    const now = new Date().toISOString();
+    custStd = insC.run('Acct Standard', '0700000001', 'standard', now).lastInsertRowid;
+    custWhole = insC.run('Acct Wholesale', '0700000002', 'wholesale', now).lastInsertRowid;
+    custVip = insC.run('Acct VIP', '0700000003', 'standard', now).lastInsertRowid;
+    const r2 = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, branch_id: brs[1], price: 1100, name: 'Eastleigh markup' } });
+    const r3 = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, branch_id: brs[2], price: 800, name: 'Nakuru discount' } });
+    const rv = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, customer_id: custVip, price: 777, name: 'VIP rate' } });
+    const rp = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, promo_code: 'DAY9', customer_id: custVip, price: 500, name: 'DAY9 VIP promo' } });
+    assert.strictEqual(r2.status, 200, JSON.stringify(r2.body));
+    assert.strictEqual(r3.status, 200, JSON.stringify(r3.body));
+    assert.strictEqual(rv.status, 200, JSON.stringify(rv.body));
+    assert.strictEqual(rp.status, 200, JSON.stringify(rp.body));
+    ruleVip = rv.body.id;
+    rulePromo = rp.body.id;
+    const pk = await authJ({ path: `/api/variants/${priceVariant}/packs`, method: 'POST', body: { name: 'Case of 12', multiple: 12, unit: 'case', price: 11500, cost: 11000 } });
+    assert.strictEqual(pk.status, 200, JSON.stringify(pk.body));
+    packId = pk.body.id;
+  });
+
+  await test('acceptance: same variant, 5 branches, 2 customer types, 1 promo = 11 correct prices (R-PR1)', async () => {
+    const res = async (branchId, customerId, promo) => {
+      const r = await authJ({ path: `/api/pricing/resolve?product_id=${priceProduct}&variant_id=${priceVariant}&branch_id=${branchId}&customer_id=${customerId}${promo ? `&promo_code=${promo}` : ''}` });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      return r.body;
+    };
+    const grid = [];
+    for (const [bi, wantStd, wantWhole] of [[1, 1000, 900], [2, 1100, 1100], [3, 800, 800], [4, 1000, 900], [5, 1000, 900]]) {
+      const s = await res(brs[bi - 1], custStd);
+      grid.push([`BR${bi} std`, s.price, wantStd, s.source, 'default/branch']);
+      assert.strictEqual(s.price, wantStd, `BR${bi} standard: got ${s.price} want ${wantStd} (${s.source})`);
+      if (bi === 2) assert.strictEqual(s.source, 'branch');
+      const w = await res(brs[bi - 1], custWhole);
+      grid.push([`BR${bi} whole`, w.price, wantWhole, w.source, bi === 2 ? 'branch' : 'default']);
+      assert.strictEqual(w.price, wantWhole, `BR${bi} wholesale: got ${w.price} want ${wantWhole} (${w.source})`);
+      if (bi === 2) assert.strictEqual(w.source, 'branch');
+    }
+    const p = await res(brs[1], custVip, 'DAY9');
+    grid.push(['BR02 vip+DAY9', p.price, 500, p.source, 'promo']);
+    assert.strictEqual(p.price, 500, `promo: got ${p.price} want 500 (${p.source})`);
+    assert.strictEqual(p.source, 'promo');
+    assert.strictEqual(grid.length, 11, 'grid must contain 11 prices');
+  });
+
+  await test('customer-specific price beats branch override; promo beats everything (R-PR2, R-PR5)', async () => {
+    const a = await authJ({ path: `/api/pricing/resolve?product_id=${priceProduct}&variant_id=${priceVariant}&branch_id=${brs[1]}&customer_id=${custVip}` });
+    assert.strictEqual(a.status, 200);
+    assert.strictEqual(a.body.price, 777, `VIP at BR02: got ${a.body.price} (${a.body.source})`);
+    assert.strictEqual(a.body.source, 'customer');
+    const b = await authJ({ path: `/api/pricing/resolve?product_id=${priceProduct}&variant_id=${priceVariant}&branch_id=${brs[1]}&customer_id=${custVip}&promo_code=DAY9` });
+    assert.strictEqual(b.body.price, 500, `promo must win over customer rule: got ${b.body.price}`);
+    assert.strictEqual(b.body.source, 'promo');
+    const c = await authJ({ path: `/api/pricing/resolve?product_id=${priceProduct}&variant_id=${priceVariant}&branch_id=${brs[1]}&customer_id=${custStd}&promo_code=DAY9` });
+    assert.strictEqual(c.body.price, 1100, `DAY9 is VIP-only: std at BR02 got ${c.body.price}`);
+  });
+
+  await test('case pack: cheaper per unit than 12 bottles; branch rule outranks pack (R-PR4)', async () => {
+    const a = await authJ({ path: `/api/pricing/resolve?product_id=${priceProduct}&variant_id=${priceVariant}&branch_id=${brs[0]}&customer_id=${custStd}&pack_id=${packId}` });
+    assert.strictEqual(a.status, 200, JSON.stringify(a.body));
+    assert.strictEqual(a.body.price, 11500, `case at BR01: got ${a.body.price} (${a.body.source})`);
+    assert.strictEqual(a.body.source, 'pack');
+    assert.strictEqual(a.body.price_per_unit, Math.round(11500 / 12));
+    const b = await authJ({ path: `/api/pricing/resolve?product_id=${priceProduct}&variant_id=${priceVariant}&branch_id=${brs[1]}&customer_id=${custStd}&pack_id=${packId}` });
+    assert.strictEqual(b.body.price, 1100, `branch rule must outrank pack: got ${b.body.price} (${b.body.source})`);
+    assert.strictEqual(b.body.source, 'branch');
+  });
+
+  await test('time-based prices: active date window, active time window, expired ignored (R-PR6)', async () => {
+    const pad = (x) => String(x).padStart(2, '0');
+    const hm = (offsetMin) => { const t = new Date(Date.now() + offsetMin * 60000); return `${pad(t.getUTCHours())}:${pad(t.getUTCMinutes())}`; };
+    const day = (offsetDays) => new Date(Date.now() + offsetDays * 86400000).toISOString().slice(0, 10);
+    const mk = (body) => authJ({ path: '/api/price-rules', method: 'POST', body });
+    const rTime = await mk({ variant_id: priceVariant, tier: 'wholesale', price: 950, valid_from: day(-1), valid_to: day(1), name: 'Wholesale week' });
+    const rExpired = await mk({ variant_id: priceVariant, tier: 'wholesale', price: 123, valid_to: day(-1), name: 'Ended last week' });
+    const rHm = await mk({ variant_id: priceVariant, price: 700, time_start: hm(-30), time_end: hm(30), name: 'Hourly rush rate' });
+    assert.strictEqual(rTime.status, 200, JSON.stringify(rTime.body));
+    assert.strictEqual(rExpired.status, 200, JSON.stringify(rExpired.body));
+    assert.strictEqual(rHm.status, 200, JSON.stringify(rHm.body));
+    const whole = await authJ({ path: `/api/pricing/resolve?product_id=${priceProduct}&variant_id=${priceVariant}&branch_id=${brs[0]}&customer_id=${custWhole}` });
+    assert.strictEqual(whole.body.price, 950, `active date window: got ${whole.body.price} (${whole.body.source})`);
+    assert.strictEqual(whole.body.source, 'time');
+    const std = await authJ({ path: `/api/pricing/resolve?product_id=${priceProduct}&variant_id=${priceVariant}&branch_id=${brs[0]}&customer_id=${custStd}` });
+    assert.strictEqual(std.body.price, 700, `active time window: got ${std.body.price} (${std.body.source})`);
+    assert.strictEqual(std.body.source, 'time');
+    for (const id of [rTime.body.id, rExpired.body.id, rHm.body.id]) {
+      const del = await authJ({ path: `/api/price-rules/${id}`, method: 'DELETE' });
+      assert.strictEqual(del.status, 200, JSON.stringify(del.body));
+    }
+    const after = await authJ({ path: `/api/pricing/resolve?product_id=${priceProduct}&variant_id=${priceVariant}&branch_id=${brs[0]}&customer_id=${custWhole}` });
+    assert.strictEqual(after.body.price, 900, `deleted rules no longer apply: got ${after.body.price} (${after.body.source})`);
+  });
+
+  await test('margin guard: below-floor price needs manager PIN (R-PR7)', async () => {
+    const s = await authJ({ path: '/api/settings', method: 'PUT', body: { pricing: { min_margin_pct: 30, margin_policy: 'pin' } } });
+    assert.strictEqual(s.status, 200, JSON.stringify(s.body));
+    const noPin = await authJ({ path: `/api/products/${priceProduct}`, method: 'PUT', body: { price: 700 } });
+    assert.strictEqual(noPin.status, 403, `expected 403, got ${noPin.status}: ${JSON.stringify(noPin.body)}`);
+    assert.strictEqual(noPin.body.code, 'margin_pin');
+    const badPin = await authJ({ path: `/api/products/${priceProduct}`, method: 'PUT', body: { price: 700, pin: '0000' } });
+    assert.strictEqual(badPin.status, 403);
+    assert.strictEqual(badPin.body.code, 'margin_pin');
+    const ok = await authJ({ path: `/api/products/${priceProduct}`, method: 'PUT', body: { price: 700, pin: '2345' } });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.strictEqual(d.prepare('SELECT price FROM products WHERE id = ?').get(priceProduct).price, 700, 'PIN-approved 700 must be persisted');
+    const restored = await authJ({ path: `/api/products/${priceProduct}`, method: 'PUT', body: { price: 1000 } });
+    assert.strictEqual(restored.status, 200, `above floor needs no PIN: ${JSON.stringify(restored.body)}`);
+  });
+
+  await test('margin guard floors: product floor beats global; branch floor beats global (R-PR7)', async () => {
+    const perProduct = await authJ({ path: `/api/products/${priceProduct}`, method: 'PUT', body: { price: 1000, min_margin_pct: 50 } });
+    assert.strictEqual(perProduct.status, 200, JSON.stringify(perProduct.body));
+    const a = await authJ({ path: `/api/products/${priceProduct}`, method: 'PUT', body: { price: 750 } });
+    assert.strictEqual(a.status, 403, `product floor 50 > 33.3% margin: got ${a.status}`);
+    assert.strictEqual(a.body.code, 'margin_pin');
+    const aPin = await authJ({ path: `/api/products/${priceProduct}`, method: 'PUT', body: { price: 750, pin: '2345' } });
+    assert.strictEqual(aPin.status, 200, JSON.stringify(aPin.body));
+    const clearFloor = await authJ({ path: `/api/products/${priceProduct}`, method: 'PUT', body: { price: 750, min_margin_pct: null } });
+    assert.strictEqual(clearFloor.status, 200, `no product floor: global 30 < 33.3%: ${JSON.stringify(clearFloor.body)}`);
+    const branchList = (await authJ({ path: '/api/branches' })).body;
+    const prevSettings = (branchList.find((b) => b.id === brs[0]) || {}).settings || {};
+    await authJ({ path: `/api/branches/${brs[0]}`, method: 'PUT', body: { settings: { ...prevSettings, min_margin_pct: 60 } } });
+    const ruleNoPin = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, branch_id: brs[0], price: 600, name: 'Main loss-leader' } });
+    assert.strictEqual(ruleNoPin.status, 403, `branch floor 60 > 16.7%: got ${ruleNoPin.status}`);
+    assert.strictEqual(ruleNoPin.body.code, 'margin_pin');
+    const rulePin = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, branch_id: brs[0], price: 600, name: 'Main loss-leader', pin: '2345' } });
+    assert.strictEqual(rulePin.status, 200, JSON.stringify(rulePin.body));
+    ruleMain60 = rulePin.body.id;
+    await authJ({ path: `/api/price-rules/${ruleMain60}`, method: 'DELETE' });
+    await authJ({ path: `/api/branches/${brs[0]}`, method: 'PUT', body: { settings: prevSettings } });
+    const back = await authJ({ path: `/api/products/${priceProduct}`, method: 'PUT', body: { price: 1000 } });
+    assert.strictEqual(back.status, 200, JSON.stringify(back.body));
+  });
+
+  await test('margin guard: block policy refuses even a valid PIN (R-PR7)', async () => {
+    const s = await authJ({ path: '/api/settings', method: 'PUT', body: { pricing: { margin_policy: 'block' } } });
+    assert.strictEqual(s.status, 200, JSON.stringify(s.body));
+    const r = await authJ({ path: `/api/products/${priceProduct}`, method: 'PUT', body: { price: 700, pin: '2345' } });
+    assert.strictEqual(r.status, 403, `block policy must refuse: got ${r.status}`);
+    assert.strictEqual(r.body.code, 'margin_blocked');
+    const back = await authJ({ path: '/api/settings', method: 'PUT', body: { pricing: { margin_policy: 'pin' } } });
+    assert.strictEqual(back.status, 200);
+  });
+
+  await test('every price change leaves history: who, from, to, approver (R-PR3)', async () => {
+    const r = await authJ({ path: `/api/pricing/history?product_id=${priceProduct}` });
+    assert.strictEqual(r.status, 200);
+    const rows = r.body.history || r.body;
+    assert.ok(Array.isArray(rows), `history shape: ${JSON.stringify(r.body).slice(0, 200)}`);
+    assert.ok(rows.length >= 6, `expected >=6 rows (create + 4 updates + ...), got ${rows.length}`);
+    const withPin = rows.find((h) => h.new_price === 700 && h.field === 'price');
+    assert.ok(withPin, `history must contain the PIN-approved 700 change: ${JSON.stringify(rows.slice(0, 3))}`);
+    assert.ok(withPin.approved_by, `approved_by must record the manager: ${JSON.stringify(withPin)}`);
+    const createRow = rows.find((h) => h.old_price === null && h.new_price === 1000);
+    assert.ok(createRow, 'create row (null -> 1000) must be in history');
+    const upd = await authJ({ path: '/api/pricing', method: 'PUT' });
+    assert.strictEqual(upd.status, 404, 'no update route on history');
+    const del = await authJ({ path: '/api/pricing/history/1', method: 'DELETE' });
+    assert.strictEqual(del.status, 404, 'no delete route on history');
+  });
+
+  await test('price-rule CRUD leaves history rows (scope=rule)', async () => {
+    const mk = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, branch_id: brs[3], price: 970, name: 'Westlands trial' } });
+    assert.strictEqual(mk.status, 200, JSON.stringify(mk.body));
+    const id = mk.body.id;
+    const upd = await authJ({ path: `/api/price-rules/${id}`, method: 'PUT', body: { price: 960 } });
+    assert.strictEqual(upd.status, 200, JSON.stringify(upd.body));
+    await authJ({ path: `/api/price-rules/${id}`, method: 'DELETE' });
+    const rows = (await authJ({ path: `/api/pricing/history?variant_id=${priceVariant}` })).body;
+    const list = rows.history || rows;
+    const created = list.find((h) => h.scope === 'rule' && h.old_price === null && h.new_price === 970);
+    const updated = list.find((h) => h.scope === 'rule' && h.old_price === 970 && h.new_price === 960);
+    const deleted = list.find((h) => h.scope === 'rule' && h.old_price === 960 && h.new_price === null);
+    assert.ok(created && updated && deleted, `rule history rows: ${JSON.stringify(list.filter((h) => h.scope === 'rule').slice(0, 5))}`);
+  });
+
+  await test('rule validation: one primary scope; promo+tier combinable; bad values rejected', async () => {
+    const two = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, branch_id: brs[0], customer_id: custStd, price: 50 } });
+    assert.strictEqual(two.status, 400, JSON.stringify(two.body));
+    const none = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, price: 50 } });
+    assert.strictEqual(none.status, 400, JSON.stringify(none.body));
+    const badTier = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, tier: 'royal', price: 50 } });
+    assert.strictEqual(badTier.status, 400, JSON.stringify(badTier.body));
+    const badDate = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, branch_id: brs[0], price: 50, valid_to: 'someday' } });
+    assert.strictEqual(badDate.status, 400, JSON.stringify(badDate.body));
+    const combo = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, promo_code: 'X1', tier: 'wholesale', price: 1000, time_start: '08:00', time_end: '10:00' } });
+    assert.strictEqual(combo.status, 200, `promo+tier+window must be allowed: ${JSON.stringify(combo.body)}`);
+    await authJ({ path: `/api/price-rules/${combo.body.id}`, method: 'DELETE' });
+  });
+
+  await test('permissions: cashier resolves prices but cannot manage rules (R-PR9)', async () => {
+    const ck = (await authJ({ path: '/api/login', method: 'POST', body: { name: 'Cashier Jane', pin: '5678' } })).headers.get('set-cookie').split(';')[0];
+    const asCashier = (o) => fetch(`${BASE}${o.path}`, { method: o.method || 'GET', headers: { 'Content-Type': 'application/json', cookie: ck }, body: o.body ? JSON.stringify(o.body) : undefined }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
+    const ok = await asCashier({ path: `/api/pricing/resolve?product_id=${priceProduct}&variant_id=${priceVariant}&branch_id=${brs[0]}&customer_id=${custStd}` });
+    assert.strictEqual(ok.status, 200, `cashier may resolve: ${JSON.stringify(ok.body)}`);
+    const list = await asCashier({ path: '/api/price-rules' });
+    assert.strictEqual(list.status, 200, `cashier may view rules: got ${list.status}`);
+    const mk = await asCashier({ path: '/api/price-rules', method: 'POST', body: { variant_id: priceVariant, price: 1 } });
+    assert.strictEqual(mk.status, 403, `cashier create: got ${mk.status}`);
+    const upd = await asCashier({ path: `/api/price-rules/${ruleVip}`, method: 'PUT', body: { price: 1 } });
+    assert.strictEqual(upd.status, 403, `cashier update: got ${upd.status}`);
+    const delr = await asCashier({ path: `/api/price-rules/${ruleVip}`, method: 'DELETE' });
+    assert.strictEqual(delr.status, 403, `cashier delete: got ${delr.status}`);
+    const hist = await asCashier({ path: '/api/pricing/history' });
+    assert.strictEqual(hist.status, 200, `cashier reads history: got ${hist.status}`);
+  });
+
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 

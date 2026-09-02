@@ -467,6 +467,84 @@
       </div>
     </section>
 
+    <!-- ============ PRICING (Day 9 — R-PR) ============ -->
+    <section id="tab-pricing" class="hidden">
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="price_rules">Price rules</h3>
+          <span class="spacer"></span>
+          <button class="btn small" id="pr-new-btn" data-i18n="new_rule">New price rule</button>
+        </div>
+        <div id="pr-form" class="hidden" style="margin-bottom:12px;padding:10px;border:1px dashed #cbd5e1;border-radius:8px">
+          <div class="grid cols-3">
+            <label class="f"><span data-i18n="filter_product">Product</span><select id="pr-product"></select></label>
+            <label class="f"><span data-i18n="variant">Variant</span><select id="pr-variant"></select></label>
+            <label class="f"><span data-i18n="price">Price</span><input id="pr-price" type="number" min="1"></label>
+          </div>
+          <div class="grid cols-3" style="margin-top:8px">
+            <label class="f"><span data-i18n="scope">Scope</span>
+              <select id="pr-scope">
+                <option value="" data-i18n="scope_none">Whole variant</option>
+                <option value="promo" data-i18n="scope_promo">Promo code</option>
+                <option value="customer" data-i18n="scope_customer">Customer</option>
+                <option value="branch" data-i18n="scope_branch">Branch</option>
+                <option value="tier" data-i18n="scope_tier">Price level (tier)</option>
+              </select></label>
+            <label class="f hidden" id="pr-scope-promo"><span data-i18n="promo_code">Promo code</span><input id="pr-promo" placeholder="BLACK_FRIDAY"></label>
+            <label class="f hidden" id="pr-scope-customer"><span data-i18n="customers">Customers</span><select id="pr-customer"></select></label>
+            <label class="f hidden" id="pr-scope-branch"><span data-i18n="branches">Branches</span><select id="pr-branch"></select></label>
+            <label class="f hidden" id="pr-scope-tier"><span data-i18n="tier">Tier</span>
+              <select id="pr-tier"><option value="retail" data-i18n="retail">Retail</option><option value="wholesale" data-i18n="wholesale">Wholesale</option><option value="member" data-i18n="member">Member</option></select></label>
+          </div>
+          <div class="grid cols-4" style="margin-top:8px">
+            <label class="f"><span data-i18n="from_date">From</span><input id="pr-valid-from" type="date"></label>
+            <label class="f"><span data-i18n="to_date">To</span><input id="pr-valid-to" type="date"></label>
+            <label class="f"><span data-i18n="starts_at">Starts (HH:MM)</span><input id="pr-time-start" placeholder="08:00"></label>
+            <label class="f"><span data-i18n="ends_at">Ends (HH:MM)</span><input id="pr-time-end" placeholder="22:00"></label>
+          </div>
+          <div class="row" style="margin-top:8px"><button class="btn" id="pr-save" data-i18n="save_rule">Save rule</button>
+            <button class="btn ghost" id="pr-clear" data-i18n="cancel">Cancel</button>
+            <div class="msg" id="pr-form-msg" style="margin:0"></div></div>
+        </div>
+        <div style="overflow:auto">
+        <table><thead><tr>
+          <th data-i18n="name">Name</th><th data-i18n="filter_product">Product</th>
+          <th data-i18n="scope">Scope</th><th data-i18n="price">Price</th>
+          <th data-i18n="window_label">Window</th><th data-i18n="status">Status</th><th></th>
+        </tr></thead><tbody id="pr-rows"></tbody></table></div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="margin_guard">Minimum margin guard</h3>
+          <div class="msg" id="pr-margin-msg" style="margin:0"></div>
+        </div>
+        <p class="muted small" data-i18n="margin_hint">Any price that would sell below this margin needs approval — or is blocked. Floors can be set per product, per branch, and here (most specific wins).</p>
+        <div class="grid cols-3">
+          <label class="f"><span data-i18n="min_margin">Minimum margin %</span><input id="pr-min-margin" type="number" min="0" max="99"></label>
+          <label class="f"><span data-i18n="margin_policy">Policy</span>
+            <select id="pr-policy"><option value="pin" data-i18n="policy_pin">Ask for manager PIN</option><option value="block" data-i18n="policy_block">Block it</option></select></label>
+          <label class="f" style="align-self:end"><button class="btn small" id="pr-margin-save" data-i18n="save">Save changes</button></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="price_history">Price history</h3>
+          <span class="spacer"></span>
+          <select id="pr-hist-product" class="small"></select>
+          <button class="btn small" id="pr-hist-refresh" data-i18n="search">Search…</button>
+        </div>
+        <p class="muted small" data-i18n="history_hint">Every price change is kept forever — who, when, from, to, and who approved it.</p>
+        <div style="overflow:auto">
+        <table><thead><tr>
+          <th data-i18n="when">When</th><th data-i18n="filter_product">Product</th><th data-i18n="field">Field</th>
+          <th data-i18n="old">From</th><th data-i18n="newp">To</th>
+          <th data-i18n="changed_by">Changed by</th><th data-i18n="approver">Approved by</th><th data-i18n="reason">Reason</th>
+        </tr></thead><tbody id="pr-hist-rows"></tbody></table></div>
+      </div>
+    </section>
+
     <!-- ============ SETTINGS ============ -->
     <section id="tab-settings" class="hidden">
       <div class="card">
@@ -538,6 +616,7 @@ const TABS = [
   { id: 'tills',      label: 'tills',     always: true },
   { id: 'customers',  label: 'customers', always: true, badge: 'Day 15' },
   { id: 'purchasing', label: 'purchasing', cap: 'purchasing' },
+  { id: 'pricing',    label: 'pricing',    always: true },
   { id: 'staff',      label: 'staff',     cap: 'staff_roles' },
   { id: 'layout',     label: 'layout',    cap: ['multi_location', 'multi_branch'] },
   { id: 'settings',   label: 'settings',  always: true },
@@ -570,6 +649,7 @@ function selectTab(name) {
   if (name === 'staff') loadStaff();
   if (name === 'layout') loadLayout();
   if (name === 'stock') loadStock();
+  if (name === 'pricing') loadPricing();
 }
 
 async function boot() {
@@ -1552,6 +1632,153 @@ function fillCatSelects() {
   $('#p-cat').innerHTML = `<option value="">—</option>` + CATEGORIES.map((c) =>
     `<option value="${c.id}">${esc(c.name)}</option>`).join('');
 }
+
+// ================= PRICING (Day 9 — R-PR: chain, guard, history) =================
+const PR = { products: [], customers: [], variants: [], editId: null };
+
+function prScopeLabel(r) {
+  const bits = [];
+  if (r.promo_code) bits.push(`promo ${esc(r.promo_code)}`);
+  if (r.customer_name) bits.push(`${t('scope_customer')}: ${esc(r.customer_name)}`);
+  if (r.branch_name) bits.push(`${t('scope_branch')}: ${esc(r.branch_name)}`);
+  if (r.tier) bits.push(r.tier);
+  if (r.valid_from || r.valid_to || r.time_start) bits.push('⏱');
+  return bits.join(' · ') || t('scope_none');
+}
+
+function prWindowLabel(r) {
+  const bits = [];
+  if (r.valid_from || r.valid_to) bits.push(`${r.valid_from || '…'} → ${r.valid_to || '…'}`);
+  if (r.time_start || r.time_end) bits.push(`${r.time_start || '…'} → ${r.time_end || '…'}`);
+  return bits.join(', ') || '—';
+}
+
+async function loadPricingHistory() {
+  const prods = PR.products.length ? PR.products : await api('/api/products').catch(() => []);
+  if (!$('#pr-hist-product').options.length) {
+    $('#pr-hist-product').innerHTML = `<option value="">${t('all_products')}</option>` +
+      prods.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  }
+  const pid = $('#pr-hist-product').value;
+  const rows = await api(`/api/pricing/history?limit=200${pid ? `&product_id=${pid}` : ''}`).catch(() => []);
+  $('#pr-hist-rows').innerHTML = rows.map((h) => `
+    <tr>
+      <td class="mono small muted">${new Date(h.created_at).toLocaleString()}</td>
+      <td class="small">${esc(h.product_name || '')}</td>
+      <td class="small mono">${esc(h.scope)}${h.pack_id ? ` #${h.pack_id}` : ''}</td>
+      <td>${h.old_price == null ? '<span class="muted">—</span>' : fmt(h.old_price)}</td>
+      <td>${h.new_price == null ? '<span class="muted">—</span>' : fmt(h.new_price)}</td>
+      <td class="small">${esc(h.user_name || '—')}</td>
+      <td class="small">${h.approver_name ? `<span class="pill g">${esc(h.approver_name)} · ${t('pin_ok')}</span>` : '<span class="muted">—</span>'}</td>
+      <td class="small muted">${esc(h.note || '')}</td>
+    </tr>`).join('') || `<tr><td colspan="8" class="muted">${t('no_history')}</td></tr>`;
+}
+
+async function loadPricing() {
+  try {
+    [PR.products, PR.customers] = await Promise.all([
+      api('/api/products').catch(() => []),
+      api('/api/customers').catch(() => [])
+    ]);
+    if (!$('#pr-product').options.length) {
+      $('#pr-product').innerHTML = PR.products.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+    }
+    $('#pr-customer').innerHTML = PR.customers.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    if (!$('#pr-branch').options.length) {
+      $('#pr-branch').innerHTML = (BOOT.branches || []).map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+    }
+    const pricing = (BOOT.settings && BOOT.settings.pricing) || {};
+    $('#pr-min-margin').value = pricing.min_margin_pct != null ? pricing.min_margin_pct : '';
+    $('#pr-policy').value = pricing.margin_policy || 'pin';
+    const rules = await api('/api/price-rules').catch(() => []);
+    $('#pr-rows').innerHTML = rules.map((r) => `
+      <tr>
+        <td>${esc(r.product_name)}</td>
+        <td class="small">${esc(r.variant_name || '—')}</td>
+        <td class="small">${prScopeLabel(r)}</td>
+        <td>${fmt(r.price)}</td>
+        <td class="small mono muted">${prWindowLabel(r)}</td>
+        <td>${r.active ? `<span class="pill g">${t('active')}</span>` : `<span class="pill">${t('cancelled')}</span>`}</td>
+        <td><button class="btn small ghost" data-del="${r.id}">${t('delete')}</button></td>
+      </tr>`).join('') || `<tr><td colspan="7" class="muted">${t('no_rows')}</td></tr>`;
+    document.querySelectorAll('#pr-rows [data-del]').forEach((b) => {
+      b.onclick = async () => {
+        try { await api(`/api/price-rules/${b.dataset.del}`, { method: 'DELETE' }); loadPricing(); }
+        catch (e) { toast($('#pr-form-msg'), e.message, false); }
+      };
+    });
+    await loadPricingHistory();
+  } catch (e) { /* tab is best-effort */ }
+}
+
+async function prLoadVariants(productId) {
+  const vs = await api(`/api/products/${productId}/variants`).catch(() => []);
+  PR.variants = vs;
+  $('#pr-variant').innerHTML = vs.map((v) => `<option value="${v.id}">${esc(v.name || t('variant'))}</option>`).join('');
+}
+
+function prScopeSync() {
+  const s = $('#pr-scope').value;
+  $('#pr-scope-promo').classList.toggle('hidden', s !== 'promo');
+  $('#pr-scope-customer').classList.toggle('hidden', s !== 'customer');
+  $('#pr-scope-branch').classList.toggle('hidden', s !== 'branch');
+  $('#pr-scope-tier').classList.toggle('hidden', s !== 'tier');
+}
+
+function prResetForm() {
+  PR.editId = null;
+  $('#pr-form-msg').textContent = '';
+  $('#pr-price').value = '';
+  $('#pr-scope').value = '';
+  $('#pr-promo').value = '';
+  $('#pr-valid-from').value = ''; $('#pr-valid-to').value = '';
+  $('#pr-time-start').value = ''; $('#pr-time-end').value = '';
+  prScopeSync();
+}
+
+$('#pr-new-btn').onclick = async () => {
+  prResetForm();
+  $('#pr-form').classList.remove('hidden');
+  await prLoadVariants($('#pr-product').value);
+};
+$('#pr-product').onchange = () => prLoadVariants($('#pr-product').value);
+$('#pr-scope').onchange = prScopeSync;
+$('#pr-clear').onclick = () => { $('#pr-form').classList.add('hidden'); };
+
+$('#pr-save').onclick = async () => {
+  const scope = $('#pr-scope').value;
+  const body = {
+    variant_id: Number($('#pr-variant').value),
+    price: Number($('#pr-price').value),
+    valid_from: $('#pr-valid-from').value, valid_to: $('#pr-valid-to').value,
+    time_start: $('#pr-time-start').value.trim(), time_end: $('#pr-time-end').value.trim()
+  };
+  if (scope === 'promo') body.promo_code = $('#pr-promo').value.trim();
+  if (scope === 'customer') body.customer_id = Number($('#pr-customer').value) || null;
+  if (scope === 'branch') body.branch_id = Number($('#pr-branch').value) || null;
+  if (scope === 'tier') body.tier = $('#pr-tier').value;
+  if (PR.editId) delete body.variant_id;
+  try {
+    if (PR.editId) await api(`/api/price-rules/${PR.editId}`, { method: 'PUT', body });
+    else await api('/api/price-rules', { method: 'POST', body });
+    toast($('#pr-form-msg'), t('rule_saved'), true);
+    $('#pr-form').classList.add('hidden');
+    loadPricing();
+  } catch (e) { toast($('#pr-form-msg'), e.message, false); }
+};
+
+$('#pr-margin-save').onclick = async () => {
+  const mm = $('#pr-min-margin').value;
+  const pricing = { margin_policy: $('#pr-policy').value };
+  if (mm !== '') pricing.min_margin_pct = Number(mm);
+  try {
+    await api('/api/settings', { method: 'PUT', body: { pricing } });
+    toast($('#pr-margin-msg'), t('save_ok'), true);
+  } catch (e) { toast($('#pr-margin-msg'), e.message, false); }
+};
+
+$('#pr-hist-refresh').onclick = loadPricingHistory;
+$('#pr-hist-product').onchange = loadPricingHistory;
 
 // ================= PURCHASING (capability: purchasing) =================
 const PU = { sups: [], pos: [], invs: [], srs: [], products: [], curPO: null };
