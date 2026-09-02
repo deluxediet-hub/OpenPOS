@@ -34,15 +34,43 @@ npm test         # unit (money/VAT) + full API flow on a temp DB
 
 ## Build status
 
+**Architecture contract:** [`ARCHITECTURE.md`](ARCHITECTURE.md) — entity hierarchy and
+universal rules (product/variant/pack/batch, pricing chain, stock-as-ledger, payment
+adapters, branch isolation, auditability, offline rules, core vs modules).
+**Roadmap:** `../OPENPOS_PLAN.md` — 35 phases / 60 days.
+
 | Phase | Days | What |
 |---|---|---|
-| 1 | 1–4 | Foundation: onboarding ✓ · security ✓ · catalog ✓ · till (Day 3) · payments/returns/printing (Day 4) |
-| 2 | 5–8 | Compliance: eTIMS VSCU + CUIN/QR queue · M-Pesa Daraja STK + C2B · reconciliation |
-| 3 | 9–12 | Multi-branch: transfers, purchasing/POs, reports v1 |
-| 4 | 13–16 | Verticals: chemist (FEFO/Rx/controlled register) · spirits (21+ gate) · boutique · promos |
-| 5 | 17–20 | Customers + kodisha credit · loyalty/gift cards · SMS/WhatsApp · back office |
-| 6 | 21–24 | Offline hardening · analytics · full i18n · docs + 3-branch demo |
+| 1 | 1 | Product architecture & rules ✅ |
+| 2 | 2 | Business/tenancy foundation: locations, registers, warehouses, permissions |
+| 3–4 | 3–4 | Universal product engine (variants, packs, barcodes, units) |
+| 5–6 | 5–6 | Stock ledger & inventory (append-only moves, reason codes) |
+| 7–8 | 7–8 | Purchasing & suppliers (POs, GR, discrepancies, suggested POs) |
+| 9 | 9 | Pricing engine (resolution chain, margin guards, history) |
+| 10–11 | 10–11 | POS / checkout engine |
+| 12 | 12 | Payment engine (adapters: cash/M-Pesa/card/bank/deni) |
+| 13 | 13 | Shifts & till control |
+| 14 | 14 | Sales lifecycle, returns & exchanges |
+| 15 | 15 | Customers & deni (credit) system |
+| 16–17 | 16–17 | Multi-branch OS (transfers, comparisons, role visibility) |
+| 13 | 18 | Stock-taking, shrinkage & reconciliation |
+| 14 | 19 | Expenses & business finance |
+| 15 | 20–21 | Reporting & BI (4 role dashboards) |
+| 16 | 22–23 | Kenyan integration layer (real M-Pesa + eTIMS VSCU) |
+| 17 | 24–25 | Offline-first sync architecture |
+| 18 | 26–27 | Industry module framework |
+| 19–23 | 28–34 | Modules: spirits · boutique · pharmacy · mini-mart · hardware/electronics/cosmetics/footwear |
+| 24 | 35 | Promotions, loyalty & marketing |
+| 25 | 36 | WhatsApp & customer commerce |
+| 26 | 37–38 | Online store / omni-channel |
+| 27 | 39 | Hardware & peripheral layer |
+| 28 | 40 | Security, audit & fraud controls |
+| 29 | 41–42 | Owner intelligence |
+| 31 | 43–45 | Testing with real Kenyan businesses |
+| 32 | 46–48 | Performance, security & production hardening |
+| 33 | 49–50 | Deployment & SaaS layer |
+| 34 | 51–53 | Final UX / product polish |
+| 35 | 54–60 | Pilot release (5 real businesses) |
 
-Day 1 (this increment): skeleton, schema v1, first-run onboarding, scrypt PIN auth with
-rate-limit + lockout, DB-backed sessions, branches, catalog, categories, staff, settings,
-hash-chained audit log, dashboard, EN/SW core strings.
+**Built so far:** foundation code (Day 0) — onboarding, secure PIN auth, schema v1, manager
+UI, dashboard, EN/SW core, 24 tests green — plus Day 1 architecture.

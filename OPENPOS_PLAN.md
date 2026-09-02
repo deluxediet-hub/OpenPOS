@@ -1,306 +1,403 @@
 # OpenPOS v2 — Plan & Roadmap
-**"A POS for every Kenyan shop, any number of branches."**
+**"A POS for every Kenyan shop — any number of branches."**
 
-> Name: **OpenPOS v2** (white-label; branding, receipt layout and store name configurable per business)
->
-> Build is phased: one "day" (one tested, demonstrable increment) at a time. Status: PLAN / Day 1.
+> Status: **Day 1 of 60 complete.** Roadmap restructured 2026-09-02 to the founder's
+> 35-phase directive. The engineering contract is **`openpos/ARCHITECTURE.md`** — every
+> phase implements it; rule changes go through its change log.
 
 ---
 
 ## 1. Vision
 
-One system that a wine & spirits shop, a chemist, a boutique, a general shop (duka), a hardware
-store or a salon can run out of the box — **any number of branches under one roof**, with the
-Kenyan compliance layer (KRA eTIMS + M-Pesa) built in, not bolted on. It borrows the proven
-concepts from OpenPOS (first-run onboarding, PIN roles with manager escalation, Z-reports,
-shift float reconciliation, daypart pricing, gift cards & loyalty, tabs, offline-first
-SQLite) and adds what the Kenyan market actually demands (multi-branch, real M-Pesa, eTIMS,
-vertical trade templates, credit/kodisha, Swahili).
+One system that runs **1 branch or 100**, in **any trade** (duka, wines & spirits, boutique,
+chemist, hardware, electronics, cosmetics, footwear, mini-mart…), with the Kenyan compliance
+layer (KRA **eTIMS** + **M-Pesa**) built in as adapters, offline-first by design, and a
+**module framework** so the next industry costs ≤ 1 build-day to add.
 
-### Why this wins (positioning from research)
-The market's entry ticket is four things, and most local products only do two of them:
-1. **KRA eTIMS invoice on every sale** (CUIN + QR printed, transmitted; 48h offline queue)
-2. **M-Pesa reconciliation** (Daraja STK push + C2B paybill/till, idempotent callbacks)
-3. **Selling offline** (internet drops → till keeps working; syncs after)
-4. **Thermal printing** (80mm ESC/POS receipts + drawer kick)
+The build philosophy (agreed 2026-09-02):
 
-Nobody combines all four with **"any trade, any number of branches, own your data, English +
-Swahili, no subscription lock-in."** That is the wedge.
+1. **Define before we build** — architecture & universal rules first (Phase 1, done).
+2. **Engines before UI** — product, stock, pricing, payments, shifts, finance are server-side
+   engines with APIs; the UI is a thin client.
+3. **Core + modules** — the core never knows its trade; industry behaviour is a module.
+4. **Kenya-first adapters** — M-Pesa and eTIMS are pluggable adapters over clean engines, not
+   checkout-specific hacks.
+5. **Break it on real businesses** before polish, then pilot five.
 
-### What we deliberately are NOT
-- Not a restaurant table-service POS first (that's OpenPOS' job; restaurant becomes one trade
-  template later — tables/KDS can be added from OpenPOS).
-- Not a full accounting ERP in v1 (we produce VAT summaries, P&L-lite and eTIMS-ready data).
-- Not a multi-tenant SaaS in v1 (one install = one business, unlimited branches — exactly how a
-  Kenyan chain actually deploys: a cheap PC or small server per site).
+### Market entry ticket (why this wins)
+1. **KRA eTIMS invoice on every sale** (CUIN + QR; 48h offline queue) — mandatory for every
+   business since 1 Jan 2024; KRA's 2026 validation engine cross-checks returns against eTIMS.
+2. **M-Pesa reconciliation** (Daraja STK + C2B till/paybill/Pochi, idempotent callbacks) —
+   the #1 daily pain; native reconciliation is now a major differentiator.
+3. **Selling offline** (till never stops; syncs after).
+4. **Thermal printing + replaceable hardware** (no proprietary terminal lock-in).
+5. **Shrinkage/movement visibility** — Kenyan competitors (esp. wines & spirits) compete
+   explicitly on exactly-this audit trail.
+6. **Unified inventory for POS + WhatsApp/online selling** — increasingly a competitive
+   requirement.
 
----
+## 2. Competitor & compliance research (Sept 2026)
 
-## 2. Market & competitor research (Sept 2026)
-
-| Product | Price (KES/mo) | Strengths | Weaknesses / gap we exploit |
-|---|---|---|---|
-| **sell.ke** | 0 / 2,999 / 6,999 | E-commerce + POS + M-Pesa STK + eTIMS receipts, offline, multi-branch, Airtel, WhatsApp sharing | E-commerce-first; POS is secondary; one vertical mindset |
-| **Veira** | 2,999 / 5,999 / 9,999 | eTIMS-certified, offline-first, Daraja Till/Paybill/Pochi + card, free terminal, pharmacy edition w/ expiries | Paid only, newer brand, per-vertical focus |
-| **Mkufunzi POS** | 2,500 / 5,000+ | eTIMS, payroll (PAYE/NSSF/SHA), WhatsApp concierge, AI copilot, accounting | Heavy ERP; breadth over depth at till |
-| **Cute Profit** | varies | eTIMS + M-Pesa automation; vertical editions incl. **wines & spirits (anti-theft stock control)**, **chemist (batch/expiry)**, agrovet, electronics (IMEI) | Accounting-brand; POS is a module |
-| **PharmaPOS / Zameda** | up to ~5,999 | FEFO, batch/expiry, prescriptions, **SHA/NHIF claims**, PPB-aligned controlled register | Pharmacy-only; not a general shop system |
-| **Loyverse** | Free (add-ons) | Offline POS, multi-location, very fast cashier | No native eTIMS, M-Pesa via 3rd party, no Kenyan verticals |
-| **Duka Track / RetailWings / Amtel** | 999–8,500 | Cloud POS/ERP, credit sales, multi-branch | Generic African cloud; offline & compliance shallow |
-| **SimbaPOS / JiPOS / NomadPOS** | varies | Restaurant/hotel niches, multi-store | Single-industry |
-
-**Read-across:** the local incumbents all lead with "eTIMS + M-Pesa"; the differentiators that
-sell are **per-trade depth** (chemist FEFO, spirits age-gate + anti-theft, duka kodisha),
-**multi-branch consolidation**, **offline**, and **price**.
-
-### Compliance facts that shape the build
-- **eTIMS is mandatory for every business** (since 1 Jan 2024, VAT-registered or not). KRA's
-  2026 validation engine cross-checks returns against eTIMS data; non-compliance penalties
-  reported at KES 50,000/month up to KES 1M / 3 years.
-  - Every invoice needs: seller KRA PIN, sequential unique number, buyer PIN (B2B > KES 50k),
-    item details **with KRA item classification code**, correct tax type (16% / zero / exempt),
-    VAT broken out, date+time, and the **KRA control number (CUIN) + QR** returned on
-    transmission.
-  - POS-grade integration path = **VSCU (Virtual Sales Control Unit) API**: transmit on sale,
-    print CUIN + QR, queue offline invoices and resubmit (KRA allows a 48h offline window).
-- **M-Pesa (Daraja)**: STK push ("Lipa Na M-Pesa Online") for counter checkout; C2B for
-  Paybill/Till (incl. Pochi la Biashara); B2C for payouts/refunds; Reversal; Account Balance.
-  - Sandbox: shortcode `174379`, test phone `254708374149`. Production: KYB + 2–10 day
-    approval + IP whitelisting.
-  - **The trap:** the sync response ≠ payment. Must store `CheckoutRequestID`, wait for the
-    callback, handle it **idempotently** (Safaricom retries), then flip the sale.
-- **Pharmacy (PPB/GDP guidelines)**: FEFO is mandatory for stock rotation; batch/lot + expiry
-  captured at receipt; prescription/patient records; **controlled-drug register** (records kept
-  5 years for narcotics, 2 years others); PPB product registration tracking; SHA (legacy NHIF)
-  claim capture at the counter.
-- **Wines & spirits**: legal purchase age **21+** (Liquor Control Act); no sales to intoxicated
-  persons; excise duty applies on top of VAT; theft is the #1 loss driver → per-terminal audit.
-- **General shop**: credit sales (kodisha) are core; barcodes everywhere; open-priced goods
-  (price/kg + scale); KES + 16% VAT where registered.
-
----
-
-## 3. Product definition
-
-**OpenPOS v2** = offline-first, local-server POS + back office. One install = one business
-(1..N branches, unlimited). Runs on any cheap PC or Raspberry-Pi-class box; Node 18+,
-Express + SQLite (better-sqlite3), plain-ES frontend, **no build step** (inherit OpenPOS).
-Everything the till needs is local; the cloud is only used when online (eTIMS, M-Pesa, SMS).
-
-### Trade templates (onboarding picks one; modules toggle on)
-| Template | Extra modules enabled |
-|---|---|
-| **Duka (general shop)** | Credit/kodisha, open-price (price/kg) items, barcodes, supplier POs |
-| **Wines & Spirits** | 21+ age gate at checkout, anti-theft flags + per-terminal audit, pack sales (btl/6×/case), wholesale price list, excise notes |
-| **Chemist / Pharmacy** | Batch + expiry + FEFO at till, expiry alerts 90/60/30d, expired-stock sale block, prescription ledger, controlled-drug register, SHA/NHIF claim fields, PPB registration tracking |
-| **Boutique** | Variants (size/colour), brands, collections, alterations/services, layaway |
-| **Hardware / Wholesale** | Tiered/bulk pricing, customer credit, delivery notes |
-| **Restaurant** (later phase) | Tables, KDS, service-charge VAT rules (ported from OpenPOS) |
-
-### Feature matrix (everything, and where it lands)
-
-| Area | Features | Phase |
+| Product | Price (KES/mo) | Notes |
 |---|---|---|
-| **Setup** | First-run wizard (business, KRA PIN, VAT reg status, 16% VAT, trade template, owner PIN, sample data per trade); per-branch settings; branding (logo, receipt footer); EN/Swahili UI | 1, 5, 7 |
-| **Security** | PIN + password auth, salted scrypt hashes, login rate-limit + lockout, session expiry, role matrix (Owner/Manager/Cashier/Staff), manager-PIN escalation for discounts/voids/refunds, tamper-evident audit log (hash chain), HTTPS option | 1 |
-| **Multi-branch** | Unlimited branches; branch-scoped stock/pricing/staff/terminals; per-branch VAT status; per-branch price overrides; consolidated vs per-branch dashboards & reports; HQ view of all branches | 3 |
-| **Catalog** | Products w/ SKU + barcode + KRA item code + tax type; unlimited categories (age-restricted / Rx flags on category or product); brands; units & packs (each/6×/case); variants (size/colour); per-branch price overrides; image; CSV bulk import; active/discontinued | 1 |
-| **Inventory** | Stock per branch; moves ledger (purchase/sale/transfer/adjust/damage/return); reorder points + low-stock alerts; batch/lot + expiry (FEFO pick); stocktake (cycle count) w/ variance approval; FIFO cost valuation; expiry reports; recall lookup by batch; dead stock | 1, 4 |
-| **Purchasing** | Suppliers (KRA PIN, terms); purchase orders (manual + auto-suggest from reorder); partial receiving with batch/expiry capture; supplier statements & payments; 3-way match-lite | 3 |
-| **POS till** | Grid + search + barcode-scan (keyboard-wedge); suspend/resume; line & order discounts (manager PIN); customer attach; credit sale to account; age verification gate (21+ / 18+); Rx check (chemist); open-price weight entry; split payments; part-payments; gift card & loyalty as tender; receipt: ESC/POS 58/80mm print + screen + WhatsApp/email/SMS share; happy-hour/daypart pricing; promotions (BOGO, % off, bundle, coupon codes) | 1, 4 |
-| **Payments** | Cash (server-computed change, quick notes); **M-Pesa Daraja STK** (pending→callback state machine, idempotent, reconciliation); M-Pesa manual (code) fallback; C2B paybill/till webhook; card (EDC ref); B2C refunds (optional); store credit; per-branch float | 2 |
-| **Shifts & Z** | Shift open w/ float, payouts, expected-vs-counted, variance flag; Z-report (per branch, per shift); cash drawer kick | 1 |
-| **eTIMS** | Sequential invoice numbers per branch; VSCU driver (online transmit + CUIN + QR); **offline queue w/ 48h window & auto-resubmit**; B2B buyer-PIN capture > KES 50k; credit/debit notes; eTIMS dashboard (transmitted/pending/failed); VAT summary for ITR6/ITR11 | 2 |
-| **Customers** | Phone-first profiles; purchase history; **kodisha credit accounts** (limit, ledger, repayments, aging, credit hold); loyalty points (earn/redeem); tiers; birthday; statements; SMS/WhatsApp notifications | 5 |
-| **Gift cards** | Sell/reload/redeem/expiry, balance guards, overspend protection, audit | 4 |
-| **Back office** | Staff mgmt (PINs, roles, branch assignment, disable); timeclock; staff performance; terminal/hardware config (printer IP, drawer, scanner); per-terminal audit (anti-theft) | 3, 5 |
-| **Reporting** | Daily sales per branch + consolidated; sales by item/category/tax/payment; top products; gross profit (P&L-lite); stock valuation; low stock; expiry; credit aging; cashier performance; VAT summary; eTIMS reconciliation; CSV + PDF export | 3, 6 |
-| **Analytics** | Today vs last week; category & cashier performance; days-of-inventory; dead stock; margin trends; branch-vs-branch comparison | 6 |
-| **Data & ops** | Nightly SQLite backup + full export; CSV import (products, customers); EN/Swahili; label/price-tag printing | 6 |
-| **Offline-first** | Local server + SQLite; till never blocks on cloud; M-Pesa/eTIMS queue + auto-sync; sync-status banner | 1 (hardened in 6) |
-| **Phase 7 (optional)** | Cloud sync for geographically remote branches; online ordering (WhatsApp/website); payroll (PAYE/NSSF/SHA); full ledger + bank rec; Android terminal app | 7 |
+| sell.ke | 0 / 2,999 / 6,999 | E-com + POS + M-Pesa STK + eTIMS receipts, offline, multi-branch |
+| Veira | 2,999–9,999 | eTIMS-certified, offline-first, Daraja Till/Paybill/Pochi + card, free terminal |
+| Mkufunzi POS | 2,500–5,000+ | eTIMS, payroll (PAYE/NSSF/SHA), WhatsApp concierge, AI copilot |
+| Cute Profit | varies | Vertical editions: **wines & spirits (anti-theft)**, **chemist (batch/expiry)**, agrovet, electronics (IMEI) |
+| PharmaPOS / Zameda | up to ~5,999 | FEFO, batch/expiry, prescriptions, **SHA/NHIF claims**, PPB-aligned controlled register |
+| Loyverse | Free | Offline, multi-location — no native eTIMS |
+| Duka Track / RetailWings / Amtel | 999–8,500 | Generic cloud POS/ERP, credit sales, multi-branch |
 
----
+**Compliance facts that shape the build**
+- **eTIMS**: every invoice needs seller KRA PIN, sequential unique number, buyer PIN (B2B >
+  KES 50k), item details **with KRA item classification code**, correct tax type (16%/zero/
+  exempt), VAT broken out, date+time, and **KRA control number (CUIN) + QR** from
+  transmission. POS-grade path = **VSCU API** (Virtual Sales Control Unit); KRA allows a
+  48h offline submission window; KRA describes development → testing → vetting → certification
+  for third-party integrators (hence: **POS tax engine ≠ eTIMS adapter**, Phase 16).
+- **M-Pesa (Daraja)**: STK push for counter checkout; C2B for Paybill/Till (incl. Pochi la
+  Biashara); B2C payouts/refunds; Reversal; Balance. Sandbox shortcode `174379`, test phone
+  `254708374149`; production approval 2–10 days + IP whitelisting. **The sync response ≠
+  payment** — store `CheckoutRequestID`, wait for callback, handle it idempotently.
+- **Pharmacy (PPB/GDP)**: FEFO mandatory; batch/lot + expiry at receipt; prescription/patient
+  records; controlled-drug register (5y narcotics / 2y other retention); PPB product
+  registration tracking; SHA (legacy NHIF) claims.
+- **Wines & spirits**: 21+ purchase age (Liquor Control Act); excise on top of VAT; theft is
+  the #1 loss driver → per-register audit + stocktaking focus.
+- **Kenyan retail**: deni (informal customer credit) is a core workflow, not an edge case;
+  barcodes + open-priced (weigh/measure) goods everywhere; KES + 16% VAT where registered.
 
-## 4. Architecture
+## 3. Product definition (summary — full contract in ARCHITECTURE.md)
 
-```
-openpos/
-├── server.js            # Express app: API + static + webhooks (/api/webhooks/mpesa)
-├── db.js                # better-sqlite3 schema + migrations + seed helpers
-├── lib/
-│   ├── auth.js          # scrypt PINs, sessions (DB-backed, expiry), rate limit + lockout
-│   ├── money.js         # integer-peso KES math (no float money), VAT engine
-│   ├── etims/
-│   │   ├── driver.js    # interface: transmit(invoice) → {cuin, qr}
-│   │   ├── vscu.js      # real KRA VSCU API (online)
-│   │   └── mock.js      # deterministic sandbox driver (dev/tests, same interface)
-│   ├── mpesa/
-│   │   ├── driver.js    # interface: stkPush(), c2bCallback(), status()
-│   │   ├── daraja.js    # real Daraja (sandbox + prod, OAuth token cache)
-│   │   └── manual.js    # code-entry fallback mode
-│   ├── escpos.js        # 58/80mm ESC/POS commands, QR (KRA), drawer kick
-│   └── audit.js         # hash-chained audit log
-├── public/              # plain ES modules, no build step
-│   ├── index.html       # shell: login / onboarding / dashboard
-│   ├── pos.html         # till
-│   ├── manager.html     # catalog, stock, purchasing, customers, branches
-│   ├── reports.html     # all reports + eTIMS dashboard
-│   └── assets/...
-├── test/run.js          # node test runner (unit + API + UI via jsdom, like OpenPOS)
-└── data/                # SQLite (gitignored)
-```
+- **Hierarchy:** Business → Branch (1..N) → Location (1..N) → Register (1..N); warehouses are
+  locations; departments slice a branch.
+- **Product engine:** product → variants (size/colour/shade) → packs (case/carton) →
+  batches (FEFO) / serials (IMEI) — one engine for *sugar 1kg*, *dress red/M*, *Jameson
+  btl/case*, *paracetamol batch*.
+- **Stock:** append-only move ledger (every change = who/why/where/reason); balances are a
+  view over it; expected-vs-physical always answerable.
+- **Payments:** independent engine with adapters (cash, M-Pesa, card, bank, credit/deni,
+  store credit, other) — split/partial/deposits/refunds; light double-entry ledger so
+  "what happened to the money" is always computable.
+- **Branch isolation** enforced server-side: owner = everything, manager = branch,
+  cashier = register.
+- **Audit:** hash-chained; anything financially significant leaves evidence; corrections are
+  new documents, never edits.
+- **Offline-first:** local is the default; cloud is an addition (outbox sync, 48h eTIMS
+  window, idempotent M-Pesa).
+- **Modules:** spirits, boutique, pharmacy, mini-mart, hardware, electronics, cosmetics,
+  footwear — configuration + hooks, never core forks.
+- **Languages:** English + Swahili (core strings done Day 1; full coverage Phase 34).
 
-**Key design rules**
-1. **Multi-tenant-lite:** every table is `branch_id`-scoped; `NULL branch_id` = global/HQ.
-   Roles + branch assignment enforced server-side on every route.
-2. **Money in integer shillings** (no floats anywhere). VAT engine: 16% standard / zero /
-   exempt per line; tax type + KRA item code travel on the product.
-3. **Payment = state machine**, never confirm-on-click:
-   `pending → (STK request) → awaiting_callback → confirmed | failed | timeout`, with
-   idempotent webhook handling + `mpesa_log` for reconciliation.
-4. **eTIMS = queue, never block the till:** sale closes, invoice enters `etims_queue`;
-   driver (VSCU or mock) transmits when online; CUIN + QR attach to the sale and (re)print.
-   Offline sales get sequential "offline" numbering that maps into KRA's 48h window.
-5. **FEFO at the till:** when a tracked product is sold, the batch with earliest expiry is
-   auto-selected (and shown); expired batches are unsellable, period.
-6. **Audit hash chain:** each audit row hashes prev row → voids/discounts/refunds tamper-evident.
-7. **Drivers are swappable** (mock ↔ real) behind interfaces: the whole compliance layer is
-   testable in sandbox with zero credentials.
+## 4. Roadmap — 35 phases / 60 days
 
-### Data model (v1 tables)
-`settings, branches, users, categories, products, price_overrides, stock, stock_moves, batches,
-transfers, transfer_items, suppliers, purchase_orders, po_items, goods_receipts, gr_items,
-sales, sale_items, payments, mpesa_log, shifts, shift_payouts, customers, customer_ledger,
-gift_cards, loyalty_log, promos, prescriptions, controlled_register, audit_log, counters,
-etims_queue, timeclock, terminals`
+> Each day = one shippable increment with tests. Acceptance criteria are the definition of
+> done per phase. (Existing Day-1 code = pre-architecture foundation; see build log.)
 
----
+### Phase 1 — Product Architecture & Rules · Day 1 ✅
+Entity hierarchy + universal rules defined (ARCHITECTURE.md): what a product/variant/pack/
+batch/unit is; how prices resolve; how stock is owned and moved; how sales/refunds affect
+stock; how payments affect financial records; branch isolation; auditability; what must work
+offline; core vs industry-specific. **Acceptance: every later phase cites rules; no phase
+contradicts the doc without a change-log entry.**
 
-## 5. Phase plan (day by day)
+### Phase 2 — Business & Tenancy Foundation · Day 2
+- Schema: business (tenant, `business_id` hook) → branch → **location** → **register**;
+  warehouses (location flag); departments; migration of Day-1 branches/terminals
+- Users, roles, **fine-grained permission matrix** (30+ permissions; role = named set;
+  per-user override), assignment to branch/location/register
+- Business settings · branch settings · tax settings (VAT, classes) · receipt settings ·
+  currency
+- **Acceptance:** create 1 business / 3 branches / 2 locations / 2 registers / 1 warehouse;
+  a cashier on one register sees only that location's data (tested via API); 1→100 branches
+  needs no architectural change.
 
-> Each "Day" = one working increment, tested, demonstrable. Phases = weeks.
+### Phase 3 — Universal Product Engine · Days 3–4
+- Variants + axes (size/colour/shade/custom); multiple barcodes per variant; UoM
+  (pcs/kg/L/m/roll/job); **packs/cases/cartons with own barcode + price**; cost; price
+  levels (retail/wholesale/member); tax category; supplier link; reorder fields; images;
+  custom attributes; CSV import/export incl. variants; KRA item code per variant
+- Migration: flat Day-1 products → implicit single variants
+- **Acceptance:** sugar 1kg (open price) · dress red/M (variant barcodes) · Jameson
+  bottle/case (pack) · paracetamol batch — all in ONE engine, sellable, stockable,
+  barcodable.
 
-### Phase 1 — Foundation: a shop you can open & sell in (Days 1–4)
-- **Day 1 — Skeleton + onboarding + security core.** Scaffold `openpos/`; schema v1; server up;
-  first-run wizard (business name, KRA PIN, VAT reg status, 16%, trade template, owner PIN,
-  optional sample data); PIN auth (scrypt) + login rate-limit/lockout + expiring DB-backed
-  sessions; branch "HQ + Branch 1" created. *Demo: run it, onboard, log in.*
-- **Day 2 — Catalog & stock engine.** Categories, products (barcode, cost, price, tax type,
-  KRA item code, packs), CSV import; stock per branch + moves ledger; manual receiving;
-  low-stock view. *Demo: import 200 SKUs, take stock, see alerts.*
-- **Day 3 — The till (v1).** POS screen (grid/search/barcode field), cart, line edit,
-  discounts w/ manager-PIN, cash payment (server-computed change), shift open/close (float,
-  payouts, expected vs counted), Z-report, on-screen receipt. *Demo: full cash sale + Z.*
-- **Day 4 — Payments depth + returns + printing.** Split & part payments, refunds/returns with
-  restock + audit, suspend/resume tickets, ESC/POS printing (80mm + QR-ready) + drawer kick,
-  per-terminal config; per-branch daily sales report. *Demo: split M-Pesa-manual + cash sale,
-  printed receipt, refund, restock verified.*
+### Phase 4 — Stock Ledger & Inventory Engine · Days 5–6
+- Append-only moves with **reason codes**: purchase, sale, return in/out, damage, expiry,
+  adjustment, stocktake, transfer, conversion, opening, refund
+- Batch & serial allocation per move; balances = view over ledger + **integrity job**
+  (view vs recomputed); expected-vs-physical queries; stock ageing; dead stock
+- **Acceptance:** for any variant/branch the five questions (source? who? why? where now?
+  what should physically be there?) answer via API; ledger rebuild == balance over 10k moves.
 
-### Phase 2 — Kenyan compliance core (Days 5–8)
-- **Day 5 — eTIMS (queue + mock driver).** Invoice model (sequential per-branch numbers, tax
-  classes, item codes); offline queue w/ 48h window; mock VSCU driver (deterministic CUIN +
-  QR payload); receipt shows CUIN + KRA QR; eTIMS dashboard (transmitted/pending/failed).
-- **Day 6 — eTIMS (real VSCU + edge cases).** Real VSCU driver (auth, transmit, retry,
-  resubmit); B2B buyer-PIN capture > KES 50k; credit/debit notes; VAT summary report;
-  sandbox tests.
-- **Day 7 — M-Pesa (STK state machine).** `mpesa_log` + state machine; Daraja STK driver
-  (sandbox 174379); idempotent callback webhook; sale only closes on `confirmed`; manual
-  M-Pesa mode fallback; payment↔invoice reconciliation view.
-- **Day 8 — M-Pesa (C2B + card + recon report).** C2B paybill/till webhook (Pochi la Biashara
-  flow), card (EDC ref), M-Pesa daily reconciliation report per branch (expected vs received),
-  end-to-end sandbox tests.
+### Phase 5 — Purchasing & Supplier System · Days 7–8
+- Suppliers (contacts, KRA PIN, terms), supplier price lists, POs (manual + **suggested from
+  sales velocity × cover days × lead time**), goods received (partial, batch/serial capture,
+  cost), **receiving discrepancies** (price/qty, approval), supplier invoices, supplier
+  returns, supplier payments & balances, purchase price history, cost changes
+- **Acceptance:** PO → partial GR with 2 discrepancies → invoice → payment, balances correct
+  everywhere; suggested PO for top-20 fast movers matches the velocity math.
 
-### Phase 3 — Multi-branch + purchasing (Days 9–12)
-- **Day 9 — Branches everywhere.** Branch CRUD; per-branch staff assignment & terminals;
-  per-branch price overrides; per-branch VAT status; consolidated dashboard (all branches);
-  per-branch vs consolidated reports; branch picker on till.
-- **Day 10 — Inter-branch stock.** Transfers: request → approve → ship → receive (partial ok);
-  stock moves between branches; cross-branch low-stock suggestion ("branch 2 has 40 — pull?").
-- **Day 11 — Purchasing.** Suppliers; POs (manual + auto-suggest from reorder points);
-  partial receiving with cost/batch capture; supplier statements & payments.
-- **Day 12 — Reports v1.** P&L-lite per branch + consolidated (revenue, COGS, gross profit);
-  FIFO stock valuation; VAT summary; payment mix; CSV + PDF export.
+### Phase 6 — Pricing Engine · Day 9
+- Resolution chain (promo → customer → branch → pack → level → default); branch &
+  customer-specific prices; time-based prices; **minimum-margin guard** (PIN/block); manual
+  override + permission; immutable price history; price frozen onto sale lines
+- **Acceptance:** same variant × 5 branches × 2 customer types × 1 promo = 11 correct
+  prices; below-margin override demands manager PIN; every change leaves history.
 
-### Phase 4 — Trade verticals (Days 13–16)
-- **Day 13 — Chemist.** Batch+expiry on receipt; **FEFO pick at till**; expired blocks;
-  expiry alerts 90/60/30; prescription ledger; controlled-drug register (PPB-aligned, 5y/2y
-  retention flags); SHA/NHIF claim capture; PPB registration tracking + alerts.
-- **Day 14 — Wines & spirits.** 21+ age gate (confirm + ID note) on restricted categories;
-  anti-theft flags w/ per-terminal audit report; pack sales (btl/6×/case); wholesale price
-  list; excise/VAT notes on receipts & reports.
-- **Day 15 — Boutique + duka extras.** Variants (size/colour), brands, collections;
-  alterations/services; open-price items (price/kg + weight at till); layaway (simple);
-  gift cards (sell/reload/redeem/expiry, guards) + loyalty points (earn/redeem as tender).
-- **Day 16 — Promotions engine.** Promo types: % off, fixed off, BOGO, bundle, time-based
-  (happy hour); coupon codes; applies-to (product/category/all); guards (max uses, customer
-  tiers); promo performance report.
+### Phase 7 — POS / Checkout Engine · Days 10–11
+- Barcode scan (wedge), fast search, product grid, variant picker, cart, qty, discounts
+  (permissioned), customer attach, **hold/resume**, **quote → invoice**, receipt (print/
+  screen/HTML), notes, cashier assignment, supervisor approvals, multi-register concurrent
+- **Design target: a cashier learns basic selling in minutes** — complexity stays behind the scenes
+- **Acceptance:** new cashier's first unaided sale < 5 min; two registers selling
+  concurrently without conflict; quote→invoice converts stock exactly once.
 
-### Phase 5 — Customers, credit, comms, back office (Days 17–20)
-- **Day 17 — Customers + kodisha.** Phone-first profiles; attach to sale; purchase history;
-  **credit accounts**: limit, sale-on-account, repayments (cash/M-Pesa), ledger, aging report,
-  credit hold at till.
-- **Day 18 — Loyalty & gift cards (full).** Points earn rules + redeem-as-tender; gift card
-  lifecycle + statements; customer 360 page.
-- **Day 19 — Notifications.** SMS/WhatsApp receipt + templates (pluggable provider: Africa's
-  Talking / Twilio, with local-log fallback); daily sales digest to owner; low-stock & expiry
-  digests.
-- **Day 20 — Back office.** Staff mgmt UI (PINs, roles, branch assignment, disable);
-  timeclock + labour report; terminal/hardware config; anti-theft per-terminal audit;
-  permission audit trail review.
+### Phase 8 — Payment Engine · Day 12
+- Adapter architecture: cash · M-Pesa · card · bank · credit(deni) · store credit · other
+- State machine, idempotency, split/partial payments, deposits, refunds-to-original-method,
+  per-method reconcile status, light ledger writes; M-Pesa adapter = sandbox-ready + manual
+  code mode
+- **Acceptance:** split cash+M-Pesa(sandbox)+card sale reconciles; duplicate callback = no
+  double-count; zero M-Pesa-specific code in checkout (adapter only).
 
-### Phase 6 — Scale & polish (Days 21–24)
-- **Day 21 — Offline hardening + backup.** Online/offline detection & sync banner; M-Pesa +
-  eTIMS queue auto-resubmit (48h window respected); nightly SQLite backup + full data export;
-  restore drill.
-- **Day 22 — Analytics.** Dashboard: today vs last week; top products; category & cashier
-  performance; days-of-inventory; dead stock; margin trends; branch-vs-branch comparison.
-- **Day 23 — i18n + templates + labels.** Full **English/Swahili** UI + receipt language;
-  sample-data templates for every trade (duka, chemist, spirits, boutique, hardware);
-  label/price-tag printing.
-- **Day 24 — Hardening & docs.** E2E suite green; security pass (session, rate limit, hash
-  chain, HTTPS option); INSTALL + USER GUIDE (EN/SW) + API doc; launcher scripts (.sh/.bat);
-  polished demo seed (3 branches: duka + chemist + spirits chain).
+### Phase 9 — Cashier Shifts & Till Control · Day 13
+- Opening float, shift, cash movements, paid-outs, expenses, refunds, expected vs actual,
+  variance, **shift handover**, closure; per-cashier accountability (discounts, refunds,
+  voids, adjustments attributed)
+- **Acceptance:** shift math ties to the shilling (float + cash sales − paid-outs − refunds +
+  credit = expected); a 200 KSh shortage flags with the responsible cashier; handover makes a
+  clean audit break. (OpenPOS v1's shift/reconciliation concepts ported here.)
 
-### Phase 7 — Beyond (Day 25+, optional)
-Cloud sync for remote branches · online ordering (WhatsApp/website) · payroll
-(PAYE/NSSF/SHA) · full double-entry ledger + bank rec · Android terminal app · restaurant
-template (tables + KDS ported from OpenPOS).
+### Phase 10 — Sales Lifecycle, Returns & Exchanges · Day 14
+- Sale → payment → receipt → return → refund → exchange → cancellation → void → correction,
+  with approval rules; full/partial returns (restock flags, batch/serial-aware), exchanges
+  (price diff settles), wrong-item/damaged reason codes, customer/store credit,
+  credit/debit notes (eTIMS-ready numbering)
+- **Acceptance:** partial return of a batch item lands in the right batch; exchange price
+  diff settles; every correction references its original; nothing edited in place.
 
----
+### Phase 11 — Customer / Deni / Credit System · Day 15
+- Phone-first profiles, home branch, purchase history, **credit (deni) accounts**: limits,
+  credit sales from checkout, repayments (via payment engine), ledger + **statements**
+  (print/WhatsApp), deposits, store credit, customer-specific pricing link, notes
+- **Acceptance:** over-limit deni demands manager; M-Pesa repayment reduces balance and
+  reconciles; printed statement matches the ledger to the shilling.
 
-## 6. Risks & mitigations
+### Phase 12 — Multi-Branch Operating System · Days 16–17
+- Branch dashboards; branch users/permissions/stock/pricing/expenses/suppliers/customers;
+  **inter-branch & inter-location transfers**: request → approve → dispatch → receive,
+  partial, discrepancies; transfer history; branch comparison
+- Visibility hierarchy everywhere: **owner = entire business, manager = their branch,
+  cashier = their register**
+- **Acceptance:** 3-location transfer with 1 discrepancy fully traceable; branch manager's
+  API cannot read branch 2 (tested); comparison report ranks branches by sales/margin/shrinkage.
+
+### Phase 13 — Stock-Taking, Shrinkage & Reconciliation · Day 18
+- Full / partial / **blind** counts, expected-vs-actual, variance with **reason codes**,
+  approval, recount, historical takes, **shrinkage analysis** (by branch/location/variant/
+  reason), employee/branch attribution
+- **Acceptance:** blind take of 50 variants → approved → stock adjusted with reasons;
+  shrinkage report names top-10 disappearing SKUs per branch; ledger integrity job clean.
+
+### Phase 14 — Expenses & Business Finance · Day 19
+- Expenses (categories, branch, register, payment), petty cash, cash movements, supplier
+  balances, customer balances; **daily financial summary**: gross sales → discounts → net →
+  COGS → gross profit → expenses → **net operating profit**; P&L-lite per branch +
+  consolidated
+- **Objective: the owner understands what happened to the money.**
+- **Acceptance:** daily sheet ties (net − COGS − expenses = NOP) against independently
+  computed ledger totals; petty cash reconciles.
+
+### Phase 15 — Reporting & Business Intelligence · Days 20–21
+Reports answer business questions, not "Sales Report": what sold · what made money · what
+isn't selling · what's losing margin · best/worst cashier · best/worst branch · what's
+disappearing · what's tied up in slow stock · what to reorder · where discounts/refunds/cash
+shortages are unusually high. Four dashboards — **Owner / Branch Manager / Stock Manager /
+Cashier** — with radically different information density. CSV + PDF export.
+- **Acceptance:** every report drills down; dashboards load < 1s on 100k rows.
+
+### Phase 16 — Kenyan Integration Layer · Days 22–23
+**M-Pesa (real Daraja):** STK push, till, paybill (+Pochi), confirmation callbacks
+(idempotent), **automatic matching to sales**, reconciliation report, B2C refunds,
+sandbox→production switch in settings.
+**eTIMS (real VSCU adapter over the Phase-8 queue):** transmit on sale, CUIN + QR on receipt,
+KRA item-code validation, 48h offline window + resubmit, B2B buyer PIN > KES 50k,
+credit/debit notes, eTIMS dashboard. **The POS tax engine (Phases 6/8) stays separated from
+the eTIMS adapter** — KRA's third-party integration path (development → testing → vetting →
+certification) runs against the adapter, not the core.
+- **Acceptance:** sandbox sale → STK → callback → sale confirmed + eTIMS transmitted +
+  CUIN/QR printed; kill network → 2 offline sales → restore → both transmit inside the
+  window; M-Pesa recon = zero unmatched.
+
+### Phase 17 — Offline-First Architecture · Days 24–25
+Local transaction storage → local queue (outbox) → synchronization engine → conflict
+detection (single-writer + first-ack rule, R-O4) → retry with backoff → server
+acknowledgement → reconciliation; sync-status banner.
+**Test matrix:** internet dies during checkout · after payment · app closes mid-sale ·
+device restarts · two tills sell simultaneously · stock changes offline · branch offline for
+hours · connection returns.
+- **Acceptance:** matrix green — zero lost or duplicated money or stock.
+
+### Phase 18 — Industry Module Framework · Days 26–27
+Module loader + hook points (product fields, checkout gates, stock rules, reports,
+permissions, UI parts, template data); business trade selection; demo module proves the loader.
+- **Acceptance:** a new industry = fields + hooks + reports, **no core changes**.
+
+### Phase 19 — Wines & Spirits Module · Day 28
+Bottle/pack/case/carton economics (supplier case cost vs bottle margin), high-value stock
+flags + per-register audit, fast-movers + weekend demand, cashier restrictions (manager PIN
+for premium lines), deni controls, stock-counting focus, shrinkage reports.
+
+### Phase 20 — Boutique / Fashion Module · Day 29
+Style/size/colour **variant matrix** (variant-level inventory is fundamental, not optional),
+brand/season/collection, variant barcodes & pricing, **markdown/clearance engine**,
+size sell-through, colour sell-through, dead fashion stock.
+
+### Phase 21 — Pharmacy Module · Days 30–31
+Batch + expiry + **FEFO enforced at the till**, expiry alerts 90/60/30, batch traceability +
+**recall drill**, controlled-substance register + permissions, wholesale pharmacy sales,
+prescription workflows (where legally appropriate), insurance claim capture (SHA/NHIF, where
+applicable), cold-chain capability, PPB registration tracking.
+
+### Phase 22 — General Retail / Mini-Mart Module · Day 32
+Grocery/household/FMCG, bulk, weight-based (scale) products, pack products, barcode + PLU,
+promotions, fast-checkout mode, reorder rules, supplier purchasing.
+
+### Phase 23 — Other Retail Modules · Days 33–34
+**Hardware** (metres/kg/pieces/boxes/rolls, cut-from-roll) · **Electronics** (serial/IMEI,
+warranties, repairs, customer ownership) · **Cosmetics** (shades/sizes/brands/bundles/expiry)
+· **Footwear** (size/colour/width/style, variant barcodes).
+- **Acceptance:** each module's core flow end-to-end on sample data; **adding the next
+  industry costs ≤ 1 day.**
+
+### Phase 24 — Promotions, Loyalty & Marketing · Day 35
+BOGO, bundles, %/fixed discounts, customer-specific offers, coupons, campaigns, loyalty
+points (earn/redeem as tender), VIP/tiers, customer segmentation.
+- **Acceptance:** promos apply correctly through every payment method; loyalty-as-tender
+  can't overspend; a segment drives a campaign.
+
+### Phase 25 — WhatsApp & Customer Commerce · Day 36
+Pluggable comms provider (Africa's Talking / Twilio + local-log fallback): WhatsApp/SMS
+receipts, payment requests (STK deep link), customer statements, product sharing, mini
+catalogue, **order-through-WhatsApp → the same sales engine**, notifications, low-stock/order
+workflows. **Physical POS stock + online/social selling = one inventory.**
+- **Acceptance:** a WhatsApp order becomes a real sale decrementing the same stock; receipt
+  arrives < 10s after payment.
+
+### Phase 26 — Online Store / Omni-Channel · Days 37–38 (architecture-first, optional)
+One catalogue, one inventory, one customer; orders from POS / website / WhatsApp / manual /
+future marketplaces → **same sales & inventory engine**; simple PWA storefront; stock
+reservation window.
+- **Acceptance:** web order + POS sale for the last unit — one wins, the other fails
+  gracefully; one customer profile across channels.
+
+### Phase 27 — Hardware & Peripheral Layer · Day 39
+Barcode scanners, thermal printers (58/80mm ESC/POS, QR, drawer kick), cash drawers, customer
+displays, label/price-tag printers, **scales** (serial protocol), POS terminals — per-register
+device profiles, device test utility. **Hardware is replaceable, not proprietary.**
+- **Acceptance:** swap printer/drawer/scanner via config only; label print matches shelf price.
+
+### Phase 28 — Security, Audit & Fraud Controls · Day 40
+Deep pass: audit log review, login history + failed-login detection, device sessions,
+permission re-audit, approval workflows, **dedicated logs** (price overrides, discounts,
+refunds, stock adjustments, voids/deletions, cash variance), branch restrictions, HTTPS
+option, backup encryption.
+**Philosophy: anything financially important leaves evidence.**
+- **Acceptance:** 50-scenario financial-action audit finds no action without a trail.
+
+### Phase 29 — Owner Intelligence · Days 41–42
+Decision-making layer on real data: what's tying up the most cash (stock × cost × age) ·
+which branch underperforms (vs its own history) · actual profit yesterday · why is variance
+high at Branch 2 (root-cause drill) · what to reorder now · which cashier over-discounts ·
+what hasn't sold in 60 days · anomaly flags (z-score on discounts/refunds/variance/velocity)
+· daily owner digest (SMS/WhatsApp).
+- **Acceptance:** every intelligence item = a real query with thresholds + alerts, no chatbot.
+
+### Phase 30 — AI Business Assistant · later
+Answers questions and flags anomalies **from the database** (structured queries, cited rows)
+against actual sales, stock, customers, purchases, expenses, branches, payments, profit, staff
+activity — not hallucinated advice. Built after pilot data exists.
+
+### Phase 31 — Testing With Real Kenyan Businesses · Days 43–45
+Scenario suites per trade (duka, wines & spirits, boutique, pharmacy, multi-branch retailer)
++ **deliberate breakage:** internet outage · duplicate payment · partial refund · wrong stock
+count · cash shortage · M-Pesa mismatch · transfer not received · price changed after sale ·
+product returned · expired batch · variant sold from another branch · device dies mid-
+transaction.
+- **Acceptance:** breakage matrix passes or yields filed, severity-rated defects; 3 real
+  businesses run live transactions in test mode.
+
+### Phase 32 — Performance, Security & Production Hardening · Days 46–48
+DB optimisation + query perf (100k rows / 10k moves), API perf budgets, offline sync stress,
+**backup / restore / DR drill**, security + permission review, error handling + structured
+logging, monitoring (health, error rate), data export, **migration strategy** (schema
+versioning, safe additive migrations).
+- **Acceptance:** p95 checkout < 300ms local; restore drill < 30 min; chaos tests lose nothing.
+
+### Phase 33 — Deployment & SaaS Layer · Days 49–50
+Business registration (self-serve), **subscriptions** (plans, usage limits, billing via
+M-Pesa, trials), **tenant isolation live** (`business_id`), admin console, versioning + safe
+auto-updates, backups.
+- **Acceptance:** two businesses side-by-side in one DB with zero data crossing; trial →
+  paid via M-Pesa.
+
+### Phase 34 — Final UX / Product Polish · Days 51–53
+Only after functionality works: cashier speed (keyboard-first, shortcuts), responsive +
+tablet, search speed, onboarding v2, empty states, error messages, **receipt design per
+trade**, dashboards, accessibility, full EN/SW coverage (UI + receipts).
+
+### Phase 35 — Pilot Release · Days 54–60
+Deploy to **five** real businesses: 1 general shop · 1 wines & spirits · 1 boutique ·
+1 pharmacy · 1 multi-branch. Observe: what they use, what they ignore, what confuses
+cashiers, what owners check daily, where stock goes wrong, where payments go wrong, which
+reports they actually need. Refine before broad release.
+- **Acceptance:** pilots complete a full trading week; top-10 friction points fixed;
+  go/no-go on broad release with evidence.
+
+## 5. Risks & mitigations
+
 | Risk | Mitigation |
 |---|---|
-| KRA VSCU sandbox access is fiddly | Mock driver first (Day 5) — product works end-to-end in dev; real driver swaps in Day 6 without touching till logic |
-| Daraja production approval (2–10 days) | Sandbox flows from Day 7; manual M-Pesa mode keeps shops trading pre-approval |
-| Scope creep ("all features") | Phased plan is the contract; Phase 7 items explicitly deferred |
-| Offline + multi-branch sync complexity | v1 = one server, unlimited branches (LAN). Cloud sync is Phase 7 |
-| Money bugs | Integer shillings + unit tests on every tax/total path (inherit OpenPOS' tested VAT logic) |
-| Printing hardware variance | ESC/POS abstraction with 58/80mm modes + screen-receipt fallback |
+| 60 days is ambitious | Phase order is the contract; each day ships; scope trims only via the change log |
+| eTIMS certification (KRA vetting) is external to our clock | Adapter + sandbox by Day 23; certification runs parallel to pilot; businesses may also run their own KRA account meanwhile (open question §8.4) |
+| M-Pesa production approval (2–10 days) | Submit the moment sandbox is green (Day 23); manual M-Pesa mode keeps shops trading pre-approval |
+| Variants/locations refactor touches early schema | All migrations additive + tested (Day 2); flat products → implicit variants |
+| Offline + money = danger zone | Outbox + idempotency + reconciliation are non-negotiable; tested in Phases 17/31/32 |
+| Multi-branch at a distance (different towns) | Phase 17 sync engine + Phase 33 cloud relay; same-town branches run one server |
+| Single developer velocity | Engines are API-first → UI work is cheap; modules keep industries cheap |
 
-## 7. Definition of done (v1, Day 24)
-A 3-branch demo business (duka + chemist + wines & spirits chain) that: sells offline with
-barcode + cash + M-Pesa STK (sandbox) + card; prints eTIMS receipts (mock CUIN/QR) that
-transmit when online; enforces 21+ at the spirits counter, FEFO + expiry blocks at the chemist,
-kodisha credit at the duka; shows the owner one consolidated dashboard and per-branch P&L;
-backs up nightly; speaks English and Swahili.
+## 6. Definition of done (Day 60)
+
+Five pilot businesses trading on the product; eTIMS + M-Pesa live (production where approvals
+landed); offline test matrix and breakage matrix green; EN/SW complete; onboarding < 15 min;
+first sale < 5 min unaided; documentation + DR drill done.
+
+## 7. Decisions & change log
+
+- **2026-09-02 — Founder directive: 35-phase / 60-day restructure adopted.** Changes vs the
+  original 24-day plan:
+  1. Architecture & rules defined **before** heavy coding (Phase 1) — ARCHITECTURE.md written.
+  2. **Location layer added** between branch and register; warehouses as locations.
+  3. Payments become an **independent adapter subsystem** (Phase 8) — M-Pesa never touches
+     checkout code.
+  4. Real M-Pesa/eTIMS wiring moves to **Days 22–23**; their interfaces, tax engine and mock
+     drivers are built earlier (Phases 6/8/10) so Day 22–23 is wiring + sandbox, not invention.
+  5. **Deni** formalised as a first-class customer credit system (Phase 11).
+  6. Industries become a **module framework** (Phase 18) with per-industry modules 19–23.
+  7. **Multi-tenant hook** (`business_id`) from Day 2; SaaS layer Day 49–50.
+  8. Real-business testing (43–45) precedes polish (51–53) and pilot (54–60).
 
 ## 8. Build log
 
-### Day 1 (2026-09-02) — SKELETON + ONBOARDING + SECURITY CORE ✅
-- Scaffold `openpos/` (Node 22 built-in `node:sqlite` — zero native deps; Express 5; plain-ES UI, no build step)
-- Full multi-branch schema v1 (28 tables: branches, products, stock, batches, transfers, POs,
-  sales, payments, mpesa_log, shifts, customers, gift cards, promos, prescriptions,
-  controlled register, eTIMS queue, audit, …)
-- First-run onboarding wizard: business → KRA/VAT → first branch → owner PIN + trade template
-  with sample data (duka / chemist / spirits / boutique / hardware)
-- Security: scrypt PIN hashes, DB-backed sessions (12h), login rate-limit (5 fails → 5 min
-  lock, per staff + per IP), server-side role checks, hash-chained tamper-evident audit log
-  with verify endpoint
-- Manager back office: products (flags: Rx, controlled, batches, open-price, min-age),
-  categories, branches (unlimited), staff, settings, audit
-- Dashboard: today's sales, product/branch counts, shift status, online/offline badge,
-  EN/SW core strings + language toggle
-- Test suite: 24 tests (money/VAT math, full API flow, lockout, RBAC, audit-chain tamper) — **all green**
-- Live-verified: onboarded a wines & spirits shop end-to-end (21+ age flags in catalog)
+### Pre-architecture foundation (2026-09-02, "Day 0")
+- Scaffold `openpos/` (Node 22 built-in `node:sqlite` — zero native deps; Express 5; plain-ES
+  UI, no build step); 28-table schema; first-run onboarding wizard; scrypt PIN auth +
+  rate-limit/lockout; DB-backed sessions; branches/terminals; products (flat); stock + moves;
+  hash-chained audit + verify; EN/SW core strings; dashboard; manager UI; **24 tests green**;
+  live-verified spirits onboarding (21+ flags). Kept as foundation per ARCHITECTURE.md §6.
+
+### Day 1 — Product Architecture & Rules ✅ (2026-09-02)
+- ARCHITECTURE.md v1: entity hierarchy (Business→Branch→Location→Register), universal rules
+  R-P/R-PR/R-S/R-PAY/R-B/R-A/R-O/R-M, module framework shape, tenancy hook, open questions.
+- Roadmap restructured to 35 phases / 60 days (this document).
