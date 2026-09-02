@@ -808,6 +808,88 @@ function migrate(d) {
      )`
   );
   d.exec('CREATE INDEX IF NOT EXISTS idx_st_lines ON stocktake_lines(stocktake_id)');
+
+  // ---- Phase 5: purchasing & suppliers (additive) ----------------------------------
+  addCol(d, 'suppliers', 'lead_days', 'INTEGER NOT NULL DEFAULT 7');
+  addCol(d, 'po_items', 'variant_id', 'INTEGER');
+  addCol(d, 'po_items', 'discrepancy', "TEXT NOT NULL DEFAULT '' CHECK(discrepancy IN ('', 'over_qty', 'price'))");
+  addCol(d, 'po_items', 'discrepancy_status', "TEXT NOT NULL DEFAULT '' CHECK(discrepancy_status IN ('', 'pending', 'approved', 'rejected'))");
+  addCol(d, 'gr_items', 'variant_id', 'INTEGER');
+  addCol(d, 'gr_items', 'po_id', 'INTEGER');
+  d.exec('UPDATE gr_items SET po_id = (SELECT po_id FROM goods_receipts WHERE id = gr_items.gr_id) WHERE po_id IS NULL');
+  d.exec(
+    `UPDATE po_items SET variant_id = (
+       SELECT v.id FROM variants v WHERE v.product_id = po_items.product_id
+         AND v.axes_key = '{}' ORDER BY v.id LIMIT 1
+     ) WHERE variant_id IS NULL`
+  );
+  d.exec(
+    `UPDATE gr_items SET variant_id = (
+       SELECT v.id FROM variants v WHERE v.product_id = gr_items.product_id
+         AND v.axes_key = '{}' ORDER BY v.id LIMIT 1
+     ) WHERE variant_id IS NULL`
+  );
+  d.exec('CREATE INDEX IF NOT EXISTS idx_po_items_po ON po_items(po_id)');
+  d.exec('CREATE INDEX IF NOT EXISTS idx_gr_items_gr ON gr_items(gr_id)');
+
+  // Invoices we owe suppliers + payments we make (evidence per payment, R-PAY principle).
+  d.exec(
+    `CREATE TABLE IF NOT EXISTS supplier_invoices (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       ref TEXT NOT NULL,
+       supplier_ref TEXT NOT NULL DEFAULT '',
+       supplier_id INTEGER NOT NULL,
+       po_id INTEGER,
+       amount INTEGER NOT NULL,
+       vat INTEGER NOT NULL DEFAULT 0,
+       status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','partial','paid','disputed')),
+       due_date TEXT,
+       note TEXT NOT NULL DEFAULT '',
+       created_by INTEGER,
+       created_at TEXT NOT NULL,
+       paid_at TEXT
+     )`
+  );
+  d.exec(
+    `CREATE TABLE IF NOT EXISTS invoice_payments (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       invoice_id INTEGER NOT NULL,
+       amount INTEGER NOT NULL,
+       method TEXT NOT NULL DEFAULT 'bank',
+       channel_ref TEXT NOT NULL DEFAULT '',
+       note TEXT NOT NULL DEFAULT '',
+       created_by INTEGER,
+       created_at TEXT NOT NULL
+     )`
+  );
+  d.exec('CREATE INDEX IF NOT EXISTS idx_inv_payments ON invoice_payments(invoice_id)');
+
+  // The invoice/payment tables pre-date Phase 5 (Day-1 shape); evolve them additively.
+  addCol(d, 'supplier_invoices', 'paid', 'INTEGER NOT NULL DEFAULT 0');
+  addCol(d, 'supplier_invoices', 'outstanding', 'INTEGER NOT NULL DEFAULT 0');
+  d.exec("UPDATE supplier_invoices SET outstanding = amount - COALESCE(paid, 0) WHERE status IN ('open', 'partial', 'disputed')");
+  addCol(d, 'invoice_payments', 'supplier_id', 'INTEGER');
+  d.exec(
+    `UPDATE invoice_payments SET supplier_id = (SELECT supplier_id FROM supplier_invoices WHERE id = invoice_payments.invoice_id)
+      WHERE supplier_id IS NULL`
+  );
+
+  // Goods going back to a supplier (rejected over-receipts, defects, stock returns).
+  d.exec(
+    `CREATE TABLE IF NOT EXISTS supplier_returns (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       ref TEXT NOT NULL,
+       supplier_id INTEGER NOT NULL,
+       po_id INTEGER,
+       variant_id INTEGER NOT NULL,
+       product_id INTEGER NOT NULL,
+       qty REAL NOT NULL,
+       unit_cost INTEGER NOT NULL DEFAULT 0,
+       reason TEXT NOT NULL DEFAULT '',
+       created_by INTEGER,
+       created_at TEXT NOT NULL
+     )`
+  );
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

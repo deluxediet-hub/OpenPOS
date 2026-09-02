@@ -2025,20 +2025,544 @@ function createApp(d) {
   });
 
   // ---- suppliers (minimal; the full purchasing system lands in Phase 5) ----------------------------
+  // ---- suppliers + purchasing (Phase 5) ---------------------------------------------------
+  const supplierBalance = (supplierId) => {
+    const inv = d.prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS total, COALESCE(SUM(CASE WHEN status = 'paid' THEN 0 ELSE amount END), 0) AS open_total
+         FROM supplier_invoices WHERE supplier_id = ?`
+    ).get(supplierId);
+    const paid = d.prepare(
+      `SELECT COALESCE(SUM(ip.amount), 0) AS p FROM invoice_payments ip
+        JOIN supplier_invoices si ON si.id = ip.invoice_id
+       WHERE si.supplier_id = ?`
+    ).get(supplierId).p;
+    const pos = d.prepare(
+      `SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS v FROM purchase_orders
+        WHERE supplier_id = ? AND status IN ('sent','partial')`
+    ).get(supplierId);
+    // net owed = Σ(all invoice amounts) − Σ(all payments); settled invoices net to zero
+    return {
+      invoices_total: inv.total, invoices_open: inv.open_total, paid: Number(paid),
+      outstanding: Number(inv.total - paid), open_pos: pos.n, open_po_value: pos.v
+    };
+  };
+
   app.get('/api/suppliers', me, (req, res) => {
-    res.json(d.prepare('SELECT * FROM suppliers WHERE active = 1 ORDER BY name').all());
+    const rows = d.prepare('SELECT * FROM suppliers WHERE active = 1 ORDER BY name').all();
+    res.json(rows.map((s) => ({ ...s, balance: supplierBalance(s.id) })));
   });
 
   app.post('/api/suppliers', me, can('products.manage'), (req, res) => {
     const b = req.body || {};
     const name = String(b.name || '').trim();
     if (!name) return res.status(400).json({ error: 'supplier name required' });
+    const lead = b.lead_days === undefined ? 7 : Math.max(0, Math.trunc(Number(b.lead_days) || 0));
     const id = d
-      .prepare(`INSERT INTO suppliers (name, phone, kra_pin, address, terms, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)`)
-      .run(name, String(b.phone || '').trim(), String(b.kraPin || '').trim(), String(b.address || '').trim(), String(b.terms || '').trim(), new Date().toISOString())
+      .prepare(`INSERT INTO suppliers (name, phone, kra_pin, address, terms, lead_days, active, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)`)
+      .run(name, String(b.phone || '').trim(), String(b.kraPin || '').trim(), String(b.address || '').trim(), String(b.terms || '').trim(), lead, new Date().toISOString())
       .lastInsertRowid;
     dbm.audit(d, { userId: req.user.id, action: 'supplier/create', entity: 'supplier', entityId: String(id), detail: { name } });
     res.json({ ok: true, id });
+  });
+
+  app.put('/api/suppliers/:id', me, can('products.manage'), (req, res) => {
+    const s = d.prepare('SELECT * FROM suppliers WHERE id = ?').get(numOrNull(req.params.id));
+    if (!s) return res.status(404).json({ error: 'not found' });
+    const b = req.body || {};
+    d.prepare(
+      `UPDATE suppliers SET name = ?, phone = ?, kra_pin = ?, address = ?, terms = ?, lead_days = ?, active = ? WHERE id = ?`
+    ).run(
+      String(b.name ?? s.name).trim(), String(b.phone ?? s.phone).trim(), String(b.kraPin ?? s.kra_pin).trim(),
+      String(b.address ?? s.address).trim(), String(b.terms ?? s.terms).trim(),
+      b.lead_days === undefined ? s.lead_days : Math.max(0, Math.trunc(Number(b.lead_days) || 0)),
+      b.active === undefined ? s.active : (b.active ? 1 : 0), s.id
+    );
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/suppliers/:id', me, can('products.manage'), (req, res) => {
+    const s = d.prepare('SELECT * FROM suppliers WHERE id = ?').get(numOrNull(req.params.id));
+    if (!s) return res.status(404).json({ error: 'not found' });
+    const bal = supplierBalance(s.id);
+    if (bal.open_pos > 0) return res.status(400).json({ error: 'supplier has open purchase orders' });
+    if (bal.outstanding > 0) return res.status(400).json({ error: 'supplier has outstanding invoices' });
+    d.prepare('UPDATE suppliers SET active = 0 WHERE id = ?').run(s.id);
+    res.json({ ok: true });
+  });
+
+  app.get('/api/suppliers/:id', me, (req, res) => {
+    const s = d.prepare('SELECT * FROM suppliers WHERE id = ?').get(numOrNull(req.params.id));
+    if (!s) return res.status(404).json({ error: 'not found' });
+    const products = d.prepare('SELECT COUNT(*) AS n FROM products WHERE supplier_id = ? AND active = 1').get(s.id).n;
+    res.json({ ...s, balance: supplierBalance(s.id), products });
+  });
+
+  // Purchasing is a capability (R-C): a solo shop that hasn't enabled it gets a hint, not a wall of features.
+  const needPurchasing = (req, res) => {
+    if (!caps.getCapabilityMap(d).purchasing) {
+      res.status(403).json({ error: 'enable the Purchasing feature first (Settings → Features)' });
+      return false;
+    }
+    return true;
+  };
+
+  // ---- suggested orders: velocity × (lead + cover) − stock ---------------------------------
+  app.get('/api/purchase/suggestions', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
+    const cover = Math.min(Math.max(Number(req.query.cover ?? 14), 0), 365);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+    const since = new Date(Date.now() - days * 86400e3).toISOString();
+    const rows = d
+      .prepare(
+        `SELECT p.id AS product_id, p.name AS product_name, p.unit, p.cost AS current_cost, s.id AS supplier_id,
+                s.name AS supplier_name, COALESCE(s.lead_days, 7) AS lead_days,
+                (SELECT COALESCE(SUM(st.qty), 0) FROM variants v JOIN stock st ON st.variant_id = v.id
+                  WHERE v.product_id = p.id AND v.active = 1) AS stock,
+                (SELECT COALESCE(SUM(m.qty), 0) FROM variants v JOIN stock_moves m ON m.variant_id = v.id
+                  WHERE v.product_id = p.id AND m.type = 'sale' AND m.created_at >= ?) AS sold
+           FROM products p
+           JOIN suppliers s ON s.id = p.supplier_id AND s.active = 1
+          WHERE p.active = 1
+          ORDER BY p.name`
+      )
+      .all(since);
+    const out = [];
+    for (const r of rows) {
+      const velocity = r.sold / days;
+      if (velocity <= 0) continue; // nothing has moved → nothing to suggest
+      const daysCover = r.stock / velocity;
+      const suggestQty = Math.ceil(velocity * (r.lead_days + cover) - r.stock);
+      if (suggestQty <= 0) continue;
+      out.push({
+        product_id: r.product_id, product_name: r.product_name, unit: r.unit, current_cost: r.current_cost,
+        supplier_id: r.supplier_id, supplier_name: r.supplier_name, lead_days: r.lead_days,
+        stock: r.stock, sold_days: days, sold: r.sold,
+        velocity_per_day: Math.round(velocity * 100) / 100,
+        days_cover: Math.round(daysCover * 10) / 10,
+        cover_days: cover, suggest_qty: suggestQty
+      });
+    }
+    out.sort((a, b) => a.days_cover - b.days_cover); // most urgent first
+    res.json(out.slice(0, limit));
+  });
+
+  // ---- purchase orders ---------------------------------------------------------------------
+  app.post('/api/purchase-orders', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const b = req.body || {};
+    const supplier = d.prepare('SELECT * FROM suppliers WHERE id = ? AND active = 1').get(numOrNull(b.supplier_id));
+    if (!supplier) return res.status(400).json({ error: 'supplier_id required (active)' });
+    const items = Array.isArray(b.items) ? b.items : [];
+    if (!items.length) return res.status(400).json({ error: 'items required' });
+    const branches = visibleBranches(d, req.user);
+    const branchId = (branches[0] && branches[0].id) || null;
+    const t = new Date().toISOString();
+    let created;
+    try {
+      created = d.transaction(() => {
+        const poRef = dbm.nextCounter(d, 'po', 'PO-');
+        const poId = d
+          .prepare(`INSERT INTO purchase_orders (ref, branch_id, supplier_id, status, expected_date, note, total, created_by, created_at)
+                    VALUES (?, ?, ?, 'sent', ?, ?, 0, ?, ?)`)
+          .run(poRef, branchId, supplier.id, b.expected_date || null, String(b.note || ''), req.user.id, t)
+          .lastInsertRowid;
+        let total = 0;
+        for (const it of items) {
+          let variant = numOrNull(it.variant_id)
+            ? d.prepare('SELECT * FROM variants WHERE id = ? AND active = 1').get(numOrNull(it.variant_id))
+            : null;
+          let productId = numOrNull(it.product_id);
+          if (variant) productId = variant.product_id;
+          if (!variant && productId) {
+            const vs = activeVariantsOf(d, productId);
+            if (vs.length !== 1) throw httpError(400, 'product has multiple variants — specify variant_id');
+            variant = vs[0];
+          }
+          if (!variant) throw httpError(400, 'unknown variant/product in items');
+          const product = productRow(d, productId);
+          if (!product || !product.active) throw httpError(400, 'unknown product in items');
+          const qty = Number(it.qty);
+          if (!Number.isFinite(qty) || qty <= 0) throw httpError(400, 'item qty must be > 0');
+          const unitCost = intShillings(it.unit_cost) ?? Number(product.cost || 0);
+          d.prepare('INSERT INTO po_items (po_id, product_id, variant_id, qty, unit_cost) VALUES (?, ?, ?, ?, ?)')
+            .run(poId, productId, variant.id, qty, unitCost);
+          total += Math.round(qty * unitCost);
+        }
+        d.prepare('UPDATE purchase_orders SET total = ? WHERE id = ?').run(total, poId);
+        return d.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poId);
+      })();
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
+    dbm.audit(d, { userId: req.user.id, branchId, action: 'po/create', entity: 'purchase_order', entityId: created.ref, detail: { supplier: supplier.name, items: items.length, total: created.total } });
+    res.json({ ok: true, id: created.id, ref: created.ref, total: created.total });
+  });
+
+  app.get('/api/purchase-orders', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const q = req.query;
+    const where = [];
+    const args = [];
+    if (q.status) { where.push('po.status = ?'); args.push(String(q.status)); }
+    if (q.supplier_id) { where.push('po.supplier_id = ?'); args.push(numOrNull(q.supplier_id)); }
+    res.json(
+      d.prepare(
+        `SELECT po.*, s.name AS supplier_name,
+                (SELECT COUNT(*) FROM po_items pi WHERE pi.po_id = po.id) AS items,
+                (SELECT COALESCE(SUM(pi.received_qty), 0) FROM po_items pi WHERE pi.po_id = po.id) AS received,
+                (SELECT COALESCE(SUM(pi.qty), 0) FROM po_items pi WHERE pi.po_id = po.id) AS ordered
+           FROM purchase_orders po
+           JOIN suppliers s ON s.id = po.supplier_id
+          ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+          ORDER BY po.id DESC LIMIT 100`
+      ).all(...args)
+    );
+  });
+
+  app.get('/api/purchase-orders/:id', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const po = d.prepare('SELECT po.*, s.name AS supplier_name FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id = ?').get(numOrNull(req.params.id));
+    if (!po) return res.status(404).json({ error: 'not found' });
+    const items = d
+      .prepare(
+        `SELECT pi.*, p.name AS product_name, v.name AS variant_name, p.unit
+           FROM po_items pi
+           JOIN products p ON p.id = pi.product_id
+           LEFT JOIN variants v ON v.id = pi.variant_id
+          WHERE pi.po_id = ? ORDER BY pi.id`
+      )
+      .all(po.id);
+    const grs = d.prepare(
+      `SELECT gr.*, (SELECT COALESCE(SUM(gi.qty), 0) FROM gr_items gi WHERE gi.gr_id = gr.id) AS total_qty
+         FROM goods_receipts gr WHERE gr.po_id = ? ORDER BY gr.id`
+    ).all(po.id);
+    res.json({ ...po, items, receipts: grs });
+  });
+
+  app.post('/api/purchase-orders/:id/cancel', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const po = d.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(numOrNull(req.params.id));
+    if (!po) return res.status(404).json({ error: 'not found' });
+    if (!['sent', 'partial'].includes(po.status)) return res.status(400).json({ error: `cannot cancel a ${po.status} PO` });
+    const received = d.prepare('SELECT COALESCE(SUM(received_qty), 0) AS q FROM po_items WHERE po_id = ?').get(po.id).q;
+    if (received > 0) return res.status(400).json({ error: 'goods already received — use supplier returns, not cancel' });
+    d.prepare("UPDATE purchase_orders SET status = 'cancelled' WHERE id = ?").run(po.id);
+    dbm.audit(d, { userId: req.user.id, action: 'po/cancel', entity: 'purchase_order', entityId: po.ref });
+    res.json({ ok: true });
+  });
+
+  // Goods received against a PO: partial ok, batch/serial capture, cost recorded per lot.
+  app.post('/api/purchase-orders/:id/receive', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const po = d.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(numOrNull(req.params.id));
+    if (!po) return res.status(404).json({ error: 'not found' });
+    if (!['sent', 'partial'].includes(po.status)) return res.status(400).json({ error: `PO is ${po.status}` });
+    const items = Array.isArray((req.body || {}).items) ? req.body.items : [];
+    if (!items.length) return res.status(400).json({ error: 'items required' });
+    const loc = defaultLocation(d, po.branch_id);
+    if (!loc) return res.status(400).json({ error: 'branch has no location' });
+    const t = new Date().toISOString();
+    let result;
+    try {
+      result = d.transaction(() => {
+        const grRef = dbm.nextCounter(d, 'gr', 'GR-');
+        const grId = d
+          .prepare('INSERT INTO goods_receipts (ref, po_id, branch_id, supplier_id, total, created_by, created_at) VALUES (?, ?, ?, ?, 0, ?, ?)')
+          .run(grRef, po.id, po.branch_id, po.supplier_id, req.user.id, t)
+          .lastInsertRowid;
+        let grTotal = 0;
+        const discrepancies = [];
+        for (const it of items) {
+          const pi = d.prepare('SELECT * FROM po_items WHERE id = ? AND po_id = ?').get(numOrNull(it.po_item_id), po.id);
+          if (!pi) throw httpError(400, `po_item ${it.po_item_id} not on this PO`);
+          const variant = d.prepare('SELECT * FROM variants WHERE id = ?').get(pi.variant_id);
+          const product = productRow(d, pi.product_id);
+          const qty = Number(it.qty);
+          if (!Number.isFinite(qty) || qty <= 0) throw httpError(400, 'item qty must be > 0');
+          const remaining = pi.qty - pi.received_qty;
+          const over = qty > remaining + 1e-9;
+          const cost = intShillings(it.cost) ?? pi.unit_cost;
+          const priceDisc = cost > pi.unit_cost;
+          let batchId = null;
+          if (product.track_batches) {
+            // lot is opened at 0 — writeMove adds the received qty (single writer of batch balances)
+            const batchNo = String(it.batch_no || `${po.ref}-I${pi.id}`).trim();
+            const expiry = it.expiry_date || null;
+            batchId = d
+              .prepare(`INSERT INTO batches (product_id, variant_id, branch_id, location_id, batch_no, expiry_date, qty, cost, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`)
+              .run(product.id, variant.id, po.branch_id, loc.id, batchNo, expiry, cost, t)
+              .lastInsertRowid;
+          }
+          // serials: each unit arrives with its number (one move per unit)
+          const serials = it.serial_no ? [it.serial_no] : (Array.isArray(it.serials) ? it.serials : []);
+          if (product.track_serials && (!Number.isInteger(qty) || serials.length !== qty)) {
+            throw httpError(400, 'serial-tracked items need one serial number per whole unit');
+          }
+          if (serials.length) {
+            for (const sn of serials) {
+              const serialId = d
+                .prepare(`INSERT INTO serials (variant_id, serial_no, location_id, status, note, created_at)
+                          VALUES (?, ?, ?, 'in_stock', ?, ?)`)
+                .run(variant.id, String(sn).trim(), loc.id, po.ref, t)
+                .lastInsertRowid;
+              writeMove(d, {
+                product, variant, branchId: po.branch_id, locationId: loc.id, qty: 1,
+                type: 'purchase', reason: 'purchase', ref: po.ref, serialId,
+                unitCost: cost, userId: req.user.id, note: 'goods received'
+              });
+            }
+          } else {
+            writeMove(d, {
+              product, variant, branchId: po.branch_id, locationId: loc.id, qty,
+              type: 'purchase', reason: 'purchase', ref: po.ref, batchId,
+              unitCost: cost, userId: req.user.id, note: 'goods received'
+            });
+          }
+          const writeQty = qty;
+          d.prepare('INSERT INTO gr_items (gr_id, po_id, product_id, variant_id, qty, unit_cost, batch_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run(grId, po.id, pi.product_id, pi.variant_id, writeQty, cost, batchId);
+          d.prepare('UPDATE po_items SET received_qty = received_qty + ? WHERE id = ?').run(writeQty, pi.id);
+          if (over || priceDisc) {
+            d.prepare("UPDATE po_items SET discrepancy = ?, discrepancy_status = 'pending' WHERE id = ?")
+              .run(over ? 'over_qty' : 'price', pi.id);
+            discrepancies.push({ po_item_id: pi.id, product: product.name, kind: over ? 'over_qty' : 'price', detail: over ? `received ${writeQty} of ${remaining} remaining` : `cost ${cost} > PO ${pi.unit_cost}` });
+          }
+          grTotal += Math.round(writeQty * cost);
+        }
+        d.prepare('UPDATE goods_receipts SET total = ? WHERE id = ?').run(grTotal, grId);
+        const done = d.prepare('SELECT COUNT(*) AS n FROM po_items WHERE po_id = ? AND received_qty < qty - 0.0000001').get(po.id).n;
+        d.prepare("UPDATE purchase_orders SET status = ? WHERE id = ?").run(done ? 'partial' : 'received', po.id);
+        return { grRef, discrepancies };
+      })();
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
+    dbm.audit(d, { userId: req.user.id, action: 'po/receive', entity: 'purchase_order', entityId: po.ref, detail: { gr: result.grRef, discrepancies: result.discrepancies.length } });
+    res.json({ ok: true, ref: result.grRef, discrepancies: result.discrepancies });
+  });
+
+  // Discrepancy resolution (R-S5-ish honesty): approve accepts it; rejecting an
+  // over-receipt sends the excess back to the supplier as a return.
+  app.post('/api/po-items/:id/discrepancy', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const pi = d.prepare('SELECT * FROM po_items WHERE id = ?').get(numOrNull(req.params.id));
+    if (!pi) return res.status(404).json({ error: 'not found' });
+    if (!pi.discrepancy || pi.discrepancy_status !== 'pending') return res.status(400).json({ error: 'no pending discrepancy' });
+    const decision = (req.body || {}).decision;
+    if (!['approve', 'reject'].includes(decision)) return res.status(400).json({ error: 'decision must be approve or reject' });
+    const po = d.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(pi.po_id);
+    if (decision === 'approve') {
+      d.prepare("UPDATE po_items SET discrepancy_status = 'approved' WHERE id = ?").run(pi.id);
+      dbm.audit(d, { userId: req.user.id, action: 'po/discrepancy_approve', entity: 'purchase_order', entityId: po.ref, detail: { po_item_id: pi.id, kind: pi.discrepancy } });
+      return res.json({ ok: true, decision: 'approved' });
+    }
+    // reject
+    const variant = d.prepare('SELECT * FROM variants WHERE id = ?').get(pi.variant_id);
+    const product = productRow(d, pi.product_id);
+    const t = new Date().toISOString();
+    try {
+      d.transaction(() => {
+        if (pi.discrepancy === 'over_qty') {
+          const over = Math.round((pi.received_qty - pi.qty) * 1e6) / 1e6;
+          const srRef = dbm.nextCounter(d, 'sr', 'SR-');
+          d.prepare('INSERT INTO supplier_returns (ref, supplier_id, po_id, variant_id, product_id, qty, unit_cost, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .run(srRef, po.supplier_id, po.id, pi.variant_id, pi.product_id, over, pi.unit_cost, 'over-receipt rejected', req.user.id, t);
+          const loc = defaultLocation(d, po.branch_id);
+          writeMove(d, {
+            product, variant, branchId: po.branch_id, locationId: loc.id, qty: -over,
+            type: 'return_out', reason: 'return_out', ref: srRef,
+            userId: req.user.id, note: 'over-receipt returned to supplier'
+          });
+          d.prepare('UPDATE po_items SET received_qty = qty WHERE id = ?').run(pi.id);
+        }
+        d.prepare("UPDATE po_items SET discrepancy_status = 'rejected' WHERE id = ?").run(pi.id);
+      })();
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
+    dbm.audit(d, { userId: req.user.id, action: 'po/discrepancy_reject', entity: 'purchase_order', entityId: po.ref, detail: { po_item_id: pi.id, kind: pi.discrepancy } });
+    res.json({ ok: true, decision: 'rejected' });
+  });
+
+  // ---- supplier invoices & payments ----------------------------------------------------------
+  app.post('/api/supplier-invoices', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const b = req.body || {};
+    const supplier = d.prepare('SELECT id FROM suppliers WHERE id = ? AND active = 1').get(numOrNull(b.supplier_id));
+    if (!supplier) return res.status(400).json({ error: 'supplier_id required (active)' });
+    const amount = intShillings(b.amount);
+    if (amount === null || amount <= 0) return res.status(400).json({ error: 'amount required (whole shillings, > 0)' });
+    let poId = null;
+    if (b.po_id) {
+      const po = d.prepare('SELECT id FROM purchase_orders WHERE id = ? AND supplier_id = ?').get(numOrNull(b.po_id), supplier.id);
+      if (!po) return res.status(400).json({ error: 'po_id does not belong to this supplier' });
+      poId = po.id;
+    }
+    const vat = intShillings(b.vat) || 0;
+    const ref = dbm.nextCounter(d, 'inv', 'INV-');
+    const t = new Date().toISOString();
+    const id = d
+      .prepare(`INSERT INTO supplier_invoices (ref, supplier_ref, supplier_id, po_id, amount, vat, paid, outstanding, status, due_date, note, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?, ?, ?)`)
+      .run(ref, String(b.supplier_ref || '').trim(), supplier.id, poId, amount, vat, amount, b.due_date || null, String(b.note || ''), req.user.id, t)
+      .lastInsertRowid;
+    dbm.audit(d, { userId: req.user.id, action: 'invoice/create', entity: 'supplier_invoice', entityId: ref, detail: { supplier: supplier.id, amount, po: poId } });
+    res.json({ ok: true, id, ref });
+  });
+
+  app.get('/api/supplier-invoices', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const q = req.query;
+    const where = [];
+    const args = [];
+    if (q.supplier_id) { where.push('si.supplier_id = ?'); args.push(numOrNull(q.supplier_id)); }
+    if (q.status) { where.push('si.status = ?'); args.push(String(q.status)); }
+    res.json(
+      d.prepare(
+        `SELECT si.*, s.name AS supplier_name, po.ref AS po_ref,
+                (SELECT COALESCE(SUM(ip.amount), 0) FROM invoice_payments ip WHERE ip.invoice_id = si.id) AS paid
+           FROM supplier_invoices si
+           JOIN suppliers s ON s.id = si.supplier_id
+           LEFT JOIN purchase_orders po ON po.id = si.po_id
+          ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+          ORDER BY si.id DESC LIMIT 100`
+      ).all(...args)
+    );
+  });
+
+  app.get('/api/supplier-invoices/:id', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const inv = d.prepare(
+      `SELECT si.*, s.name AS supplier_name FROM supplier_invoices si JOIN suppliers s ON s.id = si.supplier_id WHERE si.id = ?`
+    ).get(numOrNull(req.params.id));
+    if (!inv) return res.status(404).json({ error: 'not found' });
+    const payments = d.prepare('SELECT * FROM invoice_payments WHERE invoice_id = ? ORDER BY id').all(inv.id);
+    res.json({ ...inv, paid: payments.reduce((s, p) => s + p.amount, 0), payments });
+  });
+
+  app.put('/api/supplier-invoices/:id', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const inv = d.prepare('SELECT * FROM supplier_invoices WHERE id = ?').get(numOrNull(req.params.id));
+    if (!inv) return res.status(404).json({ error: 'not found' });
+    const status = (req.body || {}).status;
+    if (status === undefined) return res.status(400).json({ error: 'status required' });
+    if (!['open', 'partial', 'disputed', 'paid'].includes(status)) return res.status(400).json({ error: 'unknown status' });
+    if (status === 'disputed' && !['open', 'partial'].includes(inv.status)) return res.status(400).json({ error: 'cannot dispute a paid invoice' });
+    if (status === 'paid') return res.status(400).json({ error: 'use a payment to settle an invoice' });
+    d.prepare('UPDATE supplier_invoices SET status = ? WHERE id = ?').run(status, inv.id);
+    dbm.audit(d, { userId: req.user.id, action: 'invoice/status', entity: 'supplier_invoice', entityId: inv.ref, detail: { from: inv.status, to: status } });
+    res.json({ ok: true });
+  });
+
+  app.post('/api/supplier-invoices/:id/payments', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const inv = d.prepare('SELECT * FROM supplier_invoices WHERE id = ?').get(numOrNull(req.params.id));
+    if (!inv) return res.status(404).json({ error: 'not found' });
+    if (inv.status === 'paid') return res.status(400).json({ error: 'invoice already paid' });
+    if (inv.status === 'disputed') return res.status(400).json({ error: 'resolve the dispute before paying' });
+    const b = req.body || {};
+    const amount = intShillings(b.amount);
+    if (amount === null || amount <= 0) return res.status(400).json({ error: 'amount required (whole shillings, > 0)' });
+    const method = ['bank', 'mpesa', 'cash', 'cheque', 'other'].includes(b.method) ? b.method : null;
+    if (!method) return res.status(400).json({ error: 'method required (bank/mpesa/cash/cheque/other)' });
+    const channelRef = String(b.channel_ref || '').trim();
+    if (!channelRef) return res.status(400).json({ error: 'channel_ref required — every payment leaves evidence' });
+    if (amount > inv.outstanding) return res.status(400).json({ error: `overpayment: ${inv.outstanding} outstanding` });
+    const t = new Date().toISOString();
+    const run = d.transaction(() => {
+      d.prepare('INSERT INTO invoice_payments (invoice_id, supplier_id, amount, method, channel_ref, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(inv.id, inv.supplier_id, amount, method, channelRef, String(b.note || ''), req.user.id, t);
+      const done = inv.outstanding - amount <= 0.0000001;
+      d.prepare('UPDATE supplier_invoices SET paid = paid + ?, outstanding = ?, status = ?, paid_at = ? WHERE id = ?')
+        .run(amount, Math.max(0, inv.outstanding - amount), done ? 'paid' : 'partial', inv.paid_at || (done ? t : null), inv.id);
+      return done;
+    });
+    const done = run();
+    dbm.audit(d, { userId: req.user.id, action: 'invoice/payment', entity: 'supplier_invoice', entityId: inv.ref, detail: { amount, method, channel_ref: channelRef, settled: done } });
+    res.json({ ok: true, settled: done });
+  });
+
+  // ---- supplier returns (standalone, e.g. defects / returns outside a PO) ----------------------
+  app.post('/api/supplier-returns', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const b = req.body || {};
+    const supplier = d.prepare('SELECT id FROM suppliers WHERE id = ? AND active = 1').get(numOrNull(b.supplier_id));
+    if (!supplier) return res.status(400).json({ error: 'supplier_id required (active)' });
+    let variant = numOrNull(b.variant_id)
+      ? d.prepare('SELECT * FROM variants WHERE id = ? AND active = 1').get(numOrNull(b.variant_id))
+      : null;
+    let productId = numOrNull(b.product_id);
+    if (variant) productId = variant.product_id;
+    if (!variant && productId) {
+      const vs = activeVariantsOf(d, productId);
+      if (vs.length !== 1) return res.status(400).json({ error: 'product has multiple variants — specify variant_id' });
+      variant = vs[0];
+    }
+    if (!variant) return res.status(400).json({ error: 'variant_id or product_id required' });
+    const product = productRow(d, productId);
+    if (!product || !product.active) return res.status(400).json({ error: 'unknown product' });
+    const qty = Number(b.qty);
+    if (!Number.isFinite(qty) || qty <= 0) return res.status(400).json({ error: 'qty must be > 0' });
+    const cost = intShillings(b.cost) ?? Number(product.cost || 0);
+    const reason = String(b.reason || '').trim();
+    if (!reason) return res.status(400).json({ error: 'reason required' });
+    const branches = visibleBranches(d, req.user);
+    const branchId = (branches[0] && branches[0].id) || null;
+    const locs = branchId ? locationsOf(d, branchId) : [];
+    const locationId = numOrNull(b.location_id) && locs.some((l) => l.id === b.location_id) ? b.location_id : (locs[0] && locs[0].id);
+    if (!locationId) return res.status(400).json({ error: 'no location' });
+    const t = new Date().toISOString();
+    const ref = dbm.nextCounter(d, 'sr', 'SR-');
+    try {
+      d.transaction(() => {
+        d.prepare('INSERT INTO supplier_returns (ref, supplier_id, po_id, variant_id, product_id, qty, unit_cost, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(ref, supplier.id, numOrNull(b.po_id), variant.id, productId, qty, cost, reason, req.user.id, t);
+        writeMove(d, {
+          product, variant, branchId, locationId, qty: -qty,
+          type: 'return_out', reason: 'return_out', ref, unitCost: cost,
+          userId: req.user.id, note: `returned to supplier: ${reason}`
+        });
+      })();
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
+    dbm.audit(d, { userId: req.user.id, action: 'supplier/return', entity: 'supplier_return', entityId: ref, detail: { product: product.name, qty, reason } });
+    res.json({ ok: true, ref });
+  });
+
+  app.get('/api/supplier-returns', me, can('purchases.manage'), (req, res) => {
+    if (!needPurchasing(req, res)) return;
+    const q = req.query;
+    const where = [];
+    const args = [];
+    if (q.supplier_id) { where.push('sr.supplier_id = ?'); args.push(numOrNull(q.supplier_id)); }
+    res.json(
+      d.prepare(
+        `SELECT sr.*, s.name AS supplier_name, p.name AS product_name
+           FROM supplier_returns sr
+           JOIN suppliers s ON s.id = sr.supplier_id
+           JOIN products p ON p.id = sr.product_id
+          ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+          ORDER BY sr.id DESC LIMIT 100`
+      ).all(...args)
+    );
+  });
+
+  // ---- purchase price history (evidence: every purchase move carries its cost) -------------------
+  app.get('/api/products/:id/purchase-history', me, can('stock.view'), (req, res) => {
+    const product = productRow(d, numOrNull(req.params.id));
+    if (!product) return res.status(404).json({ error: 'not found' });
+    const moves = d
+      .prepare(
+        `SELECT m.created_at AS at, m.ref, m.qty, m.unit_cost, m.batch_id, b.batch_no
+           FROM stock_moves m LEFT JOIN batches b ON b.id = m.batch_id
+          WHERE m.product_id = ? AND m.type = 'purchase' AND m.qty > 0
+          ORDER BY m.id DESC LIMIT 200`
+      )
+      .all(product.id);
+    res.json({ product: product.name, current_cost: product.cost, purchases: moves });
   });
 
   // ---- CSV import/export (products + variants + packs in one file) --------------------------------

@@ -322,6 +322,151 @@
       </div>
     </section>
 
+    <!-- ============ PURCHASING (capability: purchasing) ============ -->
+    <section id="tab-purchasing" class="hidden">
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="suggested_orders">Suggested orders</h3>
+          <span class="spacer"></span>
+          <button class="btn small" id="pu-suggest-refresh" data-i18n="search">Search…</button>
+        </div>
+        <div style="overflow:auto">
+        <table><thead><tr>
+          <th data-i18n="name">Name</th><th data-i18n="stock">Stock</th><th data-i18n="velocity">Sold / day</th>
+          <th data-i18n="days_cover">Days of cover</th><th data-i18n="suggest">Suggested qty</th>
+          <th data-i18n="supplier">Supplier</th><th></th>
+        </tr></thead><tbody id="pu-suggest-rows"></tbody></table></div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="purchase_orders">Purchase orders</h3>
+          <span class="spacer"></span>
+          <button class="btn small" id="po-new-btn" data-i18n="new_po">New PO</button>
+          <div class="msg" id="po-msg" style="margin:0"></div>
+        </div>
+        <div id="po-form" class="hidden" style="margin-bottom:12px;padding:10px;border:1px dashed #cbd5e1;border-radius:8px">
+          <div class="grid cols-3">
+            <label class="f"><span data-i18n="supplier">Supplier</span><select id="po-supplier"></select></label>
+            <label class="f"><span data-i18n="due">Expected</span><input id="po-expected" type="date"></label>
+            <label class="f" style="align-self:end"><button class="btn small" id="po-add-item" data-i18n="add_item">Add item</button></label>
+          </div>
+          <table style="margin:8px 0"><thead><tr>
+            <th data-i18n="name">Name</th><th data-i18n="quantity">Qty</th><th data-i18n="unit_cost">Unit cost</th><th></th>
+          </tr></thead><tbody id="po-form-items"></tbody></table>
+          <div class="row"><button class="btn" id="po-save" data-i18n="save">Save</button>
+          <button class="btn ghost" id="po-clear" data-i18n="cancel">Cancel</button>
+          <div class="msg" id="po-form-msg" style="margin:0"></div></div>
+        </div>
+        <div style="overflow:auto">
+        <table><thead><tr>
+          <th data-i18n="ref">Ref</th><th data-i18n="supplier">Supplier</th><th data-i18n="status">Status</th>
+          <th data-i18n="po_total">Total</th><th data-i18n="ordered_on">Ordered on</th>
+        </tr></thead><tbody id="po-rows"></tbody></table></div>
+
+        <div id="po-detail" class="hidden" style="margin-top:14px;border-top:1px solid #e5e7eb;padding-top:12px">
+          <div class="row" style="margin-bottom:8px">
+            <h3 style="margin:0" id="po-detail-title"></h3><span class="pill" id="po-detail-status"></span>
+            <span class="spacer"></span>
+            <button class="btn small hidden" id="po-cancel-btn" data-i18n="cancel_po">Cancel PO</button>
+            <button class="btn small hidden" id="po-receive-btn" data-i18n="post_gr">Post goods receipt</button>
+            <button class="btn small" id="po-close-btn" data-i18n="cancel">Cancel</button>
+          </div>
+          <div style="overflow:auto">
+          <table><thead><tr>
+            <th data-i18n="name">Name</th><th data-i18n="ordered">Ordered</th><th data-i18n="received">Received</th>
+            <th data-i18n="unit_cost">Unit cost</th><th data-i18n="discrepancy">Discrepancy</th><th></th>
+          </tr></thead><tbody id="po-detail-items"></tbody></table></div>
+          <div id="po-receive" class="hidden" style="margin-top:12px">
+            <h3 style="margin-top:0" data-i18n="post_gr">Post goods receipt</h3>
+            <p class="muted small" data-i18n="gr_note">Leave qty 0 to skip a line.</p>
+            <div id="gr-items"></div>
+            <div class="row" style="margin-top:10px">
+              <button class="btn" id="gr-save" data-i18n="post_gr">Post goods receipt</button>
+              <div class="msg" id="gr-msg" style="margin:0"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="supplier_invoices">Supplier invoices</h3>
+          <span class="spacer"></span>
+          <button class="btn small" id="inv-new-btn" data-i18n="new_invoice">New invoice</button>
+        </div>
+        <div id="inv-form" class="hidden" style="margin-bottom:12px">
+          <div class="grid cols-3">
+            <label class="f"><span data-i18n="supplier">Supplier</span><select id="inv-supplier"></select></label>
+            <label class="f"><span>PO</span><select id="inv-po"><option value="">—</option></select></label>
+            <label class="f"><span data-i18n="price">Price (Ksh)</span><input id="inv-amount" type="number" min="1"></label>
+            <label class="f"><span data-i18n="supplier_ref">Supplier ref</span><input id="inv-sref"></label>
+            <label class="f"><span data-i18n="due">Due</span><input id="inv-due" type="date"></label>
+          </div>
+          <div class="row"><button class="btn" id="inv-save" data-i18n="save">Save</button>
+          <button class="btn ghost" id="inv-clear" data-i18n="cancel">Cancel</button>
+          <div class="msg" id="inv-msg" style="margin:0"></div></div>
+        </div>
+        <div style="overflow:auto">
+        <table><thead><tr>
+          <th data-i18n="ref">Ref</th><th data-i18n="supplier">Supplier</th><th>PO</th>
+          <th data-i18n="po_total">Total</th><th data-i18n="outstanding">Owed</th><th data-i18n="due">Due</th>
+          <th data-i18n="status">Status</th><th></th>
+        </tr></thead><tbody id="inv-rows"></tbody></table></div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="supplier_returns">Returns to suppliers</h3>
+          <span class="spacer"></span>
+          <button class="btn small" id="sr-new-btn" data-i18n="new_return">New return</button>
+        </div>
+        <div id="sr-form" class="hidden" style="margin-bottom:12px">
+          <div class="grid cols-3">
+            <label class="f"><span data-i18n="supplier">Supplier</span><select id="sr-supplier"></select></label>
+            <label class="f"><span data-i18n="name">Name</span><select id="sr-product"></select></label>
+            <label class="f"><span data-i18n="quantity">Qty</span><input id="sr-qty" type="number" min="0" step="any"></label>
+            <label class="f"><span data-i18n="reason">Reason</span><input id="sr-reason"></label>
+          </div>
+          <div class="row"><button class="btn" id="sr-save" data-i18n="save">Save</button>
+          <button class="btn ghost" id="sr-clear" data-i18n="cancel">Cancel</button>
+          <div class="msg" id="sr-msg" style="margin:0"></div></div>
+        </div>
+        <div style="overflow:auto">
+        <table><thead><tr>
+          <th data-i18n="ref">Ref</th><th data-i18n="supplier">Supplier</th><th data-i18n="name">Name</th>
+          <th data-i18n="quantity">Qty</th><th data-i18n="reason">Reason</th><th></th>
+        </tr></thead><tbody id="sr-rows"></tbody></table></div>
+      </div>
+
+      <div class="card">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="suppliers">Suppliers</h3>
+          <span class="spacer"></span>
+          <button class="btn small" id="sup-new-btn" data-i18n="add">Add</button>
+        </div>
+        <div id="sup-form" class="hidden" style="margin-bottom:12px">
+          <div class="grid cols-3">
+            <input type="hidden" id="sup-id">
+            <label class="f"><span data-i18n="name">Name</span><input id="sup-name"></label>
+            <label class="f"><span data-i18n="kra_pin">KRA PIN</span><input id="sup-kra"></label>
+            <label class="f"><span data-i18n="address">Address</span><input id="sup-address"></label>
+            <label class="f"><span data-i18n="phone">Phone</span><input id="sup-phone"></label>
+            <label class="f"><span data-i18n="terms">Payment terms</span><input id="sup-terms" placeholder="30 days"></label>
+            <label class="f"><span data-i18n="lead_days">Lead days</span><input id="sup-lead" type="number" min="0" value="7"></label>
+          </div>
+          <div class="row"><button class="btn" id="sup-save" data-i18n="save">Save</button>
+          <button class="btn ghost" id="sup-clear" data-i18n="cancel">Cancel</button>
+          <div class="msg" id="sup-msg" style="margin:0"></div></div>
+        </div>
+        <div style="overflow:auto">
+        <table><thead><tr>
+          <th data-i18n="name">Name</th><th data-i18n="kra_pin">KRA PIN</th><th data-i18n="terms">Terms</th>
+          <th data-i18n="lead_days">Lead days</th><th data-i18n="balance">Balance</th><th></th>
+        </tr></thead><tbody id="sup-rows"></tbody></table></div>
+      </div>
+    </section>
+
     <!-- ============ SETTINGS ============ -->
     <section id="tab-settings" class="hidden">
       <div class="card">
@@ -392,6 +537,7 @@ const TABS = [
   { id: 'categories', label: 'categories', always: true },
   { id: 'tills',      label: 'tills',     always: true },
   { id: 'customers',  label: 'customers', always: true, badge: 'Day 15' },
+  { id: 'purchasing', label: 'purchasing', cap: 'purchasing' },
   { id: 'staff',      label: 'staff',     cap: 'staff_roles' },
   { id: 'layout',     label: 'layout',    cap: ['multi_location', 'multi_branch'] },
   { id: 'settings',   label: 'settings',  always: true },
@@ -1406,6 +1552,359 @@ function fillCatSelects() {
   $('#p-cat').innerHTML = `<option value="">—</option>` + CATEGORIES.map((c) =>
     `<option value="${c.id}">${esc(c.name)}</option>`).join('');
 }
+
+// ================= PURCHASING (capability: purchasing) =================
+const PU = { sups: [], pos: [], invs: [], srs: [], products: [], curPO: null };
+
+async function loadPurchasing() {
+  PU.products = await api('/api/products').catch(() => []);
+  await Promise.all([loadSupList(), loadPOs(), loadInvoices(), loadReturns(), loadSuggestions()]);
+}
+
+function prodOf(id) { return PU.products.find((p) => p.id === Number(id)) || {}; }
+
+// ---- suppliers ----
+async function loadSupList() {
+  PU.sups = await api('/api/suppliers').catch(() => []);
+  $('#sup-rows').innerHTML = PU.sups.map((s) => {
+    const b = s.balance || {};
+    const bal = b.outstanding > 0 ? `<span class="pill r">${fmt(b.outstanding)}</span>`
+      : (b.outstanding < 0 ? `<span class="pill r">credit ${fmt(-b.outstanding)}</span>`
+      : '<span class="pill g">0</span>');
+    return `<tr class="clickable" data-sid="${s.id}">
+      <td><b>${esc(s.name)}</b></td>
+      <td class="mono small">${esc(s.kra_pin || '')}</td>
+      <td class="small">${esc(s.terms || '')}${b.open_pos ? ` <span class="pill">${b.open_pos} PO</span>` : ''}</td>
+      <td>${s.lead_days ?? 7}</td>
+      <td class="mono">${bal}</td>
+      <td>${ME.role === 'owner' ? `<button class="btn small" data-sup-del="${s.id}">${t('delete')}</button>` : ''}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="6" class="muted">${t('no_rows')}</td></tr>`;
+  const opts = PU.sups.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  $('#inv-supplier').innerHTML = opts;
+  $('#sr-supplier').innerHTML = opts;
+  $('#po-supplier').innerHTML = `<option value="">—</option>` + opts;
+  $('#p-supplier').innerHTML = `<option value="">—</option>` + opts;
+  document.querySelectorAll('#sup-rows tr[data-sid]').forEach((tr) => {
+    tr.onclick = () => {
+      const s = PU.sups.find((x) => x.id === Number(tr.dataset.sid));
+      if (!s) return;
+      $('#sup-id').value = s.id; $('#sup-name').value = s.name; $('#sup-kra').value = s.kra_pin || '';
+      $('#sup-address').value = s.address || ''; $('#sup-phone').value = s.phone || '';
+      $('#sup-terms').value = s.terms || ''; $('#sup-lead').value = s.lead_days ?? 7;
+      $('#sup-form').classList.remove('hidden');
+    };
+  });
+  document.querySelectorAll('#sup-rows [data-sup-del]').forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      if (!window.confirm(t('delete') + '?')) return;
+      api('/api/suppliers/' + b.dataset.supDel, { method: 'DELETE' })
+        .then(() => loadSupList()).catch((err) => toast($('#sup-msg'), err.message, false));
+    };
+  });
+}
+
+// ---- purchase orders ----
+async function loadPOs() {
+  PU.pos = await api('/api/purchase-orders').catch(() => []);
+  $('#po-rows').innerHTML = PU.pos.map((p) => `
+    <tr class="clickable" data-po="${p.id}">
+      <td class="mono">${esc(p.ref)}</td><td>${esc(p.supplier_name)}</td>
+      <td><span class="pill ${p.status === 'received' ? 'g' : p.status === 'cancelled' ? 'r' : ''}">${t(p.status === 'received' ? 'received_st' : p.status)}</span></td>
+      <td class="mono">${fmt(p.total)}</td>
+      <td class="muted small">${new Date(p.created_at).toLocaleDateString()}</td>
+    </tr>`).join('') || `<tr><td colspan="5" class="muted">${t('no_rows')}</td></tr>`;
+  document.querySelectorAll('#po-rows tr[data-po]').forEach((tr) => (tr.onclick = () => showPO(tr.dataset.po)));
+}
+
+function openPOForm(supplierId, pid, qty, cost) {
+  $('#po-form').classList.remove('hidden');
+  $('#po-form-msg').textContent = '';
+  $('#po-supplier').value = supplierId || '';
+  $('#po-expected').value = '';
+  $('#po-form-items').innerHTML = '';
+  if (pid) addPOFormRow(pid, qty, cost);
+  else addPOFormRow();
+  $('#po-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function addPOFormRow(pid, qty, cost) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><select class="small" data-f="pid" style="min-width:220px">
+      ${PU.products.map((p) => `<option value="${p.id}" ${p.id === pid ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></td>
+    <td><input class="small" type="number" min="0" step="any" data-f="qty" value="${qty || ''}" style="width:90px"></td>
+    <td><input class="small" type="number" min="0" data-f="cost" value="${cost ?? ''}" style="width:110px"></td>
+    <td><button class="btn small" data-rm>✗</button></td>`;
+  tr.querySelector('[data-rm]').onclick = () => tr.remove();
+  tr.querySelector('[data-f="pid"]').onchange = (e) => {
+    const p = prodOf(e.target.value);
+    if (p.cost != null) tr.querySelector('[data-f="cost"]').value = p.cost;
+  };
+  $('#po-form-items').appendChild(tr);
+}
+
+async function showPO(id) {
+  const po = await api('/api/purchase-orders/' + id);
+  PU.curPO = po;
+  $('#po-detail').classList.remove('hidden');
+  $('#po-detail-title').textContent = `${po.ref} — ${po.supplier_name}`;
+  const st = $('#po-detail-status');
+  st.textContent = t(po.status === 'received' ? 'received_st' : po.status);
+  st.className = 'pill ' + (po.status === 'received' ? 'g' : po.status === 'cancelled' ? 'r' : '');
+  $('#po-cancel-btn').classList.toggle('hidden', !['sent', 'partial'].includes(po.status));
+  $('#po-receive-btn').classList.toggle('hidden', !['sent', 'partial'].includes(po.status));
+  $('#po-detail-items').innerHTML = po.items.map((i) => {
+    const rem = Math.round((i.qty - i.received_qty) * 1000) / 1000;
+    const badge = i.discrepancy
+      ? `<span class="pill ${i.discrepancy_status === 'approved' ? 'g' : i.discrepancy_status === 'rejected' ? 'r' : ''}">${i.discrepancy === 'over_qty' ? t('over_qty') : t('price_diff')}: ${t(i.discrepancy_status)}</span>` : '';
+    const acts = i.discrepancy && i.discrepancy_status === 'pending'
+      ? `<button class="btn small" data-dap="${i.id}">✓ ${t('approve')}</button>
+         <button class="btn small" data-drj="${i.id}">✗ ${t('reject')}</button>` : '';
+    return `<tr>
+      <td>${esc(i.product_name)}${i.variant_name ? ` <span class="muted small">(${esc(i.variant_name)})</span>` : ''}</td>
+      <td class="mono">${i.qty}</td>
+      <td class="mono">${i.received_qty}${rem > 0 ? ` <span class="muted small">(${rem} ${esc(i.unit || '')})</span>` : ' ✓'}</td>
+      <td class="mono">${fmt(i.unit_cost)}</td>
+      <td>${badge}</td>
+      <td class="small">${acts}</td>
+    </tr>`;
+  }).join('');
+  document.querySelectorAll('#po-detail [data-dap]').forEach((b) => (b.onclick = () => resolveDisc(b.dataset.dap, 'approve')));
+  document.querySelectorAll('#po-detail [data-drj]').forEach((b) => (b.onclick = () => resolveDisc(b.dataset.drj, 'reject')));
+  renderReceiveForm(po);
+  $('#po-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderReceiveForm(po) {
+  const open = po.items.filter((i) => i.qty - i.received_qty > 1e-9);
+  const can = ['sent', 'partial'].includes(po.status) && open.length;
+  $('#po-receive').classList.toggle('hidden', !can);
+  if (!can) return;
+  $('#gr-items').innerHTML = open.map((i) => {
+    const p = prodOf(i.product_id);
+    const rem = Math.round((i.qty - i.received_qty) * 1000) / 1000;
+    const extra = p.track_batches
+      ? `<input class="small" style="width:130px" data-k="batch_no" data-item="${i.id}" placeholder="${t('batch_no')}">
+         <input class="small" type="date" style="width:150px" data-k="expiry_date" data-item="${i.id}" title="${t('expiry')}">`
+      : (p.track_serials
+        ? `<input class="small" style="width:220px" data-k="serials" data-item="${i.id}" placeholder="${t('serial_nos')}">` : '');
+    return `<div class="row" style="margin-bottom:6px;flex-wrap:wrap">
+      <b style="min-width:190px">${esc(i.product_name)}</b>
+      <span class="muted small" style="min-width:150px">${rem} ${esc(i.unit || '')} ${t('ordered')}</span>
+      <input class="small" type="number" min="0" step="any" data-k="qty" data-item="${i.id}" placeholder="0" style="width:90px" title="${t('quantity')}">
+      <input class="small" type="number" min="0" data-k="unit_cost" data-item="${i.id}" value="${i.unit_cost}" style="width:100px" title="${t('unit_cost')}">
+      ${extra}
+    </div>`;
+  }).join('');
+}
+
+async function resolveDisc(id, decision) {
+  try {
+    const r = await api(`/api/po-items/${id}/discrepancy`, { method: 'POST', body: { decision } });
+    toast($('#po-msg'), t(r.decision === 'approved' ? 'approved' : 'rejected'), true);
+    await Promise.all([showPO(PU.curPO.id), loadSupList()]);
+  } catch (e) { toast($('#po-msg'), e.message, false); }
+}
+
+// ---- invoices ----
+async function loadInvoices() {
+  PU.invs = await api('/api/supplier-invoices').catch(() => []);
+  $('#inv-rows').innerHTML = PU.invs.map((v) => `
+    <tr>
+      <td class="mono">${esc(v.ref)}</td><td>${esc(v.supplier_name)}</td>
+      <td class="mono small">${esc(v.po_ref || '')}</td>
+      <td class="mono">${fmt(v.amount)}</td>
+      <td class="mono ${v.outstanding > 0 ? '' : 'muted'}">${fmt(v.outstanding)}</td>
+      <td class="muted small">${v.due_date || ''}</td>
+      <td><span class="pill ${v.status === 'paid' ? 'g' : v.status === 'disputed' ? 'r' : ''}">${t(v.status)}</span></td>
+      <td class="small" style="min-width:320px">
+        ${v.status === 'paid' ? '' : `
+          <input class="small" type="number" min="0" data-pay-amt="${v.id}" placeholder="${t('price')}" style="width:85px">
+          <select class="small" data-pay-met="${v.id}" style="width:85px"><option value="bank">bank</option><option value="mpesa">mpesa</option><option value="cash">cash</option><option value="cheque">cheque</option><option value="other">other</option></select>
+          <input class="small" data-pay-ref="${v.id}" placeholder="${t('channel_ref')}" style="width:150px">
+          <button class="btn small" data-pay="${v.id}">${t('pay')}</button>
+          ${['open', 'partial'].includes(v.status) ? ` <button class="btn small ghost" data-dispute="${v.id}">${t('dispute')}</button>` : ''}`}
+      </td>
+    </tr>`).join('') || `<tr><td colspan="8" class="muted">${t('no_rows')}</td></tr>`;
+  document.querySelectorAll('#inv-rows [data-pay]').forEach((b) => {
+    b.onclick = async () => {
+      const id = b.dataset.pay;
+      const body = {
+        amount: Number(document.querySelector(`[data-pay-amt="${id}"]`).value),
+        method: document.querySelector(`[data-pay-met="${id}"]`).value,
+        channel_ref: document.querySelector(`[data-pay-ref="${id}"]`).value.trim()
+      };
+      try {
+        const r = await api(`/api/supplier-invoices/${id}/payments`, { method: 'POST', body });
+        toast($('#inv-msg'), t('save_ok') + (r.settled ? ` — ${t('settled')}` : ''), true);
+        await Promise.all([loadInvoices(), loadSupList()]);
+      } catch (e) { toast($('#inv-msg'), e.message, false); }
+    };
+  });
+  document.querySelectorAll('#inv-rows [data-dispute]').forEach((b) => {
+    b.onclick = async () => {
+      try {
+        await api(`/api/supplier-invoices/${b.dataset.dispute}`, { method: 'PUT', body: { status: 'disputed' } });
+        await loadInvoices();
+      } catch (e) { toast($('#inv-msg'), e.message, false); }
+    };
+  });
+}
+
+// ---- supplier returns ----
+async function loadReturns() {
+  PU.srs = await api('/api/supplier-returns').catch(() => []);
+  $('#sr-rows').innerHTML = PU.srs.map((r) => `
+    <tr><td class="mono">${esc(r.ref)}</td><td>${esc(r.supplier_name)}</td><td>${esc(r.product_name)}</td>
+    <td class="mono">${r.qty}</td><td class="small muted">${esc(r.reason || '')}</td>
+    <td class="muted small">${new Date(r.created_at).toLocaleDateString()}</td></tr>`).join('')
+    || `<tr><td colspan="6" class="muted">${t('no_rows')}</td></tr>`;
+  $('#sr-product').innerHTML = PU.products.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+}
+
+// ---- suggestions ----
+async function loadSuggestions() {
+  const rows = await api('/api/purchase/suggestions?limit=20').catch(() => []);
+  $('#pu-suggest-rows').innerHTML = rows.map((s) => `
+    <tr>
+      <td><b>${esc(s.product_name)}</b></td>
+      <td class="mono">${s.stock}</td>
+      <td class="mono">${s.velocity_per_day}</td>
+      <td class="mono ${s.days_cover < s.lead_days ? '' : 'muted'}">${s.days_cover}</td>
+      <td class="mono"><b>${s.suggest_qty} ${esc(s.unit || '')}</b></td>
+      <td>${esc(s.supplier_name)} <span class="muted small">+${s.lead_days}d</span></td>
+      <td><button class="btn small" data-sug="${s.supplier_id}" data-pid="${s.product_id}" data-qty="${s.suggest_qty}" data-cost="${s.current_cost}">${t('new_po')}</button></td>
+    </tr>`).join('') || `<tr><td colspan="7" class="muted">${t('no_suggestions')}</td></tr>`;
+  document.querySelectorAll('#pu-suggest-rows [data-sug]').forEach((b) => {
+    b.onclick = () => openPOForm(Number(b.dataset.sug), Number(b.dataset.pid), Number(b.dataset.qty), Number(b.dataset.cost));
+  });
+}
+
+// ---- purchasing wiring ----
+$('#po-new-btn').onclick = () => openPOForm();
+$('#po-add-item').onclick = () => addPOFormRow();
+$('#po-clear').onclick = () => { $('#po-form').classList.add('hidden'); };
+$('#po-save').onclick = async () => {
+  const items = [...document.querySelectorAll('#po-form-items tr')].map((tr) => ({
+    product_id: Number(tr.querySelector('[data-f="pid"]').value),
+    qty: Number(tr.querySelector('[data-f="qty"]').value),
+    unit_cost: Number(tr.querySelector('[data-f="cost"]').value) || undefined
+  })).filter((i) => i.product_id && i.qty > 0);
+  const supplierId = Number($('#po-supplier').value);
+  if (!supplierId) return toast($('#po-form-msg'), t('supplier') + '?', false);
+  if (!items.length) return toast($('#po-form-msg'), t('no_rows'), false);
+  try {
+    const r = await api('/api/purchase-orders', { method: 'POST', body: { supplier_id: supplierId, expected_date: $('#po-expected').value || undefined, items } });
+    toast($('#po-form-msg'), `${r.ref} ✓`, true);
+    $('#po-form').classList.add('hidden');
+    await Promise.all([loadPOs(), loadSupList()]);
+  } catch (e) { toast($('#po-form-msg'), e.message, false); }
+};
+$('#po-close-btn').onclick = () => { $('#po-detail').classList.add('hidden'); PU.curPO = null; };
+$('#po-cancel-btn').onclick = async () => {
+  if (!PU.curPO || !window.confirm(`${PU.curPO.ref} — ${t('cancel_po')}?`)) return;
+  try {
+    await api(`/api/purchase-orders/${PU.curPO.id}/cancel`, { method: 'POST' });
+    toast($('#po-msg'), t('cancelled'), true);
+    await Promise.all([loadPOs(), loadSupList()]);
+    $('#po-detail').classList.add('hidden'); PU.curPO = null;
+  } catch (e) { toast($('#po-msg'), e.message, false); }
+};
+$('#po-receive-btn').onclick = () => {
+  const el = $('#po-receive');
+  el.classList.toggle('hidden');
+  if (!el.classList.contains('hidden')) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+};
+$('#gr-save').onclick = async () => {
+  const items = [];
+  document.querySelectorAll('#gr-items [data-k="qty"]').forEach((el) => {
+    const qty = Number(el.value);
+    if (!qty || qty <= 0) return;
+    const id = el.dataset.item;
+    const g = (k) => document.querySelector(`#gr-items [data-k="${k}"][data-item="${id}"]`);
+    const it = { po_item_id: Number(id), qty, unit_cost: Number(g('unit_cost').value) };
+    if (g('batch_no') && g('batch_no').value.trim()) it.batch_no = g('batch_no').value.trim();
+    if (g('expiry_date') && g('expiry_date').value) it.expiry_date = g('expiry_date').value;
+    if (g('serials') && g('serials').value.trim()) it.serials = g('serials').value.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
+    items.push(it);
+  });
+  if (!items.length) return toast($('#gr-msg'), t('quantity') + ' > 0', false);
+  try {
+    const r = await api(`/api/purchase-orders/${PU.curPO.id}/receive`, { method: 'POST', body: { items } });
+    toast($('#gr-msg'), `${r.ref} ✓${r.discrepancies.length ? ` — ${r.discrepancies.length} ${t('discrepancy')}` : ''}`, true);
+    await Promise.all([showPO(PU.curPO.id), loadSupList()]);
+  } catch (e) { toast($('#gr-msg'), e.message, false); }
+};
+$('#pu-suggest-refresh').onclick = loadSuggestions;
+$('#inv-new-btn').onclick = () => {
+  $('#inv-form').classList.toggle('hidden');
+  if (!$('#inv-form').classList.contains('hidden')) {
+    $('#inv-amount').value = ''; $('#inv-sref').value = ''; $('#inv-due').value = '';
+    $('#inv-po').innerHTML = '<option value="">—</option>';
+  }
+};
+$('#inv-supplier').onchange = () => {
+  const sid = Number($('#inv-supplier').value);
+  const pos = PU.pos.filter((p) => p.supplier_id === sid);
+  $('#inv-po').innerHTML = '<option value="">—</option>' + pos.map((p) =>
+    `<option value="${p.id}">${esc(p.ref)} (${fmt(p.total)})</option>`).join('');
+};
+$('#inv-save').onclick = async () => {
+  const body = {
+    supplier_id: Number($('#inv-supplier').value),
+    po_id: $('#inv-po').value ? Number($('#inv-po').value) : undefined,
+    amount: Number($('#inv-amount').value),
+    supplier_ref: $('#inv-sref').value.trim(),
+    due_date: $('#inv-due').value || undefined
+  };
+  try {
+    const r = await api('/api/supplier-invoices', { method: 'POST', body });
+    toast($('#inv-msg'), `${r.ref} ✓`, true);
+    $('#inv-form').classList.add('hidden');
+    await Promise.all([loadInvoices(), loadSupList()]);
+  } catch (e) { toast($('#inv-msg'), e.message, false); }
+};
+$('#inv-clear').onclick = () => $('#inv-form').classList.add('hidden');
+$('#sr-new-btn').onclick = () => $('#sr-form').classList.toggle('hidden');
+$('#sr-clear').onclick = () => $('#sr-form').classList.add('hidden');
+$('#sr-save').onclick = async () => {
+  const body = {
+    supplier_id: Number($('#sr-supplier').value),
+    product_id: Number($('#sr-product').value),
+    qty: Number($('#sr-qty').value),
+    reason: $('#sr-reason').value.trim()
+  };
+  try {
+    const r = await api('/api/supplier-returns', { method: 'POST', body });
+    toast($('#sr-msg'), `${r.ref} ✓`, true);
+    $('#sr-form').classList.add('hidden');
+    await Promise.all([loadReturns(), loadSupList()]);
+  } catch (e) { toast($('#sr-msg'), e.message, false); }
+};
+$('#sup-new-btn').onclick = () => {
+  $('#sup-id').value = ''; $('#sup-name').value = ''; $('#sup-kra').value = '';
+  $('#sup-address').value = ''; $('#sup-phone').value = ''; $('#sup-terms').value = ''; $('#sup-lead').value = 7;
+  $('#sup-form').classList.remove('hidden');
+};
+$('#sup-clear').onclick = () => $('#sup-form').classList.add('hidden');
+$('#sup-save').onclick = async () => {
+  const id = $('#sup-id').value;
+  const body = {
+    name: $('#sup-name').value.trim(), kraPin: $('#sup-kra').value.trim(),
+    address: $('#sup-address').value.trim(), phone: $('#sup-phone').value.trim(),
+    terms: $('#sup-terms').value.trim(), lead_days: Number($('#sup-lead').value) || 0
+  };
+  if (!body.name) return toast($('#sup-msg'), t('name') + '?', false);
+  try {
+    if (id) await api('/api/suppliers/' + id, { method: 'PUT', body });
+    else await api('/api/suppliers', { method: 'POST', body });
+    toast($('#sup-msg'), t('save_ok'), true);
+    $('#sup-form').classList.add('hidden');
+    await loadSupList();
+  } catch (e) { toast($('#sup-msg'), e.message, false); }
+};
 
 window.addEventListener('hashchange', () => selectTab(location.hash.replace('#', '')));
 

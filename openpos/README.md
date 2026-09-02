@@ -54,7 +54,7 @@ adapters, branch isolation, auditability, offline rules, core vs modules) plus t
 | 2 | 2 | Business/tenancy foundation: **capability system**, locations, registers, warehouses, fine-grained permissions, solo-first onboarding v2 ✅ |
 | 3 | 3–4 | Universal product engine: **variants + axes, packs, multi-barcode, serials, industry attributes, CSV import/export, supplier link & reorder** ✅ |
 | 4 | 5–6 | Stock ledger & inventory: **append-only move engine, FEFO batch allocation, R-S8 oversell guard, integrity job, stocktakes, trace, ageing, dead stock** ✅ |
-| 5 | 7–8 | Purchasing & suppliers (POs, GR, discrepancies, suggested POs) |
+| 5 | 7–8 | Purchasing & suppliers: **capability-gated POs, suggested orders (velocity × cover × lead), partial GR with batch/serial capture, receiving discrepancies (auto supplier return), invoices with evidence-backed payments, supplier balances** ✅ |
 | 6 | 9 | Pricing engine (resolution chain, margin guards, history) |
 | 7 | 10–11 | POS / checkout engine |
 | 8 | 12 | Payment engine (adapters: cash/M-Pesa/card/bank/deni) |
@@ -117,3 +117,16 @@ adapters, branch isolation, auditability, offline rules, core vs modules) plus t
   (was 48), including a 10k-move rebuild == balance proof. Also fixed a real bug the new
   tests exposed: CSV import read the exported string `"0"` as true, silently flipping
   batch/serial flags on every round-trip.
+- **Day 7–8** — **purchasing & suppliers** (capability-gated, R-C): suppliers with KRA PIN,
+  terms and **lead days**; suggested orders computed from real sales velocity
+  (`ceil(velocity × (lead + cover) − stock)`, most-urgent first, top-20); purchase orders
+  (`PO-`) with partial **goods received** (`GR-`) capturing batch/expiry/serial and cost at
+  the door; **receiving discrepancies** (over-receipt / price overcharge) flagged pending —
+  reject an over-receipt and the system writes the supplier return itself (FEFO `return_out`
+  move, PO line restored); supplier invoices (`INV-`) whose payments demand channel evidence
+  (method + channel_ref, R-PAY), disputes block payment, and the supplier balance is correct
+  at every step. Standalone supplier returns (`SR-`), per-lot **purchase price history** from
+  the ledger, and a manager **Purchasing** tab (suggestions → PO → receive → discrepancies →
+  invoices/payments → returns → suppliers). Purchases/returns post through the same Phase-4
+  move engine, so trace & integrity cover them for free. **71 tests green** (was 60)
+  including the full acceptance flow, plus a 47-step UI smoke.

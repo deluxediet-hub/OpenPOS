@@ -1,7 +1,7 @@
 # OpenPOS v2 — Plan & Roadmap
 **"A POS for every Kenyan shop — any number of branches."**
 
-> Status: **Days 5–6 of 60 complete** (Phase 4 — stock ledger & inventory). Roadmap
+> Status: **Days 7–8 of 60 complete** (Phase 5 — purchasing & suppliers). Roadmap
 > restructured 2026-09-02 to the founder's 35-phase directive. The engineering contract is
 > **`openpos/ARCHITECTURE.md`** — every phase implements it; rule changes go through its
 > change log.
@@ -174,13 +174,27 @@ contradicts the doc without a change-log entry.**
   Bonus fix: CSV import treated the string `"0"` as truthy — flags like track_batches were
   flipped to 1 on every round-trip (regression test added).
 
-### Phase 5 — Purchasing & Supplier System · Days 7–8
+### Phase 5 — Purchasing & Supplier System · Days 7–8 ✅
 - Suppliers (contacts, KRA PIN, terms), supplier price lists, POs (manual + **suggested from
   sales velocity × cover days × lead time**), goods received (partial, batch/serial capture,
   cost), **receiving discrepancies** (price/qty, approval), supplier invoices, supplier
   returns, supplier payments & balances, purchase price history, cost changes
 - **Acceptance:** PO → partial GR with 2 discrepancies → invoice → payment, balances correct
   everywhere; suggested PO for top-20 fast movers matches the velocity math.
+- **Done (Day 7–8):** purchasing is a capability (R-C) — off by default, 403-with-hint until
+  enabled. Suppliers (KRA PIN, terms, **lead days**, balance, delete-blocked on open POs or
+  owed money). POs with sequential `PO-` refs; suggested orders = `ceil(velocity × (lead +
+  cover) − stock)` from 30-day sales velocity, most-urgent first, top-20. Goods received in
+  parts (`GR-` refs, partial → received), batch/serial capture at the door, cost per line;
+  **discrepancies** (over-receipt / price-overcharge) flagged pending at the door — reject an
+  over-receipt → automatic supplier return (FEFO `return_out` move, lot decremented, PO
+  restored) — approve → accepted. Invoices (`INV-`) with **payments that require channel
+  evidence** (R-PAY: method + channel_ref), overpayment refused, dispute blocks payment,
+  supplier balance = Σ invoices − Σ payments, correct at every step. Supplier returns
+  (`SR-`) standalone + auto; purchase price history per product from the ledger. Manager
+  **Purchasing** tab (capability-gated): suggestions → PO → receive → discrepancies →
+  invoices/payments → returns → suppliers. **71 tests green** (was 60) incl. the full
+  acceptance flow; 47-step UI smoke green.
 
 ### Phase 6 — Pricing Engine · Day 9
 - Resolution chain (promo → customer → branch → pack → level → default); branch &
@@ -637,3 +651,57 @@ Phase 7 (checkout holds); actual sale/return moves land with the checkout engine
 through this same door. **Bug found & fixed along the way:** CSV import parsed flags with
 `value ? 1 : 0`, so the exported string `"0"` read as true and every product silently
 gained batch/serial tracking after a round-trip — now parsed numerically + regression test.
+### Day 7–8 — Purchasing & Supplier System (Phase 5) ✅ (2026-09-02)
+**Backend (engines first, all capability-gated behind `purchasing`):**
+- `db.js` — schema v5 (additive): `suppliers.lead_days`; `po_items` + `gr_items` gain
+  `variant_id` (+ `gr_items.po_id` backfilled) so receiving resolves variants;
+  `po_items.discrepancy` / `discrepancy_status` (pending/approved/rejected); new tables
+  `supplier_invoices` (+ `paid`/`outstanding`), `invoice_payments` (+ `supplier_id`),
+  `supplier_returns`. All additive — no existing row touched.
+- `server.js` — the purchasing surface, every route behind `needPurchasing` (403 + hint when
+  the capability is off) and the `purchases.manage` permission:
+  - **Suppliers**: CRUD (KRA PIN, phone, address, terms, **lead days**), live balance, delete
+    blocked while open POs or owed money exist.
+  - **Suggested POs** `GET /api/purchase/suggestions`: per product with an active supplier,
+    `velocity = 30-day sale moves ÷ days`, `suggest = ceil(velocity × (lead + cover) − stock)`,
+    most-urgent-first (lowest days-of-cover), top-N (default 20) — the velocity math, not a
+    guess.
+  - **POs**: create (sequential `PO-` ref, per-line cost, total = Σ qty×cost), list, detail,
+    cancel (only while nothing received — received POs settle via returns).
+  - **Goods received** `POST .../receive`: partial receipts (`GR-` ref, sent → partial →
+    received), batch no + expiry + serial capture at the door, per-line cost; **discrepancies
+    flagged pending** when a line over-receives (qty) or arrives above PO cost (price).
+  - **Discrepancy decisions** `POST /api/po-items/:id/discrepancy`: approve = accept as-is;
+    **reject an over-receipt = automatic supplier return** (FEFO `return_out` move, the lot is
+    decremented, PO line restored to its ordered qty) — no double data entry.
+  - **Invoices** (`INV-`) + **payments**: a payment needs a method **and a channel_ref** (R-PAY
+    — every shilling out leaves evidence); overpayment refused; dispute blocks payment until
+    resolved; supplier balance = Σ invoices − Σ payments, kept correct at every step.
+  - **Supplier returns** (`SR-`) standalone (reason required) + the auto kind above;
+    **purchase price history** per product read straight from the ledger.
+- `writeMove` remains the only door for quantities — purchases/returns post as `purchase` /
+  `return_out` moves, so the Phase-4 ledger, trace and integrity all see purchasing for free.
+
+**UI (thin client):** manager **Purchasing** tab, visible only when the capability is on
+(R-C): suggestions → one-tap "New PO" (pre-filled from the suggestion), PO detail with
+partial-receive form (batch/serial capture) and discrepancy approve/reject, invoices with
+inline pay + dispute, returns, and suppliers CRUD. EN/SW strings.
+
+**Acceptance (all tested — 71 tests green, up from 60, + 47-step UI smoke):**
+- **The acceptance flow:** PO → partial GR (15 of 20) → second GR with **2 discrepancies**
+  (over-receipt + price overcharge, both flagged pending) → reject the over-receipt (auto
+  supplier return, lot + PO restored) → approve the price → PO completes → invoice →
+  partial + final payment (overpayment & missing channel_ref both refused) → **supplier
+  balance correct at every step**.
+- **Velocity math:** a seeded fast-mover (2 units/day over 30 days, stock 10, lead 7, cover
+  14) is suggested at `ceil(2 × (7+14) − 10) = 32`, days-of-cover 5; items with no sales or no
+  supplier are excluded.
+- **Guards:** cancel only before any receipt (received POs settle via returns); double
+  cancel refused; over-receipt can't push stock past the PO line silently; supplier delete
+  blocked on open POs / owed money; every purchase/return/payment is an audited move or
+  evidence row.
+
+**Notes:** discrepancies resolve by decision, not by editing stock — the ledger never sees an
+unexplained quantity. Cost is captured per line at the door (not from the product's cost), so
+the purchase-history view shows what a product actually cost per lot. Suggested-PO cover days
+and window are query params (defaults 30/14) so a business can tune its own appetite.

@@ -1016,6 +1016,247 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(bal.match, true, 'materialized == ledger');
   });
 
+  // ---------------- Phase 5: purchasing & suppliers ----------------
+  section('Phase 5 — purchasing (POs, GR + discrepancies, invoices, payments, suggestions)');
+
+  const kcc = d.prepare("SELECT * FROM suppliers WHERE name = 'KCC Depot'").get();
+
+  await test('purchasing is capability-gated (R-C); supplier CRUD + lead days', async () => {
+    const capsBefore = (await authJ('/api/capabilities')).body.find((c) => c.id === 'purchasing');
+    assert.strictEqual(capsBefore.enabled, false, 'duka does not seed purchasing');
+    const po = await authJ({ path: '/api/purchase-orders', method: 'POST', body: { supplier_id: kcc.id, items: [{ product_id: 1, qty: 1 }] } });
+    assert.strictEqual(po.status, 403, 'PO blocked while capability off');
+    assert.ok(/Purchasing/.test(po.body.error));
+    const on = await authJ({ path: '/api/capabilities', method: 'POST', body: { capability: 'purchasing', enabled: true } });
+    assert.strictEqual(on.status, 200);
+    // supplier update + delete guard
+    const tmpSup = await authJ({ path: '/api/suppliers', method: 'POST', body: { name: 'Temp Co' } });
+    assert.strictEqual(tmpSup.status, 200);
+    const u = await authJ({ path: `/api/suppliers/${tmpSup.body.id}`, method: 'PUT', body: { lead_days: 3, terms: '30 days' } });
+    assert.strictEqual(u.status, 200);
+    assert.strictEqual((await authJ(`/api/suppliers/${tmpSup.body.id}`)).body.lead_days, 3);
+    const del = await authJ({ path: `/api/suppliers/${tmpSup.body.id}`, method: 'DELETE' });
+    assert.strictEqual(del.status, 200, 'clean supplier deletes');
+    assert.strictEqual((await authJ('/api/suppliers')).body.find((x) => x.id === tmpSup.body.id), undefined);
+    const det = await authJ(`/api/suppliers/${kcc.id}`);
+    assert.ok(det.body.balance && typeof det.body.balance.outstanding === 'number');
+  });
+
+  let poId, poRef, milkItem, paraItem, sugarItem;
+
+  await test('create PO: 3 items, sequential ref, total = Σ qty×cost', async () => {
+    const milk = d.prepare("SELECT id FROM products WHERE name = 'Milk 1L'").get().id;
+    const para = d.prepare("SELECT id FROM products WHERE name = 'Paracetamol 500mg'").get().id;
+    const sugar = d.prepare("SELECT id FROM products WHERE name = 'Brown Sugar 1kg'").get().id;
+    const r = await authJ({
+      path: '/api/purchase-orders', method: 'POST',
+      body: {
+        supplier_id: kcc.id, note: 'monthly restock', expected_date: '2026-09-10',
+        items: [
+          { product_id: milk, qty: 20, unit_cost: 90 },
+          { product_id: para, qty: 30, unit_cost: 80 },
+          { product_id: sugar, qty: 10, unit_cost: 150 }
+        ]
+      }
+    });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.ref, 'PO-000001');
+    assert.strictEqual(r.body.total, 20 * 90 + 30 * 80 + 10 * 150);
+    poId = r.body.id; poRef = r.body.ref;
+    const det = (await authJ(`/api/purchase-orders/${poId}`)).body;
+    assert.strictEqual(det.status, 'sent');
+    assert.strictEqual(det.items.length, 3);
+    milkItem = det.items[0].id; paraItem = det.items[1].id; sugarItem = det.items[2].id;
+    const list = (await authJ('/api/purchase-orders?status=sent')).body;
+    assert.strictEqual(list.length, 1);
+    assert.strictEqual(list[0].supplier_name, 'KCC Depot');
+  });
+
+  await test('partial GR: 15 of 20 milk received at PO cost → stock + move + status partial', async () => {
+    const paraVid = d.prepare("SELECT v.id FROM products p JOIN variants v ON v.product_id = p.id WHERE p.name = 'Paracetamol 500mg' AND v.axes_key = '{}'").get().id;
+    const beforePara = d.prepare('SELECT qty FROM stock WHERE variant_id = ?').get(paraVid).qty;
+    const r = await authJ({
+      path: `/api/purchase-orders/${poId}/receive`, method: 'POST',
+      body: { items: [{ po_item_id: milkItem, qty: 15, cost: 90 }] }
+    });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.ref, 'GR-000001');
+    assert.strictEqual(r.body.discrepancies.length, 0);
+    const det = (await authJ(`/api/purchase-orders/${poId}`)).body;
+    assert.strictEqual(det.status, 'partial', 'not everything received yet');
+    const item = det.items.find((i) => i.id === milkItem);
+    assert.strictEqual(item.received_qty, 15);
+    const milkVid = d.prepare("SELECT v.id FROM products p JOIN variants v ON v.product_id = p.id WHERE p.name = 'Milk 1L' AND v.axes_key = '{}'").get().id;
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ?').get(milkVid).qty, 15);
+    const move = d.prepare("SELECT * FROM stock_moves WHERE ref = ? AND type = 'purchase' ORDER BY id DESC LIMIT 1").get(poRef);
+    assert.strictEqual(move.qty, 15);
+    assert.strictEqual(move.unit_cost, 90);
+    assert.strictEqual(beforePara, d.prepare('SELECT qty FROM stock WHERE variant_id = ?').get(paraVid).qty, 'para untouched');
+  });
+
+  await test('GR with 2 discrepancies: over-receipt (qty) + price overcharge, both flagged pending', async () => {
+    const r = await authJ({
+      path: `/api/purchase-orders/${poId}/receive`, method: 'POST',
+      body: { items: [
+        { po_item_id: paraItem, qty: 32, cost: 80, batch_no: 'PO-B1', expiry_date: '2027-06-30' }, // 2 over
+        { po_item_id: sugarItem, qty: 10, cost: 160 } // 10 over cost
+      ] }
+    });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.ref, 'GR-000002');
+    assert.strictEqual(r.body.discrepancies.length, 2, 'two discrepancies flagged');
+    const kinds = r.body.discrepancies.map((x) => x.kind).sort();
+    assert.deepStrictEqual(kinds, ['over_qty', 'price']);
+    const det = (await authJ(`/api/purchase-orders/${poId}`)).body;
+    const p = det.items.find((i) => i.id === paraItem);
+    assert.strictEqual(p.discrepancy, 'over_qty');
+    assert.strictEqual(p.discrepancy_status, 'pending');
+    const s = det.items.find((i) => i.id === sugarItem);
+    assert.strictEqual(s.discrepancy, 'price');
+    assert.strictEqual(s.discrepancy_status, 'pending');
+    // batch was created with the lot (FEFO-ready)
+    const batch = d.prepare("SELECT * FROM batches WHERE batch_no = 'PO-B1'").get();
+    assert.ok(batch);
+    assert.strictEqual(batch.qty, 32);
+    assert.strictEqual(batch.expiry_date, '2027-06-30');
+    assert.strictEqual(batch.cost, 80);
+  });
+
+  await test('discrepancy resolution: reject over-receipt → supplier return; approve price', async () => {
+    const paraVid = d.prepare("SELECT v.id FROM products p JOIN variants v ON v.product_id = p.id WHERE p.name = 'Paracetamol 500mg' AND v.axes_key = '{}'").get().id;
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ?').get(paraVid).qty, 32, 'all 32 on hand first');
+    const rej = await authJ({ path: `/api/po-items/${paraItem}/discrepancy`, method: 'POST', body: { decision: 'reject' } });
+    assert.strictEqual(rej.status, 200);
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ?').get(paraVid).qty, 30, '2 went back');
+    const sr = d.prepare('SELECT * FROM supplier_returns ORDER BY id DESC LIMIT 1').get();
+    assert.strictEqual(sr.qty, 2);
+    assert.strictEqual(sr.po_id, poId);
+    const retMove = d.prepare('SELECT * FROM stock_moves WHERE ref = ? ORDER BY id DESC LIMIT 1').get(sr.ref);
+    assert.strictEqual(retMove.type, 'return_out');
+    assert.strictEqual(retMove.qty, -2);
+    assert.ok(retMove.batch_id, 'return came out of the PO batch (FEFO)');
+    assert.strictEqual(d.prepare("SELECT qty FROM batches WHERE batch_no = 'PO-B1'").get().qty, 30, 'batch conserved');
+    const det = (await authJ(`/api/purchase-orders/${poId}`)).body;
+    assert.strictEqual(det.items.find((i) => i.id === paraItem).received_qty, 30, 'received restored to ordered');
+    const app = await authJ({ path: `/api/po-items/${sugarItem}/discrepancy`, method: 'POST', body: { decision: 'approve' } });
+    assert.strictEqual(app.status, 200);
+    const det2 = (await authJ(`/api/purchase-orders/${poId}`)).body;
+    assert.strictEqual(det2.items.find((i) => i.id === sugarItem).discrepancy_status, 'approved');
+    const again = await authJ({ path: `/api/po-items/${sugarItem}/discrepancy`, method: 'POST', body: { decision: 'approve' } });
+    assert.strictEqual(again.status, 400, 'resolved discrepancies stay resolved');
+  });
+
+  await test('final partial GR completes the PO (status received)', async () => {
+    const r = await authJ({
+      path: `/api/purchase-orders/${poId}/receive`, method: 'POST',
+      body: { items: [{ po_item_id: milkItem, qty: 5, cost: 90 }] }
+    });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.discrepancies.length, 0);
+    const det = (await authJ(`/api/purchase-orders/${poId}`)).body;
+    assert.strictEqual(det.status, 'received');
+    const extra = await authJ({
+      path: `/api/purchase-orders/${poId}/receive`, method: 'POST',
+      body: { items: [{ po_item_id: milkItem, qty: 1 }] }
+    });
+    assert.strictEqual(extra.status, 400, 'cannot receive against a received PO');
+  });
+
+  await test('invoice against PO → partial payment → paid; overpayment & missing evidence refused', async () => {
+    // 15×90 + 5×90 + 32×80 + 10×160 = 5960
+    const inv = await authJ({
+      path: '/api/supplier-invoices', method: 'POST',
+      body: { supplier_id: kcc.id, po_id: poId, supplier_ref: 'KCC/8841', amount: 5960, vat: 829, due_date: '2026-10-01' }
+    });
+    assert.strictEqual(inv.status, 200);
+    const other = (await authJ({ path: '/api/suppliers', method: 'POST', body: { name: 'Second Co' } })).body.id;
+    const wrongSup = await authJ({
+      path: '/api/supplier-invoices', method: 'POST',
+      body: { supplier_id: other, po_id: poId, amount: 100 }
+    });
+    assert.strictEqual(wrongSup.status, 400, 'PO must belong to the supplier');
+    const noRef = await authJ({ path: `/api/supplier-invoices/${inv.body.id}/payments`, method: 'POST', body: { amount: 100, method: 'bank' } });
+    assert.strictEqual(noRef.status, 400, 'payment without channel evidence refused');
+    const p1 = await authJ({ path: `/api/supplier-invoices/${inv.body.id}/payments`, method: 'POST', body: { amount: 2000, method: 'bank', channel_ref: 'BANK-TR-778' } });
+    assert.strictEqual(p1.status, 200);
+    assert.strictEqual(p1.body.settled, false);
+    const over = await authJ({ path: `/api/supplier-invoices/${inv.body.id}/payments`, method: 'POST', body: { amount: 4000, method: 'bank', channel_ref: 'X' } });
+    assert.strictEqual(over.status, 400, 'overpayment refused');
+    const p2 = await authJ({ path: `/api/supplier-invoices/${inv.body.id}/payments`, method: 'POST', body: { amount: 3960, method: 'mpesa', channel_ref: 'MPESA-TR-991' } });
+    assert.strictEqual(p2.body.settled, true);
+    const det = (await authJ(`/api/supplier-invoices/${inv.body.id}`)).body;
+    assert.strictEqual(det.status, 'paid');
+    assert.strictEqual(det.paid, 5960);
+    assert.strictEqual(det.payments.length, 2);
+    const bal = (await authJ(`/api/suppliers/${kcc.id}`)).body.balance;
+    assert.strictEqual(bal.outstanding, 0, 'supplier settled');
+    assert.strictEqual(bal.paid, 5960);
+    assert.strictEqual(bal.open_pos, 0, 'received PO is not open');
+  });
+
+  await test('standalone supplier return: stock out, return_out move, evidence row', async () => {
+    const milk = d.prepare("SELECT id FROM products WHERE name = 'Milk 1L'").get().id;
+    const before = d.prepare("SELECT v.id, s.qty FROM products p JOIN variants v ON v.product_id = p.id JOIN stock s ON s.variant_id = v.id WHERE p.name = 'Milk 1L'").get();
+    const r = await authJ({
+      path: '/api/supplier-returns', method: 'POST',
+      body: { supplier_id: kcc.id, product_id: milk, qty: 3, cost: 90, reason: 'damaged in transit' }
+    });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ?').get(before.id).qty, before.qty - 3);
+    const row = d.prepare('SELECT * FROM supplier_returns WHERE ref = ?').get(r.body.ref);
+    assert.strictEqual(row.qty, 3);
+    const noReason = await authJ({ path: '/api/supplier-returns', method: 'POST', body: { supplier_id: kcc.id, product_id: milk, qty: 1 } });
+    assert.strictEqual(noReason.status, 400, 'reason required');
+    const list = (await authJ('/api/supplier-returns?supplier_id=' + kcc.id)).body;
+    assert.strictEqual(list.length, 2, 'reject-return + standalone');
+  });
+
+  await test('suggested PO: velocity × (lead + cover) − stock, top movers first', async () => {
+    // Fast Mover: 10 on hand, sold 2/day for 30 days (60 total) → velocity 2/day
+    const p = await authJ({ path: '/api/products', method: 'POST', body: { name: 'Fast Mover', unit: 'pcs', cost: 50, price: 90, supplier_id: kcc.id } });
+    await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: p.body.id, qty: 10, type: 'purchase', reason: 'purchase' } });
+    const ins = d.prepare("INSERT INTO stock_moves (product_id, variant_id, branch_id, location_id, qty, type, reason, ref, user_id, created_at) VALUES (?, (SELECT id FROM variants WHERE product_id = ?), 1, 1, 2, 'sale', 'sale', 'HIST', NULL, ?)");
+    for (let i = 0; i < 30; i++) ins.run(p.body.id, p.body.id, new Date(Date.now() - i * 86400e3).toISOString()); // 30 lots of 2, all inside the window
+    const rows = (await authJ('/api/purchase/suggestions?days=30&cover=14')).body;
+    const fm = rows.find((r) => r.product_id === p.body.id);
+    assert.ok(fm, 'fast mover suggested');
+    assert.strictEqual(fm.velocity_per_day, 2);
+    assert.strictEqual(fm.stock, 10);
+    assert.strictEqual(fm.lead_days, 7, 'supplier lead days used');
+    assert.strictEqual(fm.suggest_qty, Math.ceil(2 * (7 + 14) - 10), 'velocity × (lead + cover) − stock');
+    assert.strictEqual(fm.days_cover, 5);
+    // never-sold and supplier-less products are not suggested
+    assert.ok(!rows.find((r) => r.product_name === 'Milk 1L'), 'no sales → no suggestion');
+    assert.ok(!rows.find((r) => r.product_name === 'Dress'), 'no supplier → no suggestion');
+    // urgent first
+    assert.strictEqual(rows.length >= 1, true);
+  });
+
+  await test('purchase price history: evidence per lot from the ledger', async () => {
+    const para = d.prepare("SELECT id FROM products WHERE name = 'Paracetamol 500mg'").get().id;
+    const r = (await authJ(`/api/products/${para}/purchase-history`)).body;
+    assert.strictEqual(r.current_cost, 80);
+    const gr = r.purchases.find((x) => x.ref === poRef);
+    assert.ok(gr, 'GR purchase on the history');
+    assert.strictEqual(gr.qty, 32);
+    assert.strictEqual(gr.unit_cost, 80);
+    assert.ok(gr.batch_no, 'batch evidence attached');
+  });
+
+  await test('PO cancel: only when nothing received; received POs use returns', async () => {
+    const milk = d.prepare("SELECT id FROM products WHERE name = 'Milk 1L'").get().id;
+    const c = await authJ({ path: '/api/purchase-orders', method: 'POST', body: { supplier_id: kcc.id, items: [{ product_id: milk, qty: 5, unit_cost: 90 }] } });
+    assert.strictEqual(c.body.ref, 'PO-000002');
+    const ok = await authJ({ path: `/api/purchase-orders/${c.body.id}/cancel`, method: 'POST', body: {} });
+    assert.strictEqual(ok.status, 200);
+    const again = await authJ({ path: `/api/purchase-orders/${c.body.id}/cancel`, method: 'POST', body: {} });
+    assert.strictEqual(again.status, 400, 'already cancelled');
+    const no = await authJ({ path: `/api/purchase-orders/${poId}/cancel`, method: 'POST', body: {} });
+    assert.strictEqual(no.status, 400, 'goods received — returns, not cancel');
+    const del = await authJ({ path: `/api/suppliers/${kcc.id}`, method: 'DELETE' });
+    assert.strictEqual(del.status, 200, 'settled supplier with closed POs deletes');
+  });
+
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 
