@@ -1091,6 +1091,88 @@ function migrate(d) {
   addCol(d, 'transfers', 'to_location', 'INTEGER NULL');
   addCol(d, 'transfer_items', 'variant_id', 'INTEGER NULL');
   addCol(d, 'transfer_items', 'received_at', 'TEXT NULL');
+
+  // Phase 12 Day 17: branch dashboard polish, transfer cost, scheduled/periodic
+  addCol(d, 'transfers', 'cost', 'INTEGER NOT NULL DEFAULT 0');
+  addCol(d, 'transfers', 'cost_note', "TEXT NOT NULL DEFAULT ''");
+  addCol(d, 'transfers', 'scheduled_for', 'TEXT');
+  addCol(d, 'transfers', 'is_recurring', 'INTEGER NOT NULL DEFAULT 0');
+  addCol(d, 'transfers', 'recurring_interval', 'TEXT');
+  addCol(d, 'transfers', 'template_id', 'INTEGER');
+
+  // Expand transfers.status to include 'scheduled' (SQLite check constraints
+  // need a table rebuild if the old constraint is still present).
+  try {
+    const sql = (d.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='transfers'").get() || {}).sql || '';
+    if (sql && !sql.includes("'scheduled'")) {
+      d.exec(`
+        CREATE TABLE transfers_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ref TEXT NOT NULL,
+          from_branch INTEGER NOT NULL REFERENCES branches(id),
+          to_branch INTEGER NOT NULL REFERENCES branches(id),
+          from_location INTEGER,
+          to_location INTEGER,
+          status TEXT NOT NULL DEFAULT 'requested'
+            CHECK(status IN ('requested','approved','shipped','received','cancelled','scheduled')),
+          created_by INTEGER,
+          created_at TEXT NOT NULL,
+          shipped_at TEXT,
+          received_at TEXT,
+          note TEXT NOT NULL DEFAULT '',
+          cost INTEGER NOT NULL DEFAULT 0,
+          cost_note TEXT NOT NULL DEFAULT '',
+          scheduled_for TEXT,
+          is_recurring INTEGER NOT NULL DEFAULT 0,
+          recurring_interval TEXT,
+          template_id INTEGER
+        );
+        INSERT INTO transfers_new (id, ref, from_branch, to_branch, from_location, to_location, status, created_by, created_at, shipped_at, received_at, note, cost, cost_note, scheduled_for, is_recurring, recurring_interval, template_id)
+          SELECT id, ref, from_branch, to_branch, from_location, to_location, status, created_by, created_at, shipped_at, received_at, note,
+                 COALESCE(cost, 0), COALESCE(cost_note, ''), scheduled_for, COALESCE(is_recurring, 0), recurring_interval, template_id
+          FROM transfers;
+        DROP TABLE transfers;
+        ALTER TABLE transfers_new RENAME TO transfers;
+      `);
+    }
+  } catch (_) { /* best-effort: keep old table if rebuild fails */ }
+
+  // Transfer templates for periodic / scheduled transfers
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS transfer_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      from_branch INTEGER NOT NULL,
+      to_branch INTEGER NOT NULL,
+      from_location INTEGER NOT NULL,
+      to_location INTEGER NOT NULL,
+      cost INTEGER NOT NULL DEFAULT 0,
+      cost_note TEXT NOT NULL DEFAULT '',
+      interval TEXT NOT NULL DEFAULT 'weekly' CHECK(interval IN ('daily','weekly','biweekly','monthly','once')),
+      next_due TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      items TEXT NOT NULL DEFAULT '[]',
+      created_by INTEGER,
+      created_at TEXT NOT NULL,
+      last_run_at TEXT
+    );
+  `);
+
+  // Minimal expenses for branch-scoped expense view (Phase 14 preview)
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      branch_id INTEGER NOT NULL REFERENCES branches(id),
+      category TEXT NOT NULL DEFAULT 'other',
+      amount INTEGER NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      expense_date TEXT NOT NULL,
+      created_by INTEGER,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_expenses_branch_date ON expenses(branch_id, expense_date);
+  `);
+  addCol(d, 'suppliers', 'branch_id', 'INTEGER REFERENCES branches(id)');
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

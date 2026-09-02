@@ -308,6 +308,31 @@
             <div class="muted small" id="cmp-empty" data-i18n="no_rows">No rows</div>
           </div>
         </div>
+        <div class="card" id="lay-dash-wrap" style="margin-bottom:14px">
+          <div class="row" style="margin-bottom:10px;align-items:center;flex-wrap:wrap;gap:8px">
+            <h3 style="margin:0">Branch dashboard</h3>
+            <select id="dash-branch" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px;min-width:160px"></select>
+            <button class="btn small" id="dash-run">Load</button>
+            <span class="spacer"></span>
+            <span class="muted small" id="dash-msg"></span>
+          </div>
+          <div id="dash-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:12px"></div>
+          <div class="grid cols-2" style="gap:14px">
+            <div><h4 style="margin:0 0 6px">Top products (30d)</h4><div style="overflow:auto"><table><thead><tr><th>Product</th><th>Qty</th><th>Gross</th></tr></thead><tbody id="dash-top"></tbody></table></div></div>
+            <div><h4 style="margin:0 0 6px">Locations</h4><div style="overflow:auto"><table><thead><tr><th>Location</th><th>Registers</th><th>Stock lines</th></tr></thead><tbody id="dash-locs"></tbody></table></div></div>
+          </div>
+          <div class="grid cols-2" style="gap:14px;margin-top:12px">
+            <div><h4 style="margin:0 0 6px">Low stock</h4><div style="overflow:auto;max-height:180px"><table><thead><tr><th>Product</th><th>Stock</th><th>Reorder</th></tr></thead><tbody id="dash-low"></tbody></table></div></div>
+            <div><h4 style="margin:0 0 6px">Recent transfers</h4><div style="overflow:auto"><table><thead><tr><th>Ref</th><th>Route</th><th>Status</th></tr></thead><tbody id="dash-tr"></tbody></table></div></div>
+          </div>
+          <div class="grid cols-2" style="gap:14px;margin-top:12px">
+            <div><h4 style="margin:0 0 6px">Suppliers (with balance in branch)</h4><div style="overflow:auto"><table><thead><tr><th>Supplier</th><th>Owed</th><th>Open PO</th></tr></thead><tbody id="dash-sup"></tbody></table></div></div>
+            <div><h4 style="margin:0 0 6px">Expenses (30d: <span id="dash-exp-total"></span>)</h4>
+              <div class="row" style="gap:6px;margin-bottom:6px"><input id="exp-cat" placeholder="category" style="width:100px;padding:4px;border:1px solid #cbd5e1;border-radius:4px"><input id="exp-amt" type="number" placeholder="amount Ksh" style="width:110px;padding:4px;border:1px solid #cbd5e1;border-radius:4px"><input id="exp-note" placeholder="note" style="flex:1;padding:4px;border:1px solid #cbd5e1;border-radius:4px"><button class="btn small" id="exp-add">Add</button></div>
+              <div style="overflow:auto;max-height:180px"><table><thead><tr><th>Date</th><th>Category</th><th>Amount</th><th>Note</th></tr></thead><tbody id="dash-exp"></tbody></table></div>
+            </div>
+          </div>
+        </div>
         <div class="card">
           <h3 id="b-form-title" data-i18n="add_branch">Add branch</h3>
           <input type="hidden" id="b-id">
@@ -328,39 +353,63 @@
       </div>
     </section>
 
-    <!-- ============ TRANSFERS (Phase 12, Day 16) ============ -->
+    <!-- ============ TRANSFERS (Phase 12, Day 17 — cost, scheduled, templates) ============ -->
     <section id="tab-transfers" class="hidden">
       <div class="card" style="margin-bottom:14px">
-        <div class="row" style="margin-bottom:10px">
+        <div class="row" style="margin-bottom:10px;align-items:center">
           <h3 style="margin:0" data-i18n="new_transfer">New transfer</h3>
+          <span class="spacer"></span>
+          <label class="check" style="margin:0"><input type="checkbox" id="tf-scheduled-check"> Scheduled</label>
+          <label class="check" style="margin:0"><input type="checkbox" id="tf-recurring-check"> Recurring</label>
         </div>
         <div class="grid cols-3">
           <label class="f"><span data-i18n="from_loc">From location</span><select id="tf-from"></select></label>
           <label class="f"><span data-i18n="to_loc">To location</span><select id="tf-to"></select></label>
+          <label class="f"><span>Transfer cost (Ksh)</span><input id="tf-cost" type="number" min="0" step="1" placeholder="0"></label>
+        </div>
+        <div class="grid cols-3" style="margin-top:8px">
+          <label class="f"><span>Cost note</span><input id="tf-cost-note" placeholder="fuel, courier…"></label>
+          <label class="f"><span>Scheduled for</span><input id="tf-scheduled-for" type="datetime-local"></label>
+          <label class="f"><span>Recurring interval</span>
+            <select id="tf-recurring-interval"><option value="">—</option><option value="daily">daily</option><option value="weekly">weekly</option><option value="biweekly">biweekly</option><option value="monthly">monthly</option></select>
+          </label>
+        </div>
+        <div class="grid cols-2" style="margin-top:8px">
+          <label class="f"><span>Note</span><input id="tf-note" placeholder="reason…"></label>
+          <label class="f"><span>Save as template</span><span class="row"><input id="tf-template-name" placeholder="e.g. Weekly restock"><button class="btn small ghost" id="tf-save-template">Save template</button></span></label>
         </div>
         <div style="margin:10px 0">
-          <table style="max-width:780px"><thead><tr>
-            <th data-i18n="product">Product</th><th data-i18n="batch_l">Batch</th><th data-i18n="qty">Qty</th><th></th>
+          <table style="max-width:900px"><thead><tr>
+            <th data-i18n="product">Product</th><th data-i18n="batch_l">Batch</th><th data-i18n="qty">Qty</th><th data-i18n="value">Value</th><th></th>
           </tr></thead><tbody id="tf-items"></tbody></table>
-          <div class="row"><button class="btn small" id="tf-add-item" data-i18n="add_line">Add line</button></div>
+          <div class="row" style="gap:8px"><button class="btn small" id="tf-add-item" data-i18n="add_line">Add line</button><span class="muted small" id="tf-total-value"></span></div>
         </div>
         <div class="row">
           <button class="btn" id="tf-create" data-i18n="create_transfer">Create transfer</button>
           <div class="msg" id="tf-msg" style="margin:0"></div>
         </div>
       </div>
+
+      <div class="card" style="margin-bottom:14px" id="tf-templates-card">
+        <div class="row" style="margin-bottom:10px"><h3 style="margin:0">Transfer templates</h3><span class="spacer"></span><button class="btn small ghost" id="tf-tpl-reload">Reload</button></div>
+        <div style="overflow:auto"><table><thead><tr><th>Name</th><th>Route</th><th>Interval</th><th>Next due</th><th>Cost</th><th>Items</th><th></th></tr></thead><tbody id="tf-tpl-body"></tbody></table><div class="muted small" id="tf-tpl-empty">No templates</div></div>
+      </div>
+
       <div class="card" style="margin-bottom:14px" id="tf-detail" >
         <h3 id="tf-d-ref" style="margin-bottom:4px"></h3>
-        <div class="muted small" id="tf-d-route" style="margin-bottom:10px"></div>
+        <div class="muted small" id="tf-d-route" style="margin-bottom:6px"></div>
+        <div class="muted small" id="tf-d-cost" style="margin-bottom:10px"></div>
         <div style="overflow:auto">
           <table><thead><tr>
             <th data-i18n="product">Product</th><th data-i18n="qty">Sent</th>
-            <th data-i18n="received_l">Received</th><th data-i18n="discrepancy">Discrepancy</th><th data-i18n="value">Value</th>
+            <th data-i18n="received_l">Received</th><th>Receive qty</th><th data-i18n="discrepancy">Discrepancy</th><th data-i18n="value">Value</th>
           </tr></thead><tbody id="tf-d-lines"></tbody></table>
         </div>
+        <div class="row" id="tf-d-actions" style="margin-top:10px;gap:8px"></div>
+        <div class="msg" id="tf-d-msg" style="margin-top:8px"></div>
       </div>
       <div class="card">
-        <div class="row" style="margin-bottom:10px">
+        <div class="row" style="margin-bottom:10px;flex-wrap:wrap;gap:8px">
           <h3 style="margin:0" data-i18n="transfers">Transfers</h3>
           <span class="spacer"></span>
           <select id="tf-filter" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px">
@@ -370,6 +419,7 @@
             <option value="shipped">shipped</option>
             <option value="received">received</option>
             <option value="cancelled">cancelled</option>
+            <option value="scheduled">scheduled</option>
           </select>
           <button class="btn small" id="tf-reload" data-i18n="reload">Reload</button>
         </div>
@@ -377,7 +427,7 @@
           <table><thead><tr>
             <th>Ref</th><th data-i18n="route">Route</th><th data-i18n="status">Status</th>
             <th data-i18n="lines">Lines</th><th data-i18n="units">Units</th>
-            <th data-i18n="discrepancy">Discrepancy</th><th data-i18n="by">By</th><th data-i18n="at">At</th><th></th>
+            <th>Value</th><th>Cost</th><th>Scheduled</th><th data-i18n="by">By</th><th data-i18n="at">At</th><th></th>
           </tr></thead><tbody id="tf-body"></tbody></table>
           <div class="muted small" id="tf-empty" data-i18n="no_rows">No rows</div>
         </div>
@@ -910,8 +960,9 @@ function selectTab(name) {
   if (name === 'transfers') loadTransfers();
 }
 
-// ---------------- transfers & branch comparison (Phase 12) ----------------
+// ---------------- transfers & branch comparison (Phase 12 Day 17) ----------------
 let TF_PRODUCTS = [];
+let TF_DETAIL = null;
 async function loadTransfers() {
   if (!$('#tf-from').dataset.wired) {
     $('#tf-from').dataset.wired = '1';
@@ -925,11 +976,17 @@ async function loadTransfers() {
     $('#tf-create').onclick = createTransfer;
     $('#tf-reload').onclick = drawTransfers;
     $('#tf-filter').onchange = drawTransfers;
+    $('#tf-tpl-reload').onclick = drawTransferTemplates;
+    $('#tf-save-template').onclick = saveTransferTemplate;
+    $('#tf-scheduled-check').onchange = () => { $('#tf-scheduled-for').disabled = !$('#tf-scheduled-check').checked; if (!$('#tf-scheduled-check').checked) $('#tf-scheduled-for').value = ''; };
+    $('#tf-recurring-check').onchange = () => { $('#tf-recurring-interval').disabled = !$('#tf-recurring-check').checked; if (!$('#tf-recurring-check').checked) $('#tf-recurring-interval').value = ''; };
+    $('#tf-scheduled-for').disabled = true;
+    $('#tf-recurring-interval').disabled = true;
     $('#tf-detail').style.display = 'none';
     addTfLine();
   }
   await loadTfProducts();
-  drawTransfers();
+  await Promise.all([drawTransfers(), drawTransferTemplates()]);
 }
 
 async function loadTfProducts() {
@@ -941,17 +998,36 @@ async function loadTfProducts() {
     if (v) sel.value = v;
     fillTfBatchesSel(sel);
   });
+  updateTfTotal();
 }
 
 async function fillTfBatchesSel(pSel) {
-  const bSel = pSel.closest('tr').querySelector('[data-tf-b]');
+  const row = pSel.closest('tr');
+  if (!row) return;
+  const bSel = row.querySelector('[data-tf-b]');
   const p = TF_PRODUCTS.find((x) => x.id === Number(pSel.value));
   bSel.innerHTML = '<option value="">—</option>';
-  if (!p || !p.track_batches) return;
+  if (!p || !p.track_batches) { updateTfTotal(); return; }
   const fromLoc = (BOOT.locations || []).find((l) => l.id === Number($('#tf-from').value));
   const batches = await api(`/api/batches?product_id=${p.id}&open=1${fromLoc ? `&location_id=${fromLoc.id}` : ''}`).catch(() => []);
   bSel.innerHTML = '<option value="">—</option>' + batches.map((b) =>
     `<option value="${b.id}">${esc(b.batch_no)}${b.expiry_date ? ' · ' + esc(String(b.expiry_date).slice(0, 10)) : ''} (${b.qty})</option>`).join('');
+  updateTfTotal();
+}
+
+function updateTfTotal() {
+  let total = 0;
+  document.querySelectorAll('#tf-items tr').forEach((tr) => {
+    const pid = Number(tr.querySelector('[data-tf-p]')?.value);
+    const qty = Number(tr.querySelector('[data-tf-q]')?.value) || 0;
+    const p = TF_PRODUCTS.find((x) => x.id === pid);
+    const cost = p ? (p.cost || 0) : 0;
+    total += cost * qty;
+    const vEl = tr.querySelector('[data-tf-v]');
+    if (vEl) vEl.textContent = fmt(cost * qty);
+  });
+  const cost = Number($('#tf-cost')?.value) || 0;
+  $('#tf-total-value').textContent = `Stock value: ${fmt(total)} · Transfer cost: ${fmt(cost*100)} · Total: ${fmt(total + cost*100)}`;
 }
 
 function addTfLine() {
@@ -959,26 +1035,79 @@ function addTfLine() {
   tr.innerHTML = `<td style="min-width:220px"><select data-tf-p style="padding:6px;border:1px solid #cbd5e1;border-radius:6px;width:100%">${TF_PRODUCTS.map((p) => `<option value="${p.id}">${esc(p.name)}${p.track_batches ? ' ★' : ''}</option>`).join('')}</select></td>
   <td><select data-tf-b style="padding:6px;border:1px solid #cbd5e1;border-radius:6px;width:100%"><option value="">—</option></select></td>
   <td style="width:90px"><input data-tf-q type="number" min="1" step="1" value="1" style="width:80px;padding:6px;border:1px solid #cbd5e1;border-radius:6px"></td>
+  <td style="width:80px"><span data-tf-v class="muted small">—</span></td>
   <td style="width:36px"><button class="btn small ghost" data-tf-x>✕</button></td>`;
   $('#tf-items').appendChild(tr);
   tr.querySelector('[data-tf-p]').onchange = (e) => fillTfBatchesSel(e.target);
-  tr.querySelector('[data-tf-x]').onclick = () => tr.remove();
+  tr.querySelector('[data-tf-q]').oninput = updateTfTotal;
+  tr.querySelector('[data-tf-x]').onclick = () => { tr.remove(); updateTfTotal(); };
+  updateTfTotal();
 }
 
 async function createTransfer() {
   const msg = $('#tf-msg');
+  msg.textContent = '';
   const items = [...document.querySelectorAll('#tf-items tr')].map((tr) => ({
     product_id: Number(tr.querySelector('[data-tf-p]').value),
     batch_id: tr.querySelector('[data-tf-b]').value || undefined,
     qty: Number(tr.querySelector('[data-tf-q]').value)
   })).filter((i) => i.qty > 0);
   if (!items.length) { msg.textContent = t('tf_need_line'); return; }
-  const r = await api('/api/transfers', { method: 'POST', body: { from_location: Number($('#tf-from').value), to_location: Number($('#tf-to').value), items } }).catch(() => null);
+  const cost = Number($('#tf-cost').value) || 0;
+  const cost_note = $('#tf-cost-note').value.trim();
+  const note = $('#tf-note').value.trim();
+  const scheduled_for = $('#tf-scheduled-check').checked && $('#tf-scheduled-for').value ? new Date($('#tf-scheduled-for').value).toISOString() : undefined;
+  const is_recurring = $('#tf-recurring-check').checked;
+  const recurring_interval = $('#tf-recurring-interval').value || undefined;
+  if ($('#tf-scheduled-check').checked && !scheduled_for) { msg.textContent = 'Pick a scheduled date'; return; }
+  if (is_recurring && !recurring_interval) { msg.textContent = 'Pick recurring interval'; return; }
+  const body = { from_location: Number($('#tf-from').value), to_location: Number($('#tf-to').value), items, cost, cost_note, note, scheduled_for, is_recurring, recurring_interval };
+  const r = await api('/api/transfers', { method: 'POST', body }).catch((e) => ({ error: e.message }));
   if (!r || r.error) { msg.textContent = (r && r.error) || t('tf_create_fail'); return; }
   msg.textContent = t('tf_created').replace('{ref}', r.transfer.ref);
   document.querySelectorAll('#tf-items tr').forEach((tr) => tr.remove());
+  $('#tf-cost').value = ''; $('#tf-cost-note').value = ''; $('#tf-note').value = ''; $('#tf-scheduled-for').value = ''; $('#tf-scheduled-check').checked = false; $('#tf-recurring-check').checked = false;
   addTfLine();
   drawTransfers();
+}
+
+async function saveTransferTemplate() {
+  const name = $('#tf-template-name').value.trim();
+  if (!name) { alert('Template name required'); return; }
+  const items = [...document.querySelectorAll('#tf-items tr')].map((tr) => ({
+    product_id: Number(tr.querySelector('[data-tf-p]').value),
+    batch_id: tr.querySelector('[data-tf-b]').value || undefined,
+    qty: Number(tr.querySelector('[data-tf-q]').value)
+  })).filter((i) => i.qty > 0);
+  if (!items.length) { alert(t('tf_need_line')); return; }
+  const cost = Number($('#tf-cost').value) || 0;
+  const cost_note = $('#tf-cost-note').value.trim();
+  const interval = $('#tf-recurring-interval').value || 'weekly';
+  const from_location = Number($('#tf-from').value);
+  const to_location = Number($('#tf-to').value);
+  const next_due = $('#tf-scheduled-for').value ? new Date($('#tf-scheduled-for').value).toISOString() : new Date().toISOString();
+  const r = await api('/api/transfer-templates', { method: 'POST', body: { name, from_location, to_location, items, cost, cost_note, interval, next_due } }).catch((e) => ({ error: e.message }));
+  if (!r || r.error) { alert(r.error || 'save failed'); return; }
+  $('#tf-template-name').value = '';
+  drawTransferTemplates();
+}
+
+async function drawTransferTemplates() {
+  const rows = await api('/api/transfer-templates').catch(() => []);
+  const body = $('#tf-tpl-body');
+  body.innerHTML = rows.map((tpl) => {
+    const route = `${esc(tpl.from_location_name)} → ${esc(tpl.to_location_name)}<div class="muted small">${esc(tpl.from_branch_name)} → ${esc(tpl.to_branch_name)}</div>`;
+    return `<tr><td>${esc(tpl.name)}</td><td>${route}</td><td>${esc(tpl.interval)}</td><td>${esc((tpl.next_due || '').slice(0,16).replace('T',' '))}</td><td>${fmt(tpl.cost || 0)}</td><td>${tpl.items?.length || 0}</td><td><button class="btn small" data-tpl-run="${tpl.id}">Run</button></td></tr>`;
+  }).join('');
+  $('#tf-tpl-empty').style.display = rows.length ? 'none' : '';
+  document.querySelectorAll('[data-tpl-run]').forEach((b) => {
+    b.onclick = async () => {
+      const id = Number(b.dataset.tplRun);
+      const r = await api(`/api/transfer-templates/${id}/run`, { method: 'POST', body: {} }).catch((e) => ({ error: e.message }));
+      if (r && r.error) { alert(r.error); return; }
+      drawTransfers();
+    };
+  });
 }
 
 async function drawTransfers() {
@@ -991,7 +1120,11 @@ async function drawTransfers() {
     if (tr.status === 'requested') acts.push(`<button class="btn small" data-tfa="approve" data-id="${tr.id}">${t('approve')}</button> <button class="btn small ghost" data-tfa="cancel" data-id="${tr.id}">${t('cancel')}</button>`);
     if (tr.status === 'approved') acts.push(`<button class="btn small" data-tfa="ship" data-id="${tr.id}">${t('ship')}</button> <button class="btn small ghost" data-tfa="cancel" data-id="${tr.id}">${t('cancel')}</button>`);
     if (tr.status === 'shipped') acts.push(`<button class="btn small" data-tfa="receive" data-id="${tr.id}">${t('receive')}</button>`);
-    return `<tr class="clickable" data-tfid="${tr.id}"><td>${esc(tr.ref)}</td><td>${route}</td><td><span class="pill ${tr.status === 'received' ? 'g' : tr.status === 'cancelled' ? 'r' : ''}">${t('tf_' + tr.status)}</span></td><td>${tr.item_count}</td><td>${tr.total_units}</td><td>${tr.discrepancies ? `<span class="pill r">${tr.discrepancies}</span>` : '—'}</td><td>${esc(tr.created_by_name || '')}</td><td>${esc((tr.created_at || '').slice(0, 16).replace('T', ' '))}</td><td>${acts.join(' ')}</td></tr>`;
+    if (tr.status === 'scheduled') acts.push(`<button class="btn small" data-tfa="activate" data-id="${tr.id}">Activate</button> <button class="btn small ghost" data-tfa="cancel" data-id="${tr.id}">${t('cancel')}</button>`);
+    const sched = tr.scheduled_for ? esc(tr.scheduled_for.slice(0,16).replace('T',' ')) : '—';
+    const cost = tr.cost ? fmt(tr.cost) : '—';
+    const val = tr.total_value ? fmt(tr.total_value) : (tr.total_units ? '—' : '—');
+    return `<tr class="clickable" data-tfid="${tr.id}"><td>${esc(tr.ref)}</td><td>${route}</td><td><span class="pill ${tr.status === 'received' ? 'g' : tr.status === 'cancelled' ? 'r' : tr.status === 'scheduled' ? 'y' : ''}">${t('tf_' + tr.status) || tr.status}</span></td><td>${tr.item_count}</td><td>${tr.total_units}</td><td>${val}</td><td>${cost}${tr.cost_note ? `<div class="muted small">${esc(tr.cost_note)}</div>` : ''}</td><td>${sched}</td><td>${esc(tr.created_by_name || '')}</td><td>${esc((tr.created_at || '').slice(0, 16).replace('T', ' '))}</td><td>${acts.join(' ')}</td></tr>`;
   }).join('');
   $('#tf-empty').style.display = rows.length ? 'none' : '';
   document.querySelectorAll('#tf-body [data-tfa]').forEach((b) => {
@@ -999,7 +1132,7 @@ async function drawTransfers() {
       e.stopPropagation();
       const id = Number(b.dataset.id);
       const action = b.dataset.tfa;
-      if (action === 'receive') { await receiveTransfer(id); return; }
+      if (action === 'receive') { await showTransferDetail(id); return; }
       const r = await api(`/api/transfers/${id}/${action}`, { method: 'POST', body: {} }).catch(() => null);
       if (r && r.error) { alert(r.error); return; }
       drawTransfers();
@@ -1014,41 +1147,93 @@ async function showTransferDetail(id) {
   const r = await api(`/api/transfers/${id}`).catch(() => null);
   if (!r || r.error) return;
   const tr = r.transfer;
-  $('#tf-d-ref').textContent = `${tr.ref} — ${t('tf_' + tr.status)}`;
-  $('#tf-d-route').textContent = `${tr.from_location_name} (${tr.from_branch_name}) → ${tr.to_location_name} (${tr.to_branch_name}) · ${tr.created_by_name || ''}`;
-  $('#tf-d-lines').innerHTML = tr.items.map((li) =>
-    `<tr><td>${esc(li.product_name)}${li.variant_name ? ' — ' + esc(li.variant_name) : ''}${li.batch_no ? ' · ' + esc(li.batch_no) : ''}</td><td>${li.qty}</td><td>${li.received_at ? li.received_qty : '—'}</td><td>${li.discrepancy ? `<span class="pill r">${li.discrepancy}</span>` : '—'}</td><td>${fmt(li.line_value)}</td></tr>`
-  ).join('');
+  TF_DETAIL = tr;
+  $('#tf-d-ref').textContent = `${tr.ref} — ${t('tf_' + tr.status) || tr.status}`;
+  $('#tf-d-route').textContent = `${tr.from_location_name} (${tr.from_branch_name}) → ${tr.to_location_name} (${tr.to_branch_name}) · ${tr.created_by_name || ''} · ${tr.note || ''}`;
+  const costInfo = [];
+  if (tr.cost) costInfo.push(`Transfer cost: ${fmt(tr.cost)}${tr.cost_note ? ' — ' + tr.cost_note : ''}`);
+  if (tr.scheduled_for) costInfo.push(`Scheduled: ${tr.scheduled_for.slice(0,16).replace('T',' ')}`);
+  if (tr.total_value) costInfo.push(`Stock value: ${fmt(tr.total_value)} · Total with cost: ${fmt((tr.total_value||0) + (tr.cost||0))}`);
+  $('#tf-d-cost').textContent = costInfo.join(' · ');
+  const isShipped = tr.status === 'shipped';
+  $('#tf-d-lines').innerHTML = tr.items.map((li) => {
+    const recvInput = isShipped && !li.received_at ? `<input type="number" min="0" max="${li.qty}" step="1" value="${li.qty}" data-recv-id="${li.id}" style="width:70px;padding:4px;border:1px solid #cbd5e1;border-radius:4px">` : (li.received_at ? li.received_qty : '—');
+    return `<tr><td>${esc(li.product_name)}${li.variant_name ? ' — ' + esc(li.variant_name) : ''}${li.batch_no ? ' · ' + esc(li.batch_no) : ''}</td><td>${li.qty}</td><td>${li.received_at ? li.received_qty : '—'}</td><td>${recvInput}</td><td>${li.discrepancy ? `<span class="pill r">${li.discrepancy}</span>` : '—'}</td><td>${fmt(li.line_value)}</td></tr>`;
+  }).join('');
+  let actions = '';
+  if (isShipped) actions += `<button class="btn" id="tf-d-receive-btn">Save received qtys</button>`;
+  if (tr.status === 'requested') actions += `<button class="btn" data-detail-act="approve" data-id="${tr.id}">Approve</button> <button class="btn ghost" data-detail-act="cancel" data-id="${tr.id}">Cancel</button>`;
+  if (tr.status === 'approved') actions += `<button class="btn" data-detail-act="ship" data-id="${tr.id}">Ship</button> <button class="btn ghost" data-detail-act="cancel" data-id="${tr.id}">Cancel</button>`;
+  if (tr.status === 'scheduled') actions += `<button class="btn" data-detail-act="activate" data-id="${tr.id}">Activate now</button> <button class="btn ghost" data-detail-act="cancel" data-id="${tr.id}">Cancel</button>`;
+  $('#tf-d-actions').innerHTML = actions;
   $('#tf-detail').style.display = '';
+  const recvBtn = $('#tf-d-receive-btn');
+  if (recvBtn) recvBtn.onclick = () => submitInlineReceive(tr.id);
+  document.querySelectorAll('#tf-d-actions [data-detail-act]').forEach((b) => {
+    b.onclick = async () => {
+      const act = b.dataset.detailAct;
+      const tid = Number(b.dataset.id);
+      const r2 = await api(`/api/transfers/${tid}/${act}`, { method: 'POST', body: {} }).catch((e) => ({ error: e.message }));
+      if (r2 && r2.error) { $('#tf-d-msg').textContent = r2.error; return; }
+      showTransferDetail(tid);
+      drawTransfers();
+    };
+  });
 }
 
-async function receiveTransfer(id) {
-  const r0 = await api(`/api/transfers/${id}`).catch(() => null);
-  if (!r0 || r0.error) return;
-  const tr = r0.transfer;
-  const pending = tr.items.filter((li) => !li.received_at);
-  if (!pending.length) return;
-  const items = [];
-  for (const li of pending) {
-    const raw = prompt(`${li.product_name}${li.batch_no ? ' · ' + li.batch_no : ''}\n${t('tf_sent')}: ${li.qty}\n${t('tf_received_qty')}?`);
-    if (raw === null) return;
-    const v = Number(raw);
-    if (!Number.isInteger(v) || v < 0 || v > li.qty) { alert(`${t('tf_received_qty')}: 0–${li.qty}`); return; }
-    items.push({ item_id: li.id, received_qty: v });
+async function submitInlineReceive(id) {
+  const msg = $('#tf-d-msg');
+  msg.textContent = '';
+  const items = [...document.querySelectorAll('#tf-d-lines [data-recv-id]')].map((inp) => ({
+    item_id: Number(inp.dataset.recvId),
+    received_qty: Number(inp.value)
+  }));
+  if (!items.length) { msg.textContent = 'No pending lines'; return; }
+  for (const it of items) {
+    const li = TF_DETAIL?.items?.find((x) => x.id === it.item_id);
+    if (!li) continue;
+    if (!Number.isInteger(it.received_qty) || it.received_qty < 0 || it.received_qty > li.qty) {
+      msg.textContent = `Qty for ${li.product_name} must be 0–${li.qty}`;
+      return;
+    }
   }
-  const r = await api(`/api/transfers/${id}/receive`, { method: 'POST', body: { items } }).catch(() => null);
-  if (!r || r.error) { alert((r && r.error) || t('tf_receive_fail')); return; }
+  const r = await api(`/api/transfers/${id}/receive`, { method: 'POST', body: { items } }).catch((e) => ({ error: e.message }));
+  if (!r || r.error) { msg.textContent = r.error || 'receive failed'; return; }
+  msg.textContent = 'Received saved';
   showTransferDetail(id);
   drawTransfers();
 }
 
-// Branch comparison (Phase 12) — ranks visible branches by sales
+async function receiveTransfer(id) {
+  await showTransferDetail(id);
+}
+
+// Branch comparison + dashboard (Phase 12 Day 17)
 async function loadBranchComparison() {
   if (!$('#cmp-run').dataset.wired) {
     $('#cmp-run').dataset.wired = '1';
     $('#cmp-run').onclick = drawBranchComparison;
+    $('#dash-run').onclick = () => { const id = Number($('#dash-branch').value); if (id) drawBranchDashboard(id); };
+    $('#exp-add').onclick = async () => {
+      const branchId = Number($('#dash-branch').value);
+      if (!branchId) return;
+      const cat = $('#exp-cat').value.trim() || 'other';
+      const amt = Number($('#exp-amt').value);
+      const note = $('#exp-note').value.trim();
+      if (!amt || amt <= 0) { alert('amount > 0'); return; }
+      const r = await api('/api/expenses', { method: 'POST', body: { branch_id: branchId, category: cat, amount: amt, note, expense_date: new Date().toISOString().slice(0,10) } }).catch((e) => ({ error: e.message }));
+      if (r && r.error) { alert(r.error); return; }
+      $('#exp-amt').value = ''; $('#exp-note').value = '';
+      drawBranchDashboard(branchId);
+    };
+    // populate branch selector from BOOT
+    const brs = BOOT.branches || [];
+    $('#dash-branch').innerHTML = brs.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+    if (brs[0]) { $('#dash-branch').value = String(brs[0].id); drawBranchDashboard(brs[0].id); }
   }
   drawBranchComparison();
+  const sel = Number($('#dash-branch').value);
+  if (sel) drawBranchDashboard(sel);
 }
 
 async function drawBranchComparison() {
@@ -1060,9 +1245,38 @@ async function drawBranchComparison() {
   if (!r || r.error) return;
   const medal = (i) => i === 0 ? ' 🥇' : i === 1 ? ' 🥈' : i === 2 ? ' 🥉' : '';
   $('#cmp-rows').innerHTML = r.branches.map((b, i) =>
-    `<tr><td>${b.rank}${medal(i)}</td><td>${esc(b.name)}</td><td>${b.orders}</td><td>${fmt(b.sales)}</td><td>${fmt(b.margin)}</td><td>${b.shrinkage ? `<span class="pill r">${fmt(b.shrinkage)}</span>` : '0'}</td></tr>`
+    `<tr class="clickable" data-dash="${b.id}"><td>${b.rank}${medal(i)}</td><td>${esc(b.name)}</td><td>${b.orders}</td><td>${fmt(b.sales)}</td><td>${fmt(b.margin)}</td><td>${b.shrinkage ? `<span class="pill r">${fmt(b.shrinkage)}</span>` : '0'}</td></tr>`
   ).join('');
   $('#cmp-empty').style.display = r.branches.length ? 'none' : '';
+  document.querySelectorAll('#cmp-rows tr[data-dash]').forEach((tr) => {
+    tr.onclick = () => { const id = Number(tr.dataset.dash); $('#dash-branch').value = String(id); drawBranchDashboard(id); document.getElementById('lay-dash-wrap').scrollIntoView({ behavior: 'smooth' }); };
+  });
+}
+
+async function drawBranchDashboard(branchId) {
+  $('#dash-msg').textContent = 'loading…';
+  const r = await api(`/api/branches/${branchId}/dashboard`).catch((e) => ({ error: e.message }));
+  if (!r || r.error) { $('#dash-msg').textContent = r?.error || 'failed'; return; }
+  $('#dash-msg').textContent = `${r.branch.name} — updated ${new Date().toLocaleTimeString()}`;
+  const sales = r.sales || {};
+  const cards = [
+    { label: 'Today sales', value: fmt(sales.today?.total || 0), sub: `${sales.today?.n || 0} orders` },
+    { label: 'Week sales', value: fmt(sales.week?.total || 0), sub: `${sales.week?.n || 0} orders` },
+    { label: 'Month sales', value: fmt(sales.month?.total || 0), sub: `${sales.month?.n || 0} orders` },
+    { label: 'Stock value', value: fmt(r.stock?.value || 0), sub: `${r.stock?.qty || 0} units · ${r.stock?.low_count || 0} low` },
+    { label: 'Shrinkage 30d', value: fmt(r.shrinkage || r.stock?.shrinkage || 0), sub: 'damage/expiry/adjust' },
+    { label: 'Pending transfers', value: String(r.transfers?.pending || 0), sub: 'awaiting action' },
+    { label: 'Staff', value: String(r.staff?.count || 0), sub: 'active' },
+    { label: 'Expenses 30d', value: fmt(r.expenses?.month?.total || 0), sub: `${r.expenses?.month?.n || 0} entries` },
+  ];
+  $('#dash-cards').innerHTML = cards.map((c) => `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px;background:#f8fafc"><div class="muted small">${esc(c.label)}</div><div style="font-weight:700;font-size:18px;margin:4px 0">${esc(c.value)}</div><div class="muted small">${esc(c.sub)}</div></div>`).join('');
+  $('#dash-top').innerHTML = (r.top_products || []).map((p) => `<tr><td>${esc(p.name)}</td><td>${p.qty}</td><td>${fmt(p.gross)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">no sales</td></tr>';
+  $('#dash-locs').innerHTML = (r.locations || []).map((l) => `<tr><td>${esc(l.name)}${l.is_default ? ' ★' : ''}</td><td>${l.registers}</td><td>${l.stockLines}</td></tr>`).join('');
+  $('#dash-low').innerHTML = (r.stock?.low_items || []).map((p) => `<tr><td>${esc(p.name)}</td><td>${p.stock}</td><td>${p.reorder_level}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">all good</td></tr>';
+  $('#dash-tr').innerHTML = (r.transfers?.recent || []).map((tr) => `<tr><td>${esc(tr.ref)}</td><td>${esc(tr.from_location_name)}→${esc(tr.to_location_name)}</td><td><span class="pill ${tr.status==='received'?'g':''}">${esc(tr.status)}</span></td></tr>`).join('');
+  $('#dash-sup').innerHTML = (r.suppliers || []).map((s) => `<tr><td>${esc(s.name)}</td><td>${fmt(s.balance?.outstanding || 0)}</td><td>${s.balance?.open_pos || 0} / ${fmt(s.balance?.open_po_value || 0)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">no balances</td></tr>';
+  $('#dash-exp-total').textContent = fmt(r.expenses?.month?.total || 0);
+  $('#dash-exp').innerHTML = (r.expenses?.recent || []).map((e) => `<tr><td>${esc((e.expense_date||'').slice(0,10))}</td><td>${esc(e.category)}</td><td>${fmt(e.amount)}</td><td>${esc(e.note||'')}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">no expenses</td></tr>';
 }
 
 // ---------------- customers & deni (Phase 11) ----------------

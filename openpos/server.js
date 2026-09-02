@@ -2121,30 +2121,35 @@ function createApp(d) {
 
   // ---- suppliers (minimal; the full purchasing system lands in Phase 5) ----------------------------
   // ---- suppliers + purchasing (Phase 5) ---------------------------------------------------
-  const supplierBalance = (supplierId) => {
+  const supplierBalance = (supplierId, branchId) => {
+    const branchFilter = branchId ? ' AND branch_id = ?' : '';
+    const bArgs = branchId ? [branchId] : [];
     const inv = d.prepare(
       `SELECT COALESCE(SUM(amount), 0) AS total, COALESCE(SUM(CASE WHEN status = 'paid' THEN 0 ELSE amount END), 0) AS open_total
-         FROM supplier_invoices WHERE supplier_id = ?`
-    ).get(supplierId);
+         FROM supplier_invoices WHERE supplier_id = ?${branchFilter}`
+    ).get(supplierId, ...bArgs);
     const paid = d.prepare(
       `SELECT COALESCE(SUM(ip.amount), 0) AS p FROM invoice_payments ip
         JOIN supplier_invoices si ON si.id = ip.invoice_id
-       WHERE si.supplier_id = ?`
-    ).get(supplierId).p;
+       WHERE si.supplier_id = ?${branchFilter ? ' AND si.branch_id = ?' : ''}`
+    ).get(supplierId, ...bArgs).p;
     const pos = d.prepare(
       `SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS v FROM purchase_orders
-        WHERE supplier_id = ? AND status IN ('sent','partial')`
-    ).get(supplierId);
+        WHERE supplier_id = ? AND status IN ('sent','partial')${branchFilter}`
+    ).get(supplierId, ...bArgs);
     // net owed = Σ(all invoice amounts) − Σ(all payments); settled invoices net to zero
     return {
       invoices_total: inv.total, invoices_open: inv.open_total, paid: Number(paid),
-      outstanding: Number(inv.total - paid), open_pos: pos.n, open_po_value: pos.v
+      outstanding: Number(inv.total - paid), open_pos: pos.n, open_po_value: pos.v,
+      branch_id: branchId || null
     };
   };
 
+  // Enhanced: ?branch_id= filters supplier balances to that branch (Day 17)
   app.get('/api/suppliers', me, (req, res) => {
+    const branchId = numOrNull(req.query.branch_id);
     const rows = d.prepare('SELECT * FROM suppliers WHERE active = 1 ORDER BY name').all();
-    res.json(rows.map((s) => ({ ...s, balance: supplierBalance(s.id) })));
+    res.json(rows.map((s) => ({ ...s, balance: supplierBalance(s.id, branchId) })));
   });
 
   app.post('/api/suppliers', me, can('products.manage'), (req, res) => {
@@ -4768,6 +4773,7 @@ function createApp(d) {
     const full = items.map((li) => Object.assign({}, li, transferItemNames(d, li), {
       discrepancy: li.qty - (li.received_qty || 0)
     }));
+    const totalValue = full.reduce((s, li) => s + (li.line_value || 0), 0);
     return Object.assign({}, t, {
       from_branch_name: fromB ? fromB.name : '',
       to_branch_name: toB ? toB.name : '',
@@ -4776,15 +4782,19 @@ function createApp(d) {
       created_by_name: by ? by.name : '',
       item_count: items.length,
       total_units: items.reduce((sum, li) => sum + li.qty, 0),
+      total_value: totalValue,
+      total_cost: (totalValue + (t.cost || 0)),
       discrepancies: full.filter((li) => li.discrepancy).length,
       items: full
     });
   }
 
+  const TRANSFER_STATUSES = ['requested', 'approved', 'shipped', 'received', 'cancelled', 'scheduled'];
+
   app.get('/api/transfers', me, (req, res) => {
     const user = req.user;
     const status = req.query.status ? String(req.query.status) : null;
-    if (status && !['requested', 'approved', 'shipped', 'received', 'cancelled'].includes(status)) {
+    if (status && !TRANSFER_STATUSES.includes(status)) {
       return res.status(400).json({ error: `unknown status '${status}'` });
     }
     const vis = user.role === 'owner' ? null : visibleBranches(d, user).map((b) => b.id);
@@ -4819,6 +4829,17 @@ function createApp(d) {
       if (!items.length) return res.status(400).json({ error: 'items[] is required' });
       const user = req.user;
       const note = String(b.note || '').trim();
+      const cost = intShillings(b.cost) ?? 0;
+      const costNote = String(b.cost_note || '').trim();
+      const scheduledFor = b.scheduled_for ? String(b.scheduled_for).trim() : null;
+      const isRecurring = b.is_recurring ? 1 : 0;
+      const recurringInterval = b.recurring_interval ? String(b.recurring_interval).trim() : null;
+      const templateId = numOrNull(b.template_id);
+      const status = scheduledFor ? 'scheduled' : 'requested';
+      if (scheduledFor && isNaN(Date.parse(scheduledFor))) return res.status(400).json({ error: 'scheduled_for must be ISO date' });
+      if (isRecurring && !['daily', 'weekly', 'biweekly', 'monthly'].includes(recurringInterval)) {
+        return res.status(400).json({ error: 'recurring_interval must be daily/weekly/biweekly/monthly' });
+      }
       const id = d.transaction(() => {
         const fl = d.prepare('SELECT * FROM locations WHERE id = ?').get(fromLoc);
         const tl = d.prepare('SELECT * FROM locations WHERE id = ?').get(toLoc);
@@ -4839,15 +4860,20 @@ function createApp(d) {
           if (!v) throw httpError(400, 'an item must reference a known product or variant');
           const p = d.prepare('SELECT * FROM products WHERE id = ?').get(v.product_id);
           if (!p) throw httpError(400, 'unknown product');
-          const onHand = stockQty(d, v.id, fromLoc);
-          if (onHand + 1e-9 < qty) throw httpError(400, `insufficient stock for ${p.name}: ${onHand} at source location`);
+          // For scheduled transfers, skip stock check now — check at ship time
+          if (status !== 'scheduled') {
+            const onHand = stockQty(d, v.id, fromLoc);
+            if (onHand + 1e-9 < qty) throw httpError(400, `insufficient stock for ${p.name}: ${onHand} at source location`);
+          }
           let batchId = null;
           if (p.track_batches) {
             batchId = numOrNull(it.batch_id);
-            if (!batchId) throw httpError(400, `${p.name} is batch-tracked — each line needs a batch_id`);
-            const batch = d.prepare('SELECT * FROM batches WHERE id = ? AND variant_id = ? AND location_id = ?').get(batchId, v.id, fromLoc);
-            if (!batch) throw httpError(400, `batch not found for ${p.name} at the source location`);
-            if (batch.qty + 1e-9 < qty) throw httpError(400, `batch ${batch.batch_no} holds ${batch.qty}, need ${qty}`);
+            if (!batchId && status !== 'scheduled') throw httpError(400, `${p.name} is batch-tracked — each line needs a batch_id`);
+            if (batchId) {
+              const batch = d.prepare('SELECT * FROM batches WHERE id = ? AND variant_id = ? AND location_id = ?').get(batchId, v.id, fromLoc);
+              if (!batch && status !== 'scheduled') throw httpError(400, `batch not found for ${p.name} at the source location`);
+              if (batch && batch.qty + 1e-9 < qty && status !== 'scheduled') throw httpError(400, `batch ${batch.batch_no} holds ${batch.qty}, need ${qty}`);
+            }
           } else if (it.batch_id) {
             throw httpError(400, `${p.name} is not batch-tracked — batch_id not allowed`);
           }
@@ -4855,17 +4881,17 @@ function createApp(d) {
         });
         const ref = dbm.nextCounter(d, 'trf', 'TR-');
         const row = d.prepare(
-          `INSERT INTO transfers (ref, from_branch, to_branch, from_location, to_location, status, created_by, created_at, note)
-           VALUES (?, ?, ?, ?, ?, 'requested', ?, ?, ?)`
-        ).run(ref, fl.branch_id, tl.branch_id, fromLoc, toLoc, user.id, new Date().toISOString(), note);
+          `INSERT INTO transfers (ref, from_branch, to_branch, from_location, to_location, status, created_by, created_at, note, cost, cost_note, scheduled_for, is_recurring, recurring_interval, template_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(ref, fl.branch_id, tl.branch_id, fromLoc, toLoc, status, user.id, new Date().toISOString(), note, cost, costNote, scheduledFor, isRecurring, recurringInterval, templateId);
         for (const r of resolved) {
           d.prepare('INSERT INTO transfer_items (transfer_id, product_id, variant_id, qty, batch_id) VALUES (?, ?, ?, ?, ?)')
             .run(row.lastInsertRowid, r.v.product_id, r.v.id, r.qty, r.batchId);
         }
         dbm.audit(d, {
-          userId: user.id, branchId: fl.branch_id, action: 'transfer/request',
+          userId: user.id, branchId: fl.branch_id, action: status === 'scheduled' ? 'transfer/schedule' : 'transfer/request',
           entity: 'transfer', entityId: String(row.lastInsertRowid),
-          detail: { ref, from: fl.name, to: tl.name, lines: resolved.length }
+          detail: { ref, from: fl.name, to: tl.name, lines: resolved.length, cost, scheduled_for: scheduledFor || undefined }
         });
         return row.lastInsertRowid;
       })();
@@ -4882,12 +4908,41 @@ function createApp(d) {
       const user = req.user;
       const t = d.prepare('SELECT * FROM transfers WHERE id = ?').get(numOrNull(req.params.id));
       if (!t || !transferVisible(d, user, t)) return res.status(404).json({ error: 'transfer not found' });
+      // Day 17: scheduled transfers can be activated (scheduled -> requested) or approved directly
+      if (t.status === 'scheduled') {
+        // Check if due: allow owner/manager to activate early
+        d.prepare("UPDATE transfers SET status = 'requested', scheduled_for = NULL WHERE id = ?").run(t.id);
+        dbm.audit(d, { userId: user.id, branchId: t.from_branch, action: 'transfer/activate', entity: 'transfer', entityId: String(t.id), detail: { ref: t.ref, was_scheduled: t.scheduled_for } });
+        // Then approve in same call if requested
+        if ((req.body || {}).and_approve) {
+          d.prepare("UPDATE transfers SET status = 'approved' WHERE id = ?").run(t.id);
+          dbm.audit(d, { userId: user.id, branchId: t.to_branch, action: 'transfer/approve', entity: 'transfer', entityId: String(t.id), detail: { ref: t.ref, from_scheduled: true } });
+        }
+        return res.json({ transfer: transferPayload(d, d.prepare('SELECT * FROM transfers WHERE id = ?').get(t.id)) });
+      }
       if (t.status !== 'requested') return res.status(400).json({ error: `only requested transfers can be approved (currently ${t.status})` });
       if (user.role !== 'owner' && !visibleBranches(d, user).map((b) => b.id).includes(t.to_branch)) {
         return res.status(403).json({ error: 'the receiving branch must be one you can see' });
       }
       d.prepare("UPDATE transfers SET status = 'approved' WHERE id = ?").run(t.id);
       dbm.audit(d, { userId: user.id, branchId: t.to_branch, action: 'transfer/approve', entity: 'transfer', entityId: String(t.id), detail: { ref: t.ref } });
+      res.json({ transfer: transferPayload(d, d.prepare('SELECT * FROM transfers WHERE id = ?').get(t.id)) });
+    } catch (e) {
+      const st = e.status || 500;
+      if (st === 500) console.error(e);
+      res.status(st).json({ error: e.message });
+    }
+  });
+
+  // Day 17: activate a scheduled transfer when due (owner/manager)
+  app.post('/api/transfers/:id/activate', me, can('stock.adjust'), (req, res) => {
+    try {
+      const user = req.user;
+      const t = d.prepare('SELECT * FROM transfers WHERE id = ?').get(numOrNull(req.params.id));
+      if (!t || !transferVisible(d, user, t)) return res.status(404).json({ error: 'transfer not found' });
+      if (t.status !== 'scheduled') return res.status(400).json({ error: `only scheduled transfers can be activated (currently ${t.status})` });
+      d.prepare("UPDATE transfers SET status = 'requested' WHERE id = ?").run(t.id);
+      dbm.audit(d, { userId: user.id, branchId: t.from_branch, action: 'transfer/activate', entity: 'transfer', entityId: String(t.id), detail: { ref: t.ref } });
       res.json({ transfer: transferPayload(d, d.prepare('SELECT * FROM transfers WHERE id = ?').get(t.id)) });
     } catch (e) {
       const st = e.status || 500;
@@ -4922,7 +4977,7 @@ function createApp(d) {
         d.prepare("UPDATE transfers SET status = 'shipped', shipped_at = ? WHERE id = ?").run(now, t.id);
         dbm.audit(d, {
           userId: user.id, branchId: t.from_branch, action: 'transfer/ship',
-          entity: 'transfer', entityId: String(t.id), detail: { ref: t.ref, lines: lines.length }
+          entity: 'transfer', entityId: String(t.id), detail: { ref: t.ref, lines: lines.length, cost: t.cost || 0 }
         });
       })();
       res.json({ transfer: transferPayload(d, d.prepare('SELECT * FROM transfers WHERE id = ?').get(t.id)) });
@@ -4976,7 +5031,7 @@ function createApp(d) {
         dbm.audit(d, {
           userId: user.id, branchId: t.to_branch, action: 'transfer/receive',
           entity: 'transfer', entityId: String(t.id),
-          detail: { ref: t.ref, lines: lines.length, discrepancies, note }
+          detail: { ref: t.ref, lines: lines.length, discrepancies, note, cost: t.cost || 0 }
         });
       })();
       res.json({ transfer: transferPayload(d, d.prepare('SELECT * FROM transfers WHERE id = ?').get(t.id)) });
@@ -4995,10 +5050,308 @@ function createApp(d) {
       }
       const t = d.prepare('SELECT * FROM transfers WHERE id = ?').get(numOrNull(req.params.id));
       if (!t || !transferVisible(d, user, t)) return res.status(404).json({ error: 'transfer not found' });
-      if (!['requested', 'approved'].includes(t.status)) return res.status(400).json({ error: `only requested/approved transfers can be cancelled (currently ${t.status})` });
+      if (!['requested', 'approved', 'scheduled'].includes(t.status)) return res.status(400).json({ error: `only requested/approved/scheduled transfers can be cancelled (currently ${t.status})` });
       d.prepare("UPDATE transfers SET status = 'cancelled' WHERE id = ?").run(t.id);
       dbm.audit(d, { userId: user.id, branchId: t.from_branch, action: 'transfer/cancel', entity: 'transfer', entityId: String(t.id), detail: { ref: t.ref } });
       res.json({ transfer: transferPayload(d, d.prepare('SELECT * FROM transfers WHERE id = ?').get(t.id)) });
+    } catch (e) {
+      const st = e.status || 500;
+      if (st === 500) console.error(e);
+      res.status(st).json({ error: e.message });
+    }
+  });
+
+  // ==================== Phase 12 Day 17 — transfer templates (periodic) ====================
+  function templatePayload(d, t) {
+    const fromB = d.prepare('SELECT name FROM branches WHERE id = ?').get(t.from_branch);
+    const toB = d.prepare('SELECT name FROM branches WHERE id = ?').get(t.to_branch);
+    const fromL = d.prepare('SELECT name FROM locations WHERE id = ?').get(t.from_location);
+    const toL = d.prepare('SELECT name FROM locations WHERE id = ?').get(t.to_location);
+    const by = t.created_by ? d.prepare('SELECT name FROM users WHERE id = ?').get(t.created_by) : null;
+    let items = [];
+    try { items = JSON.parse(t.items || '[]'); } catch { items = []; }
+    // Enrich items with product names if possible
+    const enriched = items.map((it) => {
+      const p = it.product_id ? d.prepare('SELECT name FROM products WHERE id = ?').get(it.product_id) : null;
+      const v = it.variant_id ? d.prepare('SELECT name FROM variants WHERE id = ?').get(it.variant_id) : null;
+      return { ...it, product_name: p ? p.name : '', variant_name: v ? v.name : '' };
+    });
+    return {
+      ...t,
+      from_branch_name: fromB ? fromB.name : '',
+      to_branch_name: toB ? toB.name : '',
+      from_location_name: fromL ? fromL.name : '',
+      to_location_name: toL ? toL.name : '',
+      created_by_name: by ? by.name : '',
+      items: enriched
+    };
+  }
+
+  app.get('/api/transfer-templates', me, can('stock.view'), (req, res) => {
+    const user = req.user;
+    const vis = user.role === 'owner' ? null : visibleBranches(d, user).map((b) => b.id);
+    const where = vis ? `WHERE from_branch IN (${vis.map(() => '?').join(',')}) OR to_branch IN (${vis.map(() => '?').join(',')})` : '';
+    const rows = d.prepare(`SELECT * FROM transfer_templates ${where} ORDER BY id DESC`).all(...(vis ? [...vis, ...vis] : []));
+    res.json(rows.map((r) => templatePayload(d, r)));
+  });
+
+  app.post('/api/transfer-templates', me, can('stock.adjust'), (req, res) => {
+    try {
+      const b = req.body || {};
+      const name = String(b.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'template name required' });
+      const fromLoc = numOrNull(b.from_location);
+      const toLoc = numOrNull(b.to_location);
+      if (!fromLoc || !toLoc) return res.status(400).json({ error: 'from_location and to_location required' });
+      if (fromLoc === toLoc) return res.status(400).json({ error: 'need two different locations' });
+      const fl = d.prepare('SELECT * FROM locations WHERE id = ?').get(fromLoc);
+      const tl = d.prepare('SELECT * FROM locations WHERE id = ?').get(toLoc);
+      if (!fl || !tl) return res.status(400).json({ error: 'location not found' });
+      const user = req.user;
+      if (user.role !== 'owner') {
+        const vis = visibleBranches(d, user).map((x) => x.id);
+        if (!vis.includes(fl.branch_id) || !vis.includes(tl.branch_id)) return res.status(403).json({ error: 'branch not visible' });
+      }
+      const interval = String(b.interval || 'weekly').trim();
+      if (!['daily', 'weekly', 'biweekly', 'monthly', 'once'].includes(interval)) return res.status(400).json({ error: 'interval must be daily/weekly/biweekly/monthly/once' });
+      const items = Array.isArray(b.items) ? b.items : [];
+      if (!items.length) return res.status(400).json({ error: 'items[] required' });
+      for (const it of items) {
+        const qty = Number(it.qty);
+        if (!Number.isInteger(qty) || qty <= 0) return res.status(400).json({ error: 'item qty must be > 0 integer' });
+      }
+      const cost = intShillings(b.cost) ?? 0;
+      const costNote = String(b.cost_note || '').trim();
+      const nextDue = b.next_due ? String(b.next_due).trim() : new Date().toISOString();
+      if (isNaN(Date.parse(nextDue))) return res.status(400).json({ error: 'next_due must be ISO date' });
+      const id = d.prepare(
+        `INSERT INTO transfer_templates (name, from_branch, to_branch, from_location, to_location, cost, cost_note, interval, next_due, active, items, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
+      ).run(name, fl.branch_id, tl.branch_id, fromLoc, toLoc, cost, costNote, interval, nextDue, JSON.stringify(items), user.id, new Date().toISOString()).lastInsertRowid;
+      dbm.audit(d, { userId: user.id, branchId: fl.branch_id, action: 'transfer_template/create', entity: 'transfer_template', entityId: String(id), detail: { name, interval, items: items.length } });
+      res.json({ ok: true, template: templatePayload(d, d.prepare('SELECT * FROM transfer_templates WHERE id = ?').get(id)) });
+    } catch (e) {
+      const st = e.status || 500;
+      if (st === 500) console.error(e);
+      res.status(st).json({ error: e.message });
+    }
+  });
+
+  app.put('/api/transfer-templates/:id', me, can('stock.adjust'), (req, res) => {
+    const t = d.prepare('SELECT * FROM transfer_templates WHERE id = ?').get(numOrNull(req.params.id));
+    if (!t) return res.status(404).json({ error: 'not found' });
+    const b = req.body || {};
+    const patch = {
+      name: b.name !== undefined ? String(b.name).trim() : t.name,
+      cost: b.cost !== undefined ? (intShillings(b.cost) ?? t.cost) : t.cost,
+      cost_note: b.cost_note !== undefined ? String(b.cost_note).trim() : t.cost_note,
+      interval: b.interval !== undefined ? String(b.interval).trim() : t.interval,
+      next_due: b.next_due !== undefined ? String(b.next_due).trim() : t.next_due,
+      active: b.active !== undefined ? (b.active ? 1 : 0) : t.active,
+      items: b.items !== undefined ? JSON.stringify(b.items) : t.items
+    };
+    if (patch.interval && !['daily', 'weekly', 'biweekly', 'monthly', 'once'].includes(patch.interval)) return res.status(400).json({ error: 'bad interval' });
+    d.prepare(`UPDATE transfer_templates SET name = ?, cost = ?, cost_note = ?, interval = ?, next_due = ?, active = ?, items = ? WHERE id = ?`)
+      .run(patch.name, patch.cost, patch.cost_note, patch.interval, patch.next_due, patch.active, patch.items, t.id);
+    res.json({ ok: true, template: templatePayload(d, d.prepare('SELECT * FROM transfer_templates WHERE id = ?').get(t.id)) });
+  });
+
+  app.post('/api/transfer-templates/:id/run', me, can('stock.adjust'), (req, res) => {
+    try {
+      const user = req.user;
+      const t = d.prepare('SELECT * FROM transfer_templates WHERE id = ?').get(numOrNull(req.params.id));
+      if (!t) return res.status(404).json({ error: 'not found' });
+      if (!t.active) return res.status(400).json({ error: 'template is inactive' });
+      const fl = d.prepare('SELECT * FROM locations WHERE id = ?').get(t.from_location);
+      const tl = d.prepare('SELECT * FROM locations WHERE id = ?').get(t.to_location);
+      if (!fl || !tl) return res.status(400).json({ error: 'location not found' });
+      let items = [];
+      try { items = JSON.parse(t.items || '[]'); } catch { items = []; }
+      if (!items.length) return res.status(400).json({ error: 'template has no items' });
+      const ref = dbm.nextCounter(d, 'trf', 'TR-');
+      const now = new Date().toISOString();
+      const id = d.transaction(() => {
+        const row = d.prepare(
+          `INSERT INTO transfers (ref, from_branch, to_branch, from_location, to_location, status, created_by, created_at, note, cost, cost_note, template_id)
+           VALUES (?, ?, ?, ?, ?, 'requested', ?, ?, ?, ?, ?, ?)`
+        ).run(ref, fl.branch_id, tl.branch_id, t.from_location, t.to_location, user.id, now, `from template ${t.name}`, t.cost, t.cost_note, t.id).lastInsertRowid;
+        for (const it of items) {
+          const qty = Number(it.qty);
+          const variantId = numOrNull(it.variant_id);
+          const productId = numOrNull(it.product_id);
+          let v = null;
+          if (variantId) v = d.prepare('SELECT * FROM variants WHERE id = ?').get(variantId);
+          else if (productId) v = d.prepare("SELECT * FROM variants WHERE product_id = ? AND axes_key = '{}'").get(productId);
+          if (!v) throw httpError(400, 'template item references missing product');
+          d.prepare('INSERT INTO transfer_items (transfer_id, product_id, variant_id, qty, batch_id) VALUES (?, ?, ?, ?, ?)')
+            .run(row, v.product_id, v.id, qty, numOrNull(it.batch_id));
+        }
+        // compute next due
+        let nextDue = null;
+        if (t.interval !== 'once') {
+          const base = new Date(t.next_due || now);
+          if (t.interval === 'daily') base.setDate(base.getDate() + 1);
+          else if (t.interval === 'weekly') base.setDate(base.getDate() + 7);
+          else if (t.interval === 'biweekly') base.setDate(base.getDate() + 14);
+          else if (t.interval === 'monthly') base.setMonth(base.getMonth() + 1);
+          nextDue = base.toISOString();
+          d.prepare('UPDATE transfer_templates SET next_due = ?, last_run_at = ? WHERE id = ?').run(nextDue, now, t.id);
+        } else {
+          d.prepare('UPDATE transfer_templates SET active = 0, last_run_at = ? WHERE id = ?').run(now, t.id);
+        }
+        dbm.audit(d, { userId: user.id, branchId: fl.branch_id, action: 'transfer_template/run', entity: 'transfer', entityId: String(row), detail: { ref, template: t.name, interval: t.interval } });
+        return row;
+      })();
+      res.json({ ok: true, transfer: transferPayload(d, d.prepare('SELECT * FROM transfers WHERE id = ?').get(id)) });
+    } catch (e) {
+      const st = e.status || 500;
+      if (st === 500) console.error(e);
+      res.status(st).json({ error: e.message });
+    }
+  });
+
+  // ==================== Phase 12 Day 17 — branch dashboard ====================
+  app.get('/api/branches/:id/dashboard', me, (req, res) => {
+    const user = req.user;
+    const branchId = numOrNull(req.params.id);
+    const b = branchRow(d, branchId);
+    if (!b) return res.status(404).json({ error: 'branch not found' });
+    if (!transferVisible(d, user, { from_branch: branchId, to_branch: branchId })) {
+      // Reuse visibility: owner or branch in visible list
+      const vis = visibleBranches(d, user).map((x) => x.id);
+      if (!vis.includes(branchId)) return res.status(404).json({ error: 'branch not found' });
+    }
+    const todayIso = startOfTodayIso();
+    const weekAgo = new Date(Date.now() - 7 * 86400e3).toISOString();
+    const monthAgo = new Date(Date.now() - 30 * 86400e3).toISOString();
+
+    const locs = locationsOf(d, branchId);
+    const locIds = locs.map((l) => l.id);
+
+    const salesToday = d.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(gross), 0) AS total FROM sales WHERE branch_id = ? AND status IN ('paid','partial') AND created_at >= ?`).get(branchId, todayIso);
+    const salesWeek = d.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(gross), 0) AS total FROM sales WHERE branch_id = ? AND status IN ('paid','partial') AND created_at >= ?`).get(branchId, weekAgo);
+    const salesMonth = d.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(gross), 0) AS total FROM sales WHERE branch_id = ? AND status IN ('paid','partial') AND created_at >= ?`).get(branchId, monthAgo);
+
+    // Stock value: sum qty * cost across locations in branch
+    let stockValue = 0, stockQtyTotal = 0;
+    if (locIds.length) {
+      const ph = locIds.map(() => '?').join(',');
+      const rows = d.prepare(
+        `SELECT s.qty, COALESCE(v.cost, p.cost, 0) AS cost FROM stock s
+         JOIN variants v ON v.id = s.variant_id
+         JOIN products p ON p.id = v.product_id
+         WHERE s.location_id IN (${ph}) AND s.qty > 0`
+      ).all(...locIds);
+      for (const r of rows) {
+        stockValue += r.qty * r.cost;
+        stockQtyTotal += r.qty;
+      }
+    }
+
+    // Low stock: products where total stock in branch <= reorder_level
+    const lowStock = d.prepare(`
+      SELECT p.id, p.name, p.reorder_level,
+             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIds.length ? locIds.map(() => '?').join(',') : 'SELECT 0 WHERE 0'} )), 0) AS stock
+        FROM products p WHERE p.active = 1 AND p.reorder_level > 0
+    `).all(...locIds);
+    const lowCount = lowStock.filter((r) => r.stock <= r.reorder_level).length;
+
+    const pendingTransfers = d.prepare(
+      `SELECT COUNT(*) AS n FROM transfers WHERE (from_branch = ? OR to_branch = ?) AND status IN ('requested','approved','shipped','scheduled')`
+    ).get(branchId, branchId).n;
+
+    const staffCount = d.prepare(`SELECT COUNT(*) AS n FROM users WHERE branch_id = ? AND active = 1`).get(branchId).n;
+
+    // Top products in branch last 30 days
+    const topProducts = d.prepare(`
+      SELECT p.name, SUM(si.qty) AS qty, SUM(si.gross) AS gross
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id
+        JOIN products p ON p.id = si.product_id
+       WHERE s.branch_id = ? AND s.status IN ('paid','partial') AND s.created_at >= ?
+       GROUP BY p.id ORDER BY gross DESC LIMIT 10
+    `).all(branchId, monthAgo);
+
+    const recentTransfers = d.prepare(`
+      SELECT * FROM transfers WHERE from_branch = ? OR to_branch = ? ORDER BY id DESC LIMIT 10
+    `).all(branchId, branchId).map((t) => {
+      const base = transferPayload(d, t);
+      delete base.items;
+      return base;
+    });
+
+    // Supplier balances filtered to this branch
+    const suppliers = d.prepare('SELECT * FROM suppliers WHERE active = 1 ORDER BY name').all()
+      .map((s) => ({ ...s, balance: supplierBalance(s.id, branchId) }))
+      .filter((s) => s.balance.invoices_total > 0 || s.balance.open_pos > 0 || s.balance.outstanding !== 0)
+      .slice(0, 20);
+
+    // Shrinkage in branch last 30d (damage, expiry, negative adjustments)
+    const shrinkage = d.prepare(
+      `SELECT COALESCE(SUM(-qty * unit_cost), 0) AS total FROM stock_moves
+       WHERE branch_id = ? AND (type = 'damage' OR type = 'expiry_writeoff' OR (type = 'adjustment' AND qty < 0)) AND created_at >= ?`
+    ).get(branchId, monthAgo).total;
+
+    // Expenses in branch (last 30 days)
+    const expenses = d.prepare(`SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS n FROM expenses WHERE branch_id = ? AND expense_date >= ?`).get(branchId, monthAgo.slice(0, 10));
+    const recentExpenses = d.prepare(`SELECT * FROM expenses WHERE branch_id = ? ORDER BY expense_date DESC, id DESC LIMIT 10`).all(branchId);
+
+    res.json({
+      branch: { ...b, settings: safeJson(b.settings || '{}') },
+      locations: locs.map((l) => ({
+        ...l,
+        registers: d.prepare('SELECT COUNT(*) AS n FROM registers WHERE location_id = ? AND active = 1').get(l.id).n,
+        stockLines: d.prepare('SELECT COUNT(*) AS n FROM stock WHERE location_id = ? AND qty != 0').get(l.id).n
+      })),
+      sales: { today: salesToday, week: salesWeek, month: salesMonth },
+      stock: { value: stockValue, qty: stockQtyTotal, low_count: lowCount, low_items: lowStock.filter((r) => r.stock <= r.reorder_level).slice(0, 15), shrinkage },
+      transfers: { pending: pendingTransfers, recent: recentTransfers },
+      staff: { count: staffCount },
+      top_products: topProducts,
+      suppliers,
+      expenses: { month: expenses, recent: recentExpenses },
+      shrinkage
+    });
+  });
+
+  // ==================== Day 17 — expenses (branch-scoped) ====================
+  app.get('/api/expenses', me, (req, res) => {
+    const user = req.user;
+    const vis = visibleBranches(d, user).map((b) => b.id);
+    if (!vis.length) return res.json([]);
+    const branchId = numOrNull(req.query.branch_id);
+    const from = req.query.from ? String(req.query.from) : null;
+    const to = req.query.to ? String(req.query.to) : null;
+    const where = [`branch_id IN (${vis.map(() => '?').join(',')})`];
+    const args = [...vis];
+    if (branchId) {
+      if (!vis.includes(branchId)) return res.status(404).json({ error: 'branch not found' });
+      where.push('branch_id = ?'); args.push(branchId);
+    }
+    if (from) { where.push('expense_date >= ?'); args.push(from); }
+    if (to) { where.push('expense_date <= ?'); args.push(to); }
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    const rows = d.prepare(`SELECT * FROM expenses WHERE ${where.join(' AND ')} ORDER BY expense_date DESC, id DESC LIMIT ?`).all(...args, limit);
+    res.json(rows);
+  });
+
+  app.post('/api/expenses', me, can('expenses.manage'), (req, res) => {
+    try {
+      const b = req.body || {};
+      const amount = intShillings(b.amount);
+      if (amount === null || amount <= 0) return res.status(400).json({ error: 'amount must be whole shillings > 0' });
+      const branchId = numOrNull(b.branch_id);
+      if (!branchId) return res.status(400).json({ error: 'branch_id required' });
+      const vis = visibleBranches(d, req.user).map((x) => x.id);
+      if (!vis.includes(branchId)) return res.status(404).json({ error: 'branch not found' });
+      const cat = String(b.category || 'other').trim() || 'other';
+      const note = String(b.note || '').trim();
+      const expDate = b.expense_date ? String(b.expense_date).trim() : new Date().toISOString().slice(0, 10);
+      if (isNaN(Date.parse(expDate))) return res.status(400).json({ error: 'expense_date must be ISO date' });
+      const id = d.prepare(
+        `INSERT INTO expenses (branch_id, category, amount, note, expense_date, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(branchId, cat, amount, note, expDate, req.user.id, new Date().toISOString()).lastInsertRowid;
+      dbm.audit(d, { userId: req.user.id, branchId, action: 'expense/create', entity: 'expense', entityId: String(id), detail: { amount, category: cat } });
+      res.json({ ok: true, id, expense: d.prepare('SELECT * FROM expenses WHERE id = ?').get(id) });
     } catch (e) {
       const st = e.status || 500;
       if (st === 500) console.error(e);
