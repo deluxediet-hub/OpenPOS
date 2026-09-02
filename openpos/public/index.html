@@ -204,7 +204,7 @@ function navCard(href, title, sub, badge, badgeClass) {
 
 function drawNav(caps, me) {
   const cards = [];
-  cards.push(navCard('/pos.html', t('till'), 'Barcode · cash · M-Pesa', 'Day 10', 'amber'));
+  cards.push(navCard('/pos.html', t('till'), 'Barcode · cash · M-Pesa · hold/resume', null));
   cards.push(navCard('/manager.html#products', t('products'), t('categories'), null));
   cards.push(navCard('/manager.html#tills', t('tills'), 'Printers · drawers', null));
   cards.push(navCard('/manager.html#customers', 'Customers', t('deni_short'), 'Day 15', 'amber'));

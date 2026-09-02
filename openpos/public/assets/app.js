@@ -71,6 +71,17 @@ const I18N = {
     when: 'When', field: 'Field', old: 'From', newp: 'To', changed_by: 'Changed by', approver: 'Approved by',
     filter_product: 'Product', all_products: 'All products', no_history: 'No price changes recorded yet.',
     window_label: 'Window', below_margin: 'below margin', pin_ok: 'PIN approved', no_pin: 'no PIN',
+    // POS (Day 10)
+    scan_search: 'Scan barcode or search…', all: 'All', out_of_stock: 'Out of stock',
+    subtotal: 'Subtotal', discount: 'Discount', vat: 'VAT', total: 'Total',
+    cash: 'Cash', mpesa: 'M-Pesa', card: 'Card', tender: 'Tender', exact: 'Exact',
+    walk_in: 'Walk-in', cart_empty: 'Cart is empty — scan or pick a product', note: 'Note',
+    hold_sale: 'Hold', held_sale: 'Held sale', held_sales: 'Held sales', resume: 'Resume', resume_sale: 'Resume & pay',
+    complete_sale: 'Complete sale', age_confirm_title: 'Age check',
+    age_confirm_msg: 'Confirm the customer is at least {n} years old.', confirm_age: 'Customer is of age',
+    supervisor_pin: 'Supervisor PIN', supervisor_pin_msg: 'Enter a manager or owner PIN to approve this discount.',
+    confirm: 'Confirm', print: 'Print', new_sale: 'New sale', payment_ref: 'Reference',
+    customer: 'Customer', invoice_no: 'Invoice',
   },
   sw: {
     staff_signin: 'Waketi wafanyakazi', select_staff: 'Chagua mfanyakazi', enter_pin: 'Weka PIN',
@@ -136,6 +147,17 @@ const I18N = {
     when: 'Lini', field: 'Sehemu', old: 'Kutoka', newp: 'Kwenda', changed_by: 'Aliyebadilisha', approver: 'Aliyeidhinisha',
     filter_product: 'Bidhaa', all_products: 'Bidhaa zote', no_history: 'Hakuna badiliko la bei lililorekodiwa bado.',
     window_label: 'Kituo', below_margin: 'chini ya faida', pin_ok: 'PIN imeidhinishwa', no_pin: 'bila PIN',
+    // POS (Day 10)
+    scan_search: 'Scan au tafuta…', all: 'Zote', out_of_stock: 'Imetoka madukani',
+    subtotal: 'Jumla ndogo', discount: 'Punguzo', vat: 'VAT', total: 'Jumla',
+    cash: 'Taslimu', mpesa: 'M-Pesa', card: 'Kadi', tender: 'Iliyotolewa', exact: 'Sahihi',
+    walk_in: 'Mteja wa kawaida', cart_empty: 'Kikapu kina tupu — scan au chagua bidhaa', note: 'Maelezo',
+    hold_sale: 'Shikilia', held_sale: 'Mauzo yaliyoshikiliwa', held_sales: 'Mauzo yaliyoshikiliwa', resume: 'Endelea', resume_sale: 'Endelea & lipa',
+    complete_sale: 'Kamilisha mauzo', age_confirm_title: 'Hakiki umri',
+    age_confirm_msg: 'Thibitisha mteja ana anga miaka {n}.', confirm_age: 'Mteja ana umri',
+    supervisor_pin: 'PIN ya msimamizi', supervisor_pin_msg: 'Weka PIN ya meneja au mwenyeji ili kuidhinisha punguzo hili.',
+    confirm: 'Thibitisha', print: 'Chapisha', new_sale: 'Mauzo mapya', payment_ref: 'Marejeo',
+    customer: 'Mteja', invoice_no: 'Fatura',
   }
 };
 

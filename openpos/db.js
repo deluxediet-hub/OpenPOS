@@ -943,6 +943,11 @@ function migrate(d) {
   // written at line add (Phase 7), never altered afterwards.
   addCol(d, 'products', 'min_margin_pct', 'INTEGER');
   addCol(d, 'sale_items', 'unit_price', 'INTEGER');
+
+  // Phase 7 (Day 10): who approved a discount beyond the cashier's permission on a sale,
+  // and the exact variant on each sale line (held sales re-validate + FEFO at payment).
+  addCol(d, 'sales', 'discount_by', 'INTEGER');
+  addCol(d, 'sale_items', 'variant_id', 'INTEGER');
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

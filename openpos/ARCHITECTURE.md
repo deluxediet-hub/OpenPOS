@@ -197,6 +197,12 @@ payment, **frozen onto the sale line**:
   Price is frozen onto the sale line at Phase 7 (line add) and re-validated at payment;
   Day 9 ships the engine + guard + history + `GET /api/price-rules` CRUD + `GET /api/customers`
   (read-only until Phase 11) + the manager **Pricing** tab (rules, guard settings, history).
+- **Done (Day 10) — freeze & re-validation:** a sale line's `unit_price` is set by the chain at
+  line add and is **never altered afterwards** — a later price change leaves old receipts intact
+  (asserted in tests). At payment, a held sale is re-validated (variant + product must still be
+  active) and stock moves **exactly once**, FEFO for batch-tracked lines, each line's lot recorded
+  on the sale line and in the ledger (`ref` = invoice no). Cashiers sell from their bound
+  register; every sale is attributed to branch / location / register / cashier.
 
 ### 3.3 Stock ledger (R-S) — *the heart of the system*
 
@@ -365,6 +371,7 @@ Hook points (core exposes these; modules plug in):
 | Stock + moves (opening/purchase/sale/adjust) | ✓ **Phase 4 done (Day 5–6):** single move engine (15 types + per-type reason codes) is the only door for quantity changes; FEFO per-batch ledger rows; serial allocation; R-S8 oversell = explicit audited manager/owner act; `stock_ledger_balances` view + integrity job (R-S7: alert, audited repair); R-S2 five-question trace API; stocktakes (per-batch + residual, variance-only moves, evidence kept); ageing + dead stock; expiry write-off |
 | Suppliers, POs, GR, supplier invoices/returns (schema stubs) | ✓ **Phase 5 done (Day 7–8), capability-gated (R-C):** suppliers (KRA PIN, terms, lead days, live balance, delete-blocked on open POs/owed money); suggested POs from 30-day sales velocity `ceil(v × (lead + cover) − stock)`; POs → partial GR with batch/serial + per-line cost at the door; receiving discrepancies (over-qty / price) pending → **reject over-receipt auto-writes the supplier return** (FEFO `return_out`, PO line restored); invoices with evidence-backed payments (R-PAY: method + channel_ref, overpay refused, dispute blocks payment); supplier balance = Σ invoices − Σ payments; per-lot purchase price history from the ledger. All quantities move through the Phase-4 move engine (`purchase` / `return_out`), so trace + integrity cover purchasing unchanged |
 | Pricing: chain, rules, guard, history | ✓ **Phase 6 done (Day 9):** server-side resolution chain (promo/time → customer → branch → pack → tier → default) with `source` on every answer; `price_rules` (one primary scope + combinable time window, HH:MM and/or date bounds); minimum-margin guard (R-PR1) on every price-writing surface — PIN or block, floors product → branch → global, approver recorded; append-only `price_history` (R-PR3) in the same transaction as the change; manager **Pricing** tab (rules, guard settings, history, EN/SW). Acceptance: same variant × 5 branches × 2 customer types + 1 promo = 11 correct prices, below-margin override demands manager PIN, every change leaves history — all in `npm test` |
+| Sales / checkout (engine + till UI) | ⚙ **Phase 7, Day 10 of 2:** `POST /api/sales` = scan-to-receipt in one call — chain-frozen `unit_price` per line (never altered later), line discounts permissioned (`sales.discount`) or supervisor-PIN approved (approver recorded on the sale), age-gate on restricted items, VAT split per line (std/zero/exempt), stock moves **exactly once** through the Phase-4 move engine (FEFO per lot, `ref` = invoice no, oversell only as an audited manager/owner act R-S8), cash (change) / M-Pesa (manual ref) / card payments, partial payments, **hold → suspended** (no stock) → `POST /api/sales/:id/pay` (re-validates, single stock step), void reverses the exact lots taken. Till UI (`/pos.html`): barcode wedge + search, category chips, product grid, variant picker, cart (qty/discount/note), customer + promo attach, two tills concurrent, printable receipt with KRA fields. Quote→invoice + cashier onboarding polish land on Day 11 |
 | Audit hash chain + verify | ✓ R-A1/R-A4 done at core level |
 | Sales/payments schema | Phase 8 reshapes payments into the adapter engine (schema ready: `payments`, `mpesa_log`) |
 | EN/SW core strings, dashboard, manager UI | ✓ foundation; polished in Phase 34 |
@@ -393,6 +400,14 @@ Hook points (core exposes these; modules plug in):
 
 ## 9. Change log
 
+- **2026-09-02 (v7)** — **Phase 7 started (Day 10 of 2):** sales/checkout engine —
+  `POST /api/sales` (chain-frozen line prices, permissioned/PIN-approved discounts,
+  age gate, per-line VAT, single FEFO stock step, cash/M-Pesa/card + partial,
+  hold→suspended→pay, void reverses exact lots, list/detail/receipt), `base_variant_id`
+  on product lists, `sale_items.variant_id` + `sales.discount_by` columns, and the full
+  till UI (`/pos.html`: scan wedge, grid, variant picker, cart, hold/resume, printable
+  receipt, EN/SW). 96 tests green incl. frozen-price, FEFO lots, R-S8 oversell,
+  supervisor-PIN discount, hold single-stock-move, two-till concurrency.
 - **2026-09-02 (v6)** — **Phase 6 implemented (Day 9):** pricing resolution engine
   (chain + `price_rules` + time windows), minimum-margin guard (R-PR1: PIN or block,
   floor precedence product → branch → global, approver recorded), append-only

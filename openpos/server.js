@@ -599,7 +599,8 @@ function createApp(d) {
            (SELECT COALESCE(SUM(st.qty), 0) FROM variants v
              JOIN stock st ON st.variant_id = v.id AND st.location_id = ?
             WHERE v.product_id = p.id AND v.active = 1) AS stock_qty,
-           (SELECT COUNT(*) FROM variants v WHERE v.product_id = p.id AND v.active = 1) AS variant_count
+           (SELECT COUNT(*) FROM variants v WHERE v.product_id = p.id AND v.active = 1) AS variant_count,
+           (SELECT v.id FROM variants v WHERE v.product_id = p.id AND v.active = 1 AND v.axes_key = '{}' LIMIT 1) AS base_variant_id
            FROM products p
            LEFT JOIN categories c ON c.id = p.category_id
            LEFT JOIN suppliers s ON s.id = p.supplier_id
@@ -1054,7 +1055,8 @@ function createApp(d) {
            (SELECT COALESCE(SUM(st.qty), 0) FROM variants v
              JOIN stock st ON st.variant_id = v.id AND st.location_id = ?
             WHERE v.product_id = p.id AND v.active = 1) AS stock_qty,
-           (SELECT COUNT(*) FROM variants v WHERE v.product_id = p.id AND v.active = 1) AS variant_count
+           (SELECT COUNT(*) FROM variants v WHERE v.product_id = p.id AND v.active = 1) AS variant_count,
+           (SELECT v.id FROM variants v WHERE v.product_id = p.id AND v.active = 1 AND v.axes_key = '{}' LIMIT 1) AS base_variant_id
            FROM products p
            LEFT JOIN categories c ON c.id = p.category_id
            LEFT JOIN suppliers s ON s.id = p.supplier_id
@@ -2936,6 +2938,366 @@ function createApp(d) {
   // Read-only customer list (the full customer module lands in Phase 11).
   app.get('/api/customers', me, can('customers.view'), (req, res) => {
     res.json(d.prepare('SELECT * FROM customers ORDER BY name LIMIT 500').all());
+  });
+
+  // ---- Phase 7 (Day 10): POS / sales engine --------------------------------------------------------
+  // Prices are FROZEN at line add (R-PR chain: promo → customer → branch → pack → tier → default).
+  // Stock moves exactly once, at payment, through the Phase-4 move engine (FEFO for batches).
+  // Hold = 'suspended' sale (no stock, no payment); paying it is the single stock-mutating step.
+
+  function saleContext(d, user) {
+    // A cashier sells from their own register → location → branch. Unbound users: first visible branch.
+    // Session users are camelCase (lib/auth.js): branchId / locationId / registerId.
+    let register = null;
+    if (user.registerId) register = d.prepare('SELECT * FROM registers WHERE id = ? AND active = 1').get(user.registerId) || null;
+    const visible = visibleBranches(d, user);
+    let branchId = (register && register.branch_id) || user.branchId || null;
+    if (!branchId || !visible.some((b) => b.id === branchId)) branchId = (visible[0] && visible[0].id) || null;
+    let locationId = (register && register.location_id) || user.locationId || null;
+    const loc = branchId ? d.prepare('SELECT * FROM locations WHERE id = ? AND branch_id = ?').get(locationId, branchId) : null;
+    if (!loc) locationId = (defaultLocation(d, branchId) || {}).id || null;
+    const branch = branchId ? d.prepare('SELECT * FROM branches WHERE id = ?').get(branchId) : null;
+    return { branchId, locationId, register, branch };
+  }
+
+  function nextOrderNo(d, branchId) {
+    return d.prepare('SELECT COALESCE(MAX(order_no), 0) + 1 AS n FROM sales WHERE branch_id = ?').get(branchId).n;
+  }
+
+  function lineTax(net, taxType, vatRate) {
+    if (taxType !== 'std' || !vatRate) return 0;
+    return Math.round((net * vatRate) / (100 + vatRate));
+  }
+
+  // Validates + prices the cart. Throws httpError on any problem.
+  function prepareSaleLines(d, { user, ctx, customerId, promoCode, items, approver, allowOversell }) {
+    if (!Array.isArray(items) || !items.length) throw httpError(400, 'no items');
+    if (items.length > 200) throw httpError(400, 'too many items (max 200)');
+    if (allowOversell && !['owner', 'manager'].includes(user.role)) {
+      throw httpError(403, 'overselling stock is a manager/owner act (R-S8)');
+    }
+    const customer = customerId ? d.prepare('SELECT * FROM customers WHERE id = ?').get(customerId) : null;
+    if (customerId && !customer) throw httpError(404, 'unknown customer');
+    const vatRate = Number((dbm.getSetting(d, 'tax', {}) || {}).vatRate) || 0;
+    const discountAllowed = perms.userHasPerm(d, user, 'sales.discount') || !!approver;
+    const lines = [];
+    for (const it of items) {
+      const variantId = numOrNull(it.variant_id);
+      const qty = Number(it.qty);
+      if (!variantId) throw httpError(400, 'variant_id required on each item');
+      if (!Number.isFinite(qty) || qty <= 0) throw httpError(400, 'qty must be positive');
+      const variant = d.prepare('SELECT * FROM variants WHERE id = ? AND active = 1').get(variantId);
+      if (!variant) throw httpError(404, `unknown variant ${variantId}`);
+      const product = d.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(variant.product_id);
+      if (!product) throw httpError(404, 'unknown product');
+      if (product.requires_rx) throw httpError(403, `${product.name} requires a prescription (pharmacy workflow)`);
+      if (product.is_controlled) throw httpError(403, `${product.name} is controlled — licensed workflow required`);
+      if (product.age_min && !it.age_verified) {
+        throw httpError(400, `${product.name}: age verification required (${product.age_min}+)`);
+      }
+      if (product.track_serials && !Number.isInteger(qty)) throw httpError(400, 'serial-tracked items must be whole units');
+      // R-PR: freeze the price the moment the line is added.
+      const res = resolvePrice(d, { variantId, branchId: ctx.branchId, customerId: customer ? customer.id : null, promoCode });
+      if (res.error) throw httpError(res.status || 400, res.error);
+      const disc = Math.max(0, Math.round(Number(it.line_discount) || 0));
+      if (disc > 0) {
+        if (!discountAllowed) throw httpError(403, 'discounts need the sales.discount permission or a supervisor PIN');
+        if (disc > res.price * qty) throw httpError(400, `discount ${disc} exceeds the line total`);
+      }
+      const taxType = eff(product, variant, 'tax_type') || 'std';
+      const grossLine = Math.round(res.price * qty);
+      const net = grossLine - disc;
+      const tax = lineTax(net, taxType, vatRate);
+      lines.push({
+        variant, product, qty, unitPrice: res.price, source: res.source, disc, net, tax, gross: net + tax,
+        taxType, kra: eff(product, variant, 'kra_item_code') || '',
+        age: product.age_min ? 1 : 0, batchId: null, note: String(it.line_note || '').trim()
+      });
+    }
+    return { lines, customer };
+  }
+
+  function saleTotals(lines) {
+    const t = { subtotal: 0, discount: 0, net: 0, tax: 0, gross: 0 };
+    for (const L of lines) {
+      t.subtotal += Math.round(L.unitPrice * L.qty);
+      t.discount += L.disc; t.net += L.net; t.tax += L.tax; t.gross += L.gross;
+    }
+    return t;
+  }
+
+  // The single stock-mutating step of a sale: FEFO per line, ref = invoice no (R-S2 trace).
+  function moveStockForSale(d, { user, ctx, lines, ref, allowOversell }) {
+    for (const L of lines) {
+      const out = writeMove(d, {
+        product: L.product, variant: L.variant, branchId: ctx.branchId, locationId: ctx.locationId,
+        qty: -L.qty, type: 'sale', reason: 'sale', ref, userId: user.id,
+        allowOversell, note: L.product.name + (L.variant.name ? ` — ${L.variant.name}` : '')
+      });
+      if (out.moveIds.length) {
+        const first = d.prepare('SELECT batch_id FROM stock_moves WHERE id = ?').get(out.moveIds[0]);
+        L.batchId = first ? first.batch_id : null;
+      }
+    }
+  }
+
+  // Cash may be tendered (change computed); other methods pay the exact applied amount.
+  function applyPayment(d, { user, saleId, sale, payment, discountBy }) {
+    if (!payment) throw httpError(400, 'payment required');
+    const method = payment.method;
+    if (!['cash', 'mpesa', 'card', 'gift_card', 'credit'].includes(method)) throw httpError(400, 'bad payment method');
+    const tendered = intShillings(payment.amount);
+    if (tendered === null || tendered <= 0) throw httpError(400, 'payment amount must be whole shillings > 0');
+    const gross = sale.gross;
+    const overpay = tendered > gross && method !== 'cash';
+    if (overpay) throw httpError(400, `${method} cannot pay more than the balance`);
+    const applied = method === 'cash' ? Math.min(tendered, gross) : tendered;
+    const change = method === 'cash' ? Math.max(0, tendered - gross) : 0;
+    const ref = String(payment.ref || '').trim();
+    if ((method === 'mpesa' || method === 'card') && !ref) throw httpError(400, `${method} reference required`);
+    if (method === 'credit' && !sale.customer_id) throw httpError(400, 'credit (deni) needs a customer');
+    const t = new Date().toISOString();
+    d.prepare(
+      `INSERT INTO payments (sale_id, method, amount, ref, status, user_id, created_at, raw) VALUES (?, ?, ?, ?, 'confirmed', ?, ?, ?)`
+    ).run(saleId, method, applied, ref, user.id, t, JSON.stringify({ tendered, change, phone: String(payment.phone || '').trim() }));
+    const paid = d.prepare('SELECT COALESCE(SUM(amount), 0) AS s FROM payments WHERE sale_id = ? AND status = ?').get(saleId, 'confirmed').s;
+    const status = paid >= gross - 0 ? 'paid' : 'partial';
+    d.prepare('UPDATE sales SET status = ?, discount_by = ?, paid_at = ? WHERE id = ?')
+      .run(status, discountBy || d.prepare('SELECT discount_by FROM sales WHERE id = ?').get(saleId).discount_by, status === 'paid' ? t : null, saleId);
+    return status;
+  }
+
+  function buildSalePayload(d, saleId) {
+    const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
+    const items = d.prepare('SELECT * FROM sale_items WHERE sale_id = ? ORDER BY id').all(saleId);
+    const payments = d.prepare('SELECT * FROM payments WHERE sale_id = ? ORDER BY id').all(saleId);
+    const users = d.prepare('SELECT id, name FROM users').all();
+    const names = Object.fromEntries(users.map((u) => [u.id, u.name]));
+    const customer = sale.customer_id ? d.prepare('SELECT * FROM customers WHERE id = ?').get(sale.customer_id) : null;
+    const biz = dbm.getSetting(d, 'business', {}) || {};
+    const tax = dbm.getSetting(d, 'tax', {}) || {};
+    return {
+      sale: {
+        ...sale,
+        cashier: names[sale.user_id] || `#${sale.user_id}`,
+        discount_by: sale.discount_by ? names[sale.discount_by] : null
+      },
+      items, payments,
+      customer: customer ? { id: customer.id, name: customer.name, phone: customer.phone } : null,
+      receipt: {
+        business: { name: biz.name || '', phone: biz.phone || '', kraPin: biz.kraPin || '', address: biz.address || '' },
+        currency: biz.currency || 'KES', symbol: biz.symbol || 'Ksh',
+        vatRegistered: !!tax.vatRegistered, vatRate: tax.vatRate || 0,
+        footer: (dbm.getSetting(d, 'receipt', {}) || {}).footer || ''
+      }
+    };
+  }
+
+  function supervisorFromPin(pin) {
+    const mgr = findManagerByPin(String(pin || ''));
+    if (!mgr) throw httpError(403, 'invalid supervisor PIN');
+    return mgr;
+  }
+
+  // One call = scan-to-receipt: validate → freeze prices → (stock + pay) or hold.
+  app.post('/api/sales', me, (req, res) => {
+    try {
+      const b = req.body || {};
+      const hold = b.hold === true;
+      const approver = b.override_pin ? supervisorFromPin(b.override_pin) : null;
+      if (b.oversell && !['owner', 'manager'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'overselling stock is a manager/owner act (R-S8)' });
+      }
+      const ctx = saleContext(d, req.user);
+      if (!ctx.branchId || !ctx.locationId) {
+        return res.status(400).json({ error: 'no selling location for this user — assign a branch or register first' });
+      }
+      const { lines, customer } = prepareSaleLines(d, {
+        user: req.user, ctx, customerId: numOrNull(b.customer_id),
+        promoCode: b.promo_code ? String(b.promo_code).trim() : null,
+        items: b.items, approver, allowOversell: b.oversell === true
+      });
+      const totals = saleTotals(lines);
+      const t = new Date().toISOString();
+      const biz = dbm.getSetting(d, 'business', {}) || {};
+      const orderNo = nextOrderNo(d, ctx.branchId);
+      const invoiceNo = `${ctx.branch.code || 'BR'}-${String(orderNo).padStart(6, '0')}`;
+      const discountBy = approver ? approver.id : null;
+      const run = d.transaction(() => {
+        const id = d
+          .prepare(
+            `INSERT INTO sales (branch_id, location_id, register_id, terminal, order_no, invoice_no, customer_id, user_id, status,
+               subtotal, discount, net, tax, gross, tender, note, etims_status, discount_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)`
+          )
+          .run(ctx.branchId, ctx.locationId, ctx.register ? ctx.register.id : null, ctx.register ? ctx.register.name : '',
+            orderNo, invoiceNo, customer ? customer.id : null, req.user.id, hold ? 'suspended' : 'open',
+            totals.subtotal, totals.discount, totals.net, totals.tax, totals.gross,
+            String(b.note || '').trim(), biz.kraPin ? 'pending' : 'exempt', discountBy, t)
+          .lastInsertRowid;
+        if (!hold) {
+          moveStockForSale(d, { user: req.user, ctx, lines, ref: invoiceNo, allowOversell: b.oversell === true });
+          const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(id);
+          applyPayment(d, { user: req.user, saleId: id, sale, payment: b.payment, discountBy });
+        }
+        const ins = d.prepare(
+          `INSERT INTO sale_items (sale_id, product_id, variant_id, name, qty, unit, line_discount, net, tax, gross, tax_type, kra_item_code, batch_id, line_note, age_verified, unit_price)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        for (const L of lines) {
+          ins.run(id, L.product.id, L.variant.id, L.product.name + (L.variant.name ? ` — ${L.variant.name}` : ''),
+            L.qty, L.disc, L.net, L.tax, L.gross, L.taxType, L.kra, hold ? null : L.batchId, L.note, L.age, L.unitPrice);
+        }
+        return id;
+      });
+      const id = run();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: ctx.branchId, action: hold ? 'sale/hold' : 'sale/create',
+        entity: 'sale', entityId: String(id),
+        detail: {
+          invoice: invoiceNo, items: lines.length, gross: totals.gross, discount: totals.discount,
+          hold, method: b.payment ? b.payment.method : null,
+          oversell: b.oversell === true || undefined,
+          discountApprover: discountBy ? 'PIN' : undefined, promo: b.promo_code || undefined
+        }
+      });
+      res.json({ ok: true, ...buildSalePayload(d, id) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/sales:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Resume a held sale: re-validate (variant/product still active), then the single
+  // stock-mutating step — FEFO at the paying register, paid in the same transaction.
+  app.post('/api/sales/:id/pay', me, (req, res) => {
+    try {
+      const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(req.params.id));
+      if (!sale) return res.status(404).json({ error: 'not found' });
+      if (sale.status !== 'suspended') return res.status(400).json({ error: `sale is ${sale.status}, not held` });
+      const b = req.body || {};
+      const approver = b.override_pin ? supervisorFromPin(b.override_pin) : null;
+      if (b.oversell && !['owner', 'manager'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'overselling stock is a manager/owner act (R-S8)' });
+      }
+      const rows = d.prepare('SELECT * FROM sale_items WHERE sale_id = ? ORDER BY id').all(sale.id);
+      const lines = rows.map((row) => {
+        const variant = d.prepare('SELECT * FROM variants WHERE id = ? AND active = 1').get(row.variant_id);
+        if (!variant) throw httpError(409, `held item no longer available (variant ${row.variant_id} deactivated)`);
+        const product = d.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(variant.product_id);
+        if (!product) throw httpError(409, `held item no longer available (${row.name} deactivated)`);
+        return {
+          variant, product, qty: row.qty, unitPrice: row.unit_price || 0, source: 'frozen',
+          disc: row.line_discount, net: row.net, tax: row.tax, gross: row.gross,
+          taxType: row.tax_type, kra: row.kra_item_code, age: row.age_verified, batchId: null, note: row.line_note, _rowId: row.id
+        };
+      });
+      const ctx = saleContext(d, req.user);
+      if (!ctx.branchId || !ctx.locationId) return res.status(400).json({ error: 'no selling location for this user' });
+      if (ctx.branchId !== sale.branch_id) return res.status(400).json({ error: 'held sales can only be paid at the same branch' });
+      const run = d.transaction(() => {
+        moveStockForSale(d, { user: req.user, ctx, lines, ref: sale.invoice_no, allowOversell: b.oversell === true });
+        const fresh = d.prepare('SELECT * FROM sales WHERE id = ?').get(sale.id);
+        applyPayment(d, { user: req.user, saleId: sale.id, sale: fresh, payment: b.payment, discountBy: approver ? approver.id : null });
+        const upd = d.prepare('UPDATE sale_items SET batch_id = ? WHERE id = ?');
+        for (const L of lines) upd.run(L.batchId, L._rowId);
+      });
+      run();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: sale.branch_id, action: 'sale/pay',
+        entity: 'sale', entityId: String(sale.id),
+        detail: { invoice: sale.invoice_no, method: b.payment ? b.payment.method : null, gross: sale.gross, oversell: b.oversell === true || undefined }
+      });
+      res.json({ ok: true, ...buildSalePayload(d, sale.id) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/sales/:id/pay:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  app.get('/api/sales', me, (req, res) => {
+    const q = req.query;
+    const branches = visibleBranches(d, req.user);
+    if (!branches.length) return res.json([]);
+    const where = ['b.id IN (' + branches.map((x) => x.id).join(',') + ')'];
+    const args = [];
+    if (q.status) { where.push('s.status = ?'); args.push(String(q.status)); }
+    if (q.mine === '1') { where.push('s.user_id = ?'); args.push(req.user.id); }
+    if (q.from) { where.push('s.created_at >= ?'); args.push(String(q.from)); }
+    if (q.to) { where.push('s.created_at < ?'); args.push(String(q.to)); }
+    const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200);
+    const users = d.prepare('SELECT id, name FROM users').all();
+    const names = Object.fromEntries(users.map((u) => [u.id, u.name]));
+    const rows = d
+      .prepare(
+        `SELECT s.*, b.name AS branch_name, r.name AS register_name,
+           (SELECT COUNT(*) FROM sale_items si WHERE si.sale_id = s.id) AS item_count,
+           (SELECT COALESCE(SUM(p.amount),0) FROM payments p WHERE p.sale_id = s.id AND p.status = 'confirmed') AS paid
+           FROM sales s JOIN branches b ON b.id = s.branch_id
+           LEFT JOIN registers r ON r.id = s.register_id
+          WHERE ${where.join(' AND ')} ORDER BY s.id DESC LIMIT ?`
+      )
+      .all(...args, limit);
+    res.json(rows.map((r) => ({ ...r, cashier: names[r.user_id] || `#${r.user_id}` })));
+  });
+
+  app.get('/api/sales/:id', me, (req, res) => {
+    const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(req.params.id));
+    if (!sale) return res.status(404).json({ error: 'not found' });
+    res.json(buildSalePayload(d, sale.id));
+  });
+
+  // Void = supervisor act: stock moves back (audited), sale marked voided, payments flagged refunded.
+  app.post('/api/sales/:id/void', me, can('sales.void'), (req, res) => {
+    try {
+      const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(req.params.id));
+      if (!sale) return res.status(404).json({ error: 'not found' });
+      if (!['paid', 'partial', 'open'].includes(sale.status)) return res.status(400).json({ error: `cannot void a ${sale.status} sale` });
+      const b = req.body || {};
+      const note = String(b.note || 'voided').trim();
+      const items = d.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(sale.id);
+      const hadStock = ['paid', 'partial'].includes(sale.status);
+      const ctx = { branchId: sale.branch_id, locationId: sale.location_id };
+      const run = d.transaction(() => {
+        for (const row of items) {
+          if (!hadStock) continue;
+          const variant = d.prepare('SELECT * FROM variants WHERE id = ?').get(row.variant_id);
+          const product = d.prepare('SELECT * FROM products WHERE id = ?').get(row.product_id);
+          if (!variant || !product) continue;
+          // Reverse exactly what the sale took — same lots (FEFO included), from the ledger.
+          const taken = d
+            .prepare(
+              `SELECT * FROM stock_moves WHERE ref = ? AND type = 'sale' AND variant_id = ? AND qty < 0 AND note NOT LIKE 'void:%'`
+            )
+            .all(sale.invoice_no, row.variant_id);
+          for (const m of taken) {
+            addStockMove(d, {
+              product, variant, branchId: sale.branch_id, locationId: m.location_id,
+              qty: -m.qty, type: 'sale', reason: 'sale', ref: sale.invoice_no,
+              batchId: m.batch_id, userId: req.user.id, note: `void: ${note}`
+            });
+            if (m.batch_id) d.prepare('UPDATE batches SET qty = qty + ? WHERE id = ?').run(-m.qty, m.batch_id);
+            upsertStock(d, row.variant_id, m.location_id, -m.qty);
+          }
+        }
+        d.prepare("UPDATE sales SET status = 'voided' WHERE id = ?").run(sale.id);
+        if (hadStock) {
+          d.prepare("UPDATE payments SET status = 'refunded' WHERE sale_id = ? AND status = 'confirmed'").run(sale.id);
+        }
+      });
+      run();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: sale.branch_id, action: 'sale/void',
+        entity: 'sale', entityId: String(sale.id), detail: { invoice: sale.invoice_no, note, items: items.length }
+      });
+      res.json({ ok: true, ...buildSalePayload(d, sale.id) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/sales/:id/void:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
   });
 
   // ---- CSV import/export (products + variants + packs in one file) --------------------------------

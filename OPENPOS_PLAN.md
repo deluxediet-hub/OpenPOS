@@ -222,6 +222,22 @@ contradicts the doc without a change-log entry.**
 - **Design target: a cashier learns basic selling in minutes** — complexity stays behind the scenes
 - **Acceptance:** new cashier's first unaided sale < 5 min; two registers selling
   concurrently without conflict; quote→invoice converts stock exactly once.
+- **Done (Day 10):** sales engine `POST /api/sales` — chain-frozen `unit_price` per line
+  (later price changes leave receipts intact — asserted), line discounts via `sales.discount`
+  permission **or supervisor PIN** (approver recorded on the sale), age gate, per-line VAT
+  (std/zero/exempt), stock moves exactly once through the Phase-4 move engine (FEFO per lot,
+  `ref` = invoice no; oversell only as audited manager/owner act), cash (change) / M-Pesa
+  (manual ref, Phase 8 swaps in STK adapters) / card, partial payments, **hold → suspended
+  (zero stock) → `POST /api/sales/:id/pay`** (re-validates; double-pay refused), void
+  (supervisor-only; reverses the exact lots taken; payments flagged refunded), sales
+  list/detail/receipt-reprint. `sale_items.variant_id` + `sales.discount_by` +
+  `base_variant_id` on product lists. Full till UI (`/pos.html`, EN/SW): staff sign-in
+  (PIN pad), barcode wedge + search, category chips, product grid, variant picker, cart
+  (qty/discount/note), customer + promo attach, hold + held-sales resume, printable
+  receipt with KRA fields, cashier bound to their register. **96 tests green** (was 83)
+  incl. two-till concurrency (8 units, 4+4, exact stock, distinct tills) + 25-step UI
+  smoke. **Day 11:** quote → invoice (converts stock exactly once), cashier onboarding
+  polish (first unaided sale < 5 min acceptance), receipt print CSS polish.
 
 ### Phase 8 — Payment Engine · Day 12
 - Adapter architecture: cash · M-Pesa · card · bank · credit(deni) · store credit · other

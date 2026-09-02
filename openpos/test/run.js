@@ -1483,6 +1483,242 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(hist.status, 200, `cashier reads history: got ${hist.status}`);
   });
 
+  // ================= Phase 7 — POS / sales engine (Day 10) =================
+  section('Phase 7 — POS / sales engine (Day 10)');
+
+  let pos = {}; // fixtures
+  const cashierLogin = async (name, pin) => (await authJ({ path: '/api/login', method: 'POST', body: { name, pin } })).headers.get('set-cookie').split(';')[0];
+
+  await test('setup: POS products, stock, two tills, two cashiers', async () => {
+    const loc = d.prepare('SELECT id FROM locations WHERE branch_id = 1 AND is_default = 1').get().id;
+    pos.loc = loc;
+    const mk = async (body) => {
+      const r = await authJ({ path: '/api/products', method: 'POST', body });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      const vid = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(r.body.id).id;
+      return { id: r.body.id, vid };
+    };
+    const open = async (productId, qty, unitCost) => {
+      const r = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: productId, qty, type: 'opening', reason: 'opening', unit_cost: unitCost } });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    };
+    pos.A = await mk({ name: 'POS Item', barcode: '77701', cost: 100, price: 200 });
+    pos.B = await mk({ name: 'POS Batch', barcode: '77702', cost: 50, price: 100, track_batches: true });
+    pos.C = await mk({ name: 'POS Spirits', barcode: '77703', cost: 200, price: 300, age_min: 21 });
+    pos.D = await mk({ name: 'POS Discount', barcode: '77704', cost: 300, price: 500 });
+    pos.E = await mk({ name: 'POS Hold', barcode: '77705', cost: 90, price: 150 });
+    pos.F = await mk({ name: 'POS Concurrent', barcode: '77706', cost: 60, price: 100 });
+    pos.G = await mk({ name: 'POS Oversell', barcode: '77707', cost: 50, price: 100 });
+    await open(pos.A.id, 10, 100);
+    await open(pos.C.id, 5, 200);
+    await open(pos.D.id, 3, 300);
+    await open(pos.E.id, 10, 90);
+    await open(pos.F.id, 8, 60);
+    await open(pos.G.id, 2, 50);
+    // two FEFO lots for B
+    const now = new Date().toISOString();
+    const insB = d.prepare('INSERT INTO batches (product_id, branch_id, location_id, variant_id, batch_no, expiry_date, qty, cost, created_at) VALUES (?,1,?,?,?,?,?,?,?)');
+    pos.b1 = insB.run(pos.B.id, loc, pos.B.vid, 'B1-OCT', '2026-10-01', 5, 50, now).lastInsertRowid;
+    pos.b2 = insB.run(pos.B.id, loc, pos.B.vid, 'B2-DEC', '2026-12-01', 5, 50, now).lastInsertRowid;
+    d.prepare("INSERT INTO stock_moves (product_id, variant_id, branch_id, location_id, qty, type, reason, ref, batch_id, unit_cost, user_id, note, created_at) VALUES (?,?,1,?,5,'opening','opening','',?,50,1,'fixture',?)").run(pos.B.id, pos.B.vid, loc, pos.b1, now);
+    d.prepare("INSERT INTO stock_moves (product_id, variant_id, branch_id, location_id, qty, type, reason, ref, batch_id, unit_cost, user_id, note, created_at) VALUES (?,?,1,?,5,'opening','opening','',?,50,1,'fixture',?)").run(pos.B.id, pos.B.vid, loc, pos.b2, now);
+    d.prepare('INSERT INTO stock (variant_id, location_id, qty) VALUES (?,?,10)').run(pos.B.vid, loc);
+    // second till + two cashiers
+    const t2 = await authJ({ path: '/api/registers', method: 'POST', body: { name: 'Till 2' } });
+    assert.strictEqual(t2.status, 200, JSON.stringify(t2.body));
+    pos.till2 = t2.body.id;
+    const r1 = d.prepare("SELECT id FROM registers WHERE branch_id = 1 ORDER BY id").get().id;
+    pos.till1 = r1;
+    for (const [name, pin, reg] of [['POS Cashier A', '1111', r1], ['POS Cashier B', '2222', pos.till2]]) {
+      const s = await authJ({ path: '/api/staff', method: 'POST', body: { name, role: 'cashier', pin, branch_id: 1, register_id: reg } });
+      assert.strictEqual(s.status, 200, JSON.stringify(s.body));
+    }
+    pos.cashA = await cashierLogin('POS Cashier A', '1111');
+    pos.cashB = await cashierLogin('POS Cashier B', '2222');
+    pos.mgrId = d.prepare("SELECT id FROM users WHERE name = 'Mwenyeji M'").get().id;
+  });
+
+  await test('POS sale: cash with change, stock decremented, receipt fields (R-PR freeze)', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const r = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], payment: { method: 'cash', amount: 500 } } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const s = r.body.sale;
+    pos.sale1 = s.id;
+    assert.strictEqual(s.status, 'paid');
+    assert.strictEqual(s.order_no, 1, `order_no: ${s.order_no}`);
+    assert.strictEqual(s.invoice_no, 'BR01-000001', s.invoice_no);
+    assert.strictEqual(s.subtotal, 400);
+    assert.strictEqual(s.tax, 55, `VAT 16% of 400: ${s.tax}`);
+    assert.strictEqual(s.gross, 455);
+    assert.strictEqual(r.body.payments.length, 1);
+    const raw = JSON.parse(r.body.payments[0].raw);
+    assert.strictEqual(raw.change, 45, `change: ${raw.change}`);
+    // stock decremented at the till's location
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.A.vid, pos.loc).qty, 8);
+    // stock move carries the invoice ref (R-S2 trace)
+    const mv = d.prepare("SELECT * FROM stock_moves WHERE type = 'sale' AND ref = ?").get('BR01-000001');
+    assert.ok(mv, 'sale stock move with invoice ref');
+    assert.strictEqual(mv.qty, -2);
+    // receipt
+    assert.strictEqual(r.body.receipt.business.name, 'Test Traders');
+    assert.strictEqual(r.body.items[0].unit_price, 200, 'frozen unit price on the line');
+  });
+
+  await test('price frozen at line add: later price change does not alter the sale', async () => {
+    const up = await authJ({ path: `/api/products/${pos.A.id}`, method: 'PUT', body: { price: 250 } });
+    assert.strictEqual(up.status, 200, JSON.stringify(up.body));
+    const r = await authJ({ path: `/api/sales/${pos.sale1}` });
+    assert.strictEqual(r.body.items[0].unit_price, 200, 'frozen price unchanged');
+    assert.strictEqual(r.body.sale.gross, 455);
+  });
+
+  await test('FEFO: sale picks earliest-expiry batches first; line records the lot', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const r = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.B.vid, qty: 7 }], payment: { method: 'cash', amount: 800 } } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(d.prepare('SELECT qty FROM batches WHERE id = ?').get(pos.b1).qty, 0, 'earliest lot exhausted');
+    assert.strictEqual(d.prepare('SELECT qty FROM batches WHERE id = ?').get(pos.b2).qty, 3, 'second lot takes the rest');
+    const moves = d.prepare("SELECT * FROM stock_moves WHERE ref = ? AND type = 'sale' ORDER BY id").all(r.body.sale.invoice_no);
+    assert.strictEqual(moves.length, 2, `one move per lot: ${moves.length}`);
+    assert.strictEqual(moves[0].batch_id, pos.b1);
+    assert.strictEqual(moves[0].qty, -5);
+    assert.strictEqual(moves[1].batch_id, pos.b2);
+    assert.strictEqual(moves[1].qty, -2);
+    assert.strictEqual(r.body.items[0].batch_id, pos.b1, 'line points at first lot (full trace in the ledger)');
+  });
+
+  await test('R-S8: insufficient stock refused; cashier oversell 403; manager oversell audited', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const short = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.G.vid, qty: 99 }], payment: { method: 'cash', amount: 9999 } } });
+    assert.strictEqual(short.status, 400, JSON.stringify(short.body));
+    assert.match(short.body.error, /insufficient stock/);
+    const asCashOversell = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.G.vid, qty: 99 }], payment: { method: 'cash', amount: 9999 }, oversell: true } });
+    assert.strictEqual(asCashOversell.status, 403, `cashier oversell must be 403: ${JSON.stringify(asCashOversell.body)}`);
+    const asOwner = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.G.vid, qty: 99 }], payment: { method: 'cash', amount: 9999 }, oversell: true } });
+    assert.strictEqual(asOwner.status, 200, JSON.stringify(asOwner.body));
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.G.vid, pos.loc).qty, 2 - 99);
+    const audit = d.prepare("SELECT * FROM audit_log WHERE action = 'sale/create' ORDER BY id DESC LIMIT 1").get();
+    const det = JSON.parse(audit.detail);
+    assert.strictEqual(det.oversell, true, 'oversell flagged in audit');
+  });
+
+  await test('discounts: cashier refused; supervisor PIN records approver; granted permission works', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const refused = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.D.vid, qty: 1, line_discount: 100 }], payment: { method: 'cash', amount: 500 } } });
+    assert.strictEqual(refused.status, 403, JSON.stringify(refused.body));
+    const withPin = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.D.vid, qty: 1, line_discount: 100 }], payment: { method: 'cash', amount: 500 }, override_pin: '2345' } });
+    assert.strictEqual(withPin.status, 200, JSON.stringify(withPin.body));
+    assert.strictEqual(withPin.body.sale.discount, 100);
+    assert.strictEqual(withPin.body.sale.discount_by, 'Mwenyeji M', `approver recorded: ${withPin.body.sale.discount_by}`);
+    const badPin = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.D.vid, qty: 1, line_discount: 100 }], payment: { method: 'cash', amount: 500 }, override_pin: '0000' } });
+    assert.strictEqual(badPin.status, 403);
+    // grant the permission, then no PIN needed
+    const cashId = d.prepare("SELECT id FROM users WHERE name = 'POS Cashier A'").get().id;
+    const grant = await authJ({ path: `/api/staff/${cashId}/permissions`, method: 'POST', body: { permission: 'sales.discount', allowed: true } });
+    assert.strictEqual(grant.status, 200, JSON.stringify(grant.body));
+    const granted = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.D.vid, qty: 1, line_discount: 50 }], payment: { method: 'cash', amount: 500 } } });
+    assert.strictEqual(granted.status, 200, JSON.stringify(granted.body));
+    assert.strictEqual(granted.body.sale.discount, 50);
+    const over = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.D.vid, qty: 1, line_discount: 9999 }], payment: { method: 'cash', amount: 500 } } });
+    assert.strictEqual(over.status, 400, 'discount cannot exceed line total');
+  });
+
+  await test('age gate: 21+ item blocked without attestation', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const no = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.C.vid, qty: 1 }], payment: { method: 'cash', amount: 400 } } });
+    assert.strictEqual(no.status, 400, JSON.stringify(no.body));
+    assert.match(no.body.error, /age verification/);
+    const yes = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.C.vid, qty: 1, age_verified: 1 }], payment: { method: 'cash', amount: 400 } } });
+    assert.strictEqual(yes.status, 200, JSON.stringify(yes.body));
+    assert.strictEqual(yes.body.items[0].age_verified, 1);
+  });
+
+  await test('hold & resume: suspended keeps stock; paying moves it exactly once', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const before = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.E.vid, pos.loc).qty;
+    const h = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.E.vid, qty: 2 }], hold: true } });
+    assert.strictEqual(h.status, 200, JSON.stringify(h.body));
+    assert.strictEqual(h.body.sale.status, 'suspended');
+    assert.strictEqual(h.body.payments.length, 0);
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.E.vid, pos.loc).qty, before, 'held sale must not touch stock');
+    assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM stock_moves WHERE type = 'sale' AND ref = ?").get(h.body.sale.invoice_no).n, 0);
+    const pay = await asA({ path: `/api/sales/${h.body.sale.id}/pay`, method: 'POST', body: { payment: { method: 'cash', amount: 400 } } });
+    assert.strictEqual(pay.status, 200, JSON.stringify(pay.body));
+    assert.strictEqual(pay.body.sale.status, 'paid');
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.E.vid, pos.loc).qty, before - 2);
+    assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM stock_moves WHERE type = 'sale' AND ref = ?").get(pay.body.sale.invoice_no).n, 1, 'stock moved exactly once');
+    const again = await asA({ path: `/api/sales/${pay.body.sale.id}/pay`, method: 'POST', body: { payment: { method: 'cash', amount: 400 } } });
+    assert.strictEqual(again.status, 400, 'double-pay refused');
+  });
+
+  await test('M-Pesa manual: ref required; underpay leaves the sale partial', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const noRef = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 228, phone: '0700111222' } } });
+    assert.strictEqual(noRef.status, 400, JSON.stringify(noRef.body));
+    assert.match(noRef.body.error, /reference/);
+    const partial = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 100, phone: '0700111222', ref: 'MPX123' } } });
+    assert.strictEqual(partial.status, 200, JSON.stringify(partial.body));
+    assert.strictEqual(partial.body.sale.status, 'partial');
+    assert.strictEqual(partial.body.payments[0].method, 'mpesa');
+    assert.strictEqual(partial.body.payments[0].amount, 100);
+    const overpay = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 999, phone: '0700111222', ref: 'MPX999' } } });
+    assert.strictEqual(overpay.status, 400, 'mpesa cannot overpay');
+  });
+
+  await test('two registers sell concurrently: no conflicts, stock exact, distinct tills', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const asB = (o) => withCookie(pos.cashB)(o);
+    const [ra, rb] = await Promise.all([
+      asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.F.vid, qty: 4 }], payment: { method: 'cash', amount: 500 } } }),
+      asB({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.F.vid, qty: 4 }], payment: { method: 'cash', amount: 500 } } })
+    ]);
+    assert.strictEqual(ra.status, 200, JSON.stringify(ra.body));
+    assert.strictEqual(rb.status, 200, JSON.stringify(rb.body));
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.F.vid, pos.loc).qty, 0, '8 in, 8 sold');
+    assert.notStrictEqual(ra.body.sale.order_no, rb.body.sale.order_no, 'unique order numbers');
+    assert.strictEqual(ra.body.sale.register_id, pos.till1);
+    assert.strictEqual(rb.body.sale.register_id, pos.till2, 'each sale bound to its till');
+    const more = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.F.vid, qty: 1 }], payment: { method: 'cash', amount: 200 } } });
+    assert.strictEqual(more.status, 400, 'stock exhausted');
+  });
+
+  await test('promo at the till: chain price frozen onto the sale line', async () => {
+    const rule = await authJ({ path: '/api/price-rules', method: 'POST', body: { variant_id: pos.A.vid, promo_code: 'POSX', price: 120, pin: '2345' } });
+    assert.strictEqual(rule.status, 200, JSON.stringify(rule.body));
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const r = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], promo_code: 'POSX', payment: { method: 'cash', amount: 200 } } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.items[0].unit_price, 120, `promo price frozen: ${r.body.items[0].unit_price}`);
+    assert.strictEqual(r.body.sale.subtotal, 120);
+    await authJ({ path: `/api/price-rules/${rule.body.id}`, method: 'DELETE' });
+  });
+
+  await test('void: cashier refused; manager reverses stock exactly; double-void refused', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const denied = await asA({ path: `/api/sales/${pos.sale1}/void`, method: 'POST', body: { note: 'wrong item' } });
+    assert.strictEqual(denied.status, 403, `cashier void: ${denied.status}`);
+    const before = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.A.vid, pos.loc).qty;
+    const v = await authJ({ path: `/api/sales/${pos.sale1}/void`, method: 'POST', body: { note: 'customer returned goods' } });
+    assert.strictEqual(v.status, 200, JSON.stringify(v.body));
+    assert.strictEqual(v.body.sale.status, 'voided');
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.A.vid, pos.loc).qty, before + 2, '2 units back');
+    const pay = d.prepare("SELECT status FROM payments WHERE sale_id = ?").get(pos.sale1);
+    assert.strictEqual(pay.status, 'refunded', 'payment flagged refunded');
+    const again = await authJ({ path: `/api/sales/${pos.sale1}/void`, method: 'POST', body: {} });
+    assert.strictEqual(again.status, 400, 'double void refused');
+  });
+
+  await test('sales list + detail (receipt reprint)', async () => {
+    const list = await authJ({ path: '/api/sales?limit=50' });
+    assert.strictEqual(list.status, 200);
+    assert.ok(Array.isArray(list.body) && list.body.length >= 5, `list: ${list.body.length}`);
+    assert.ok(list.body.every((s) => typeof s.invoice_no === 'string' && s.cashier));
+    const detail = await authJ({ path: `/api/sales/${pos.sale1}` });
+    assert.strictEqual(detail.status, 200);
+    assert.ok(detail.body.receipt.business.name === 'Test Traders');
+    assert.ok(Array.isArray(detail.body.items) && Array.isArray(detail.body.payments));
+  });
+
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 
