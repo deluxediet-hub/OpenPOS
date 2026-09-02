@@ -1083,6 +1083,14 @@ function migrate(d) {
   // back (full refund = refunded == amount; the payment then flips to
   // status 'refunded'). MUST run after the Phase 8 payments rebuild above.
   addCol(d, 'payments', 'refunded', 'INTEGER NOT NULL DEFAULT 0');
+
+  // Phase 12: multi-branch operating system — transfer lines carry a variant
+  // (batch-tracked products must name the batch that physically moves) and
+  // receive evidence so discrepancies stay line-level (R-3).
+  addCol(d, 'transfers', 'from_location', 'INTEGER NULL');
+  addCol(d, 'transfers', 'to_location', 'INTEGER NULL');
+  addCol(d, 'transfer_items', 'variant_id', 'INTEGER NULL');
+  addCol(d, 'transfer_items', 'received_at', 'TEXT NULL');
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

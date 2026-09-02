@@ -65,6 +65,18 @@ async function J(method, path, body, cookie) {
     if (r.status !== 200) throw new Error('stock ' + p.name + ' failed: ' + JSON.stringify(r.body));
   }
   console.log('products + opening stock: ' + products.map((p) => p.name).join(', '));
+
+  // Phase 12: multi-branch showcase layout
+  r = await J('POST', '/api/capabilities', { capability: 'multi_branch', enabled: true }, ock);
+  if (r.status !== 200) throw new Error('capability multi_branch failed: ' + JSON.stringify(r.body));
+  r = await J('POST', '/api/capabilities', { capability: 'warehouse', enabled: true }, ock);
+  if (r.status !== 200) throw new Error('capability warehouse failed: ' + JSON.stringify(r.body));
+  r = await J('POST', '/api/branches', { name: 'Westlands Branch', address: 'The Brook, Westlands' }, ock);
+  if (r.status !== 200) throw new Error('branch failed: ' + JSON.stringify(r.body));
+  const br2 = r.body.id;
+  r = await J('POST', '/api/staff', { name: 'Mganga M', role: 'manager', pin: '3456', branch_id: br2 }, ock);
+  if (r.status !== 200) throw new Error('branch manager failed: ' + JSON.stringify(r.body));
+  console.log('multi-branch: Westlands Branch + Store Room (warehouse); manager Mganga M (3456)');
   console.log('\nDemo Duka ready.');
   console.log('  Owner  One · 1234     Manager Mwenyeji M · 2345');
   console.log('  Cashier A · 1111 (Till 1)   Cashier B · 2222 (Till 2)');

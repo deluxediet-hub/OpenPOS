@@ -388,7 +388,7 @@ function createApp(d) {
   app.use(express.static(path.join(__dirname, 'public')));
 
   // ---- health / status ------------------------------------------------------
-  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 11 }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 12 }));
 
   app.get('/api/setup/status', (req, res) => {
     res.json({
@@ -586,6 +586,11 @@ function createApp(d) {
     const branchId = (qBranch && branches.some((b) => b.id === qBranch)) ? qBranch : (branches[0] && branches[0].id) || null;
 
     const locs = branchId ? locationsOf(d, branchId) : [];
+    // Phase 12: the full location map across every visible branch (owner = all
+    // branches). The selling context below still defaults to one location.
+    const allLocations = d
+      .prepare(`SELECT * FROM locations WHERE active = 1 AND branch_id IN (${branches.map(() => '?').join(',')}) ORDER BY branch_id, is_default DESC, id`)
+      .all(...branches.map((b) => b.id));
     const qLoc = numOrNull(req.query.location_id);
     let locationId = qLoc && locs.some((l) => l.id === qLoc)
       ? qLoc
@@ -626,6 +631,7 @@ function createApp(d) {
       branchId,
       locationId,
       locations: locs,
+      allLocations,
       registers,
       categories,
       products: products.map(publicProduct),
@@ -1049,7 +1055,15 @@ function createApp(d) {
   // ---- products --------------------------------------------------------------------------------
   app.get('/api/products', me, (req, res) => {
     const branches = visibleBranches(d, req.user);
-    const branchId = (branches[0] && branches[0].id) || null;
+    let branchId = (branches[0] && branches[0].id) || null;
+    // Phase 12: ?branch_id= lets the owner (and a manager, for their own
+    // branch) read another branch's catalogue/stock — used by the transfer
+    // builder to source products from the destination branch.
+    if (req.query.branch_id) {
+      const b = numOrNull(req.query.branch_id);
+      if (!b || !branches.some((x) => x.id === b)) return res.status(404).json({ error: 'branch not found' });
+      branchId = b;
+    }
     const loc = branchId ? defaultLocation(d, branchId) : null;
     const rows = d
       .prepare(
@@ -1223,19 +1237,15 @@ function createApp(d) {
     const product = productRow(d, productId);
     if (!product || !product.active) return res.status(400).json({ error: 'unknown product' });
 
-    const branches = visibleBranches(d, req.user);
-    const branchId = (branches[0] && branches[0].id) || null;
-    const locs = locationsOf(d, branchId);
-    const locationId = numOrNull(b.location_id) && locs.some((l) => l.id === b.location_id)
-      ? b.location_id : (locs[0] && locs[0].id);
-    if (!locationId) return res.status(400).json({ error: 'no location' });
+    const { branchId, locationId, error: scopeError } = stockScope(req.user, b);
+    if (scopeError) return res.status(400).json({ error: scopeError });
 
     let out;
     try {
       out = d.transaction(() =>
         writeMove(d, {
           product, variant, branchId, locationId, qty, type: 'adjustment', reason,
-          ref: 'ADJ', userId: req.user.id, note: String(b.note || ''), allowOversell: false
+          ref: 'ADJ', unitCost: variant.cost || 0, userId: req.user.id, note: String(b.note || ''), allowOversell: false
         })
       )();
     } catch (e) {
@@ -1252,10 +1262,19 @@ function createApp(d) {
   const stockScope = (user, b = {}) => {
     const branches = visibleBranches(d, user);
     const branchId = (branches[0] && branches[0].id) || null;
-    const locs = branchId ? locationsOf(d, branchId) : [];
+    // R-2/R-3: an owner may move stock at any branch's locations; the move is
+    // tagged with the location's own branch, never the first visible one.
+    const locs = user.role === 'owner'
+      ? d.prepare('SELECT * FROM locations WHERE active = 1 ORDER BY id').all()
+      : (branchId ? locationsOf(d, branchId) : []);
     const locationId = numOrNull(b.location_id) && locs.some((l) => l.id === b.location_id)
       ? b.location_id : (locs[0] && locs[0].id);
-    return { branchId, locationId, error: locationId ? null : 'no location' };
+    const loc = locs.find((l) => l.id === locationId) || null;
+    return {
+      branchId: user.role === 'owner' && loc ? loc.branch_id : branchId,
+      locationId,
+      error: locationId ? null : 'no location'
+    };
   };
 
   // Generic move — the one door through which every quantity change flows (R-S1).
@@ -1308,6 +1327,12 @@ function createApp(d) {
     const q = req.query;
     const where = [];
     const args = [];
+    // R-2: a branch manager must never see another branch's stock ledger
+    if (req.user.role !== 'owner') {
+      const vis = visibleBranches(d, req.user).map((b) => b.id);
+      where.push(`m.branch_id IN (${vis.map(() => '?').join(',')})`);
+      args.push(...vis);
+    }
     if (q.variant_id) { where.push('m.variant_id = ?'); args.push(numOrNull(q.variant_id)); }
     if (q.product_id) { where.push('m.product_id = ?'); args.push(numOrNull(q.product_id)); }
     if (q.location_id) { where.push('m.location_id = ?'); args.push(numOrNull(q.location_id)); }
@@ -1334,6 +1359,11 @@ function createApp(d) {
   // Balances: materialized stock vs ledger view, per variant × location (R-S7 surface).
   app.get('/api/stock/balances', me, can('stock.view'), (req, res) => {
     const locId = numOrNull(req.query.location_id);
+    const vis = req.user.role === 'owner' ? null : visibleBranches(d, req.user).map((b) => b.id);
+    const whereParts = [];
+    const mArgs = [];
+    if (locId) { whereParts.push('s.location_id = ?'); mArgs.push(locId); }
+    if (vis) { whereParts.push(`l.branch_id IN (${vis.map(() => '?').join(',')})`); mArgs.push(...vis); }
     const materialized = d
       .prepare(
         `SELECT s.variant_id, s.location_id, s.qty, l.name AS location_name, l.branch_id,
@@ -1341,10 +1371,10 @@ function createApp(d) {
            FROM stock s
            JOIN locations l ON l.id = s.location_id
            LEFT JOIN stock_ledger_balances lb ON lb.variant_id = s.variant_id AND lb.location_id = s.location_id
-          ${locId ? 'WHERE s.location_id = ?' : ''}
+          ${whereParts.length ? 'WHERE ' + whereParts.join(' AND ') : ''}
           ORDER BY l.id, s.variant_id`
       )
-      .all(...(locId ? [locId] : []));
+      .all(...mArgs);
     const out = new Map();
     for (const r of materialized) {
       const p = d.prepare('SELECT p.id, p.name, p.unit, p.sku, v.name AS variant_name FROM products p JOIN variants v ON v.id = ? WHERE p.id = v.product_id').get(r.variant_id);
@@ -1634,6 +1664,9 @@ function createApp(d) {
   app.post('/api/batches/:id/writeoff', me, can('stock.adjust'), (req, res) => {
     const bRow = d.prepare('SELECT * FROM batches WHERE id = ?').get(numOrNull(req.params.id));
     if (!bRow) return res.status(404).json({ error: 'not found' });
+    if (req.user.role !== 'owner' && !visibleBranches(d, req.user).map((b) => b.id).includes(bRow.branch_id)) {
+      return res.status(404).json({ error: 'not found' });
+    }
     const qty = (req.body || {}).qty === undefined ? bRow.qty : Number(req.body.qty);
     if (!Number.isFinite(qty) || qty <= 0 || qty > bRow.qty + 1e-9) return res.status(400).json({ error: `qty must be between 0 and ${bRow.qty}` });
     const variant = d.prepare('SELECT * FROM variants WHERE id = ?').get(bRow.variant_id);
@@ -1898,6 +1931,12 @@ function createApp(d) {
     const q = req.query;
     const where = [];
     const args = [];
+    // R-2: batches are branch stock
+    if (req.user.role !== 'owner') {
+      const vis = visibleBranches(d, req.user).map((b) => b.id);
+      where.push(`b.branch_id IN (${vis.map(() => '?').join(',')})`);
+      args.push(...vis);
+    }
     if (q.variant_id) { where.push('b.variant_id = ?'); args.push(numOrNull(q.variant_id)); }
     else if (q.product_id) { where.push('b.product_id = ?'); args.push(numOrNull(q.product_id)); }
     else if (q.location_id) { where.push('b.location_id = ?'); args.push(numOrNull(q.location_id)); }
@@ -1934,12 +1973,8 @@ function createApp(d) {
     const product = productRow(d, variant.product_id);
     if (!product || !product.active) return res.status(400).json({ error: 'unknown product' });
     if (!product.track_batches) return res.status(400).json({ error: 'product does not track batches' });
-    const branches = visibleBranches(d, req.user);
-    const branchId = (branches[0] && branches[0].id) || null;
-    const locs = locationsOf(d, branchId);
-    const locationId = numOrNull(b.location_id) && locs.some((l) => l.id === b.location_id)
-      ? b.location_id : (locs[0] && locs[0].id);
-    if (!locationId) return res.status(400).json({ error: 'no location' });
+    const { branchId, locationId, error: scopeError } = stockScope(req.user, b);
+    if (scopeError) return res.status(400).json({ error: scopeError });
     const run = d.transaction(() => {
       const bid = d
         .prepare(`INSERT INTO batches (product_id, variant_id, branch_id, location_id, batch_no, expiry_date, qty, cost, created_at)
@@ -1992,12 +2027,8 @@ function createApp(d) {
     if (d.prepare('SELECT id FROM serials WHERE variant_id = ? AND serial_no = ?').get(variant.id, serialNo)) {
       return res.status(409).json({ error: 'serial already registered for this product' });
     }
-    const branches = visibleBranches(d, req.user);
-    const branchId = (branches[0] && branches[0].id) || null;
-    const locs = locationsOf(d, branchId);
-    const locationId = numOrNull(b.location_id) && locs.some((l) => l.id === b.location_id)
-      ? b.location_id : (locs[0] && locs[0].id);
-    if (!locationId) return res.status(400).json({ error: 'no location' });
+    const { branchId, locationId, error: scopeError } = stockScope(req.user, b);
+    if (scopeError) return res.status(400).json({ error: scopeError });
     const run = d.transaction(() => {
       const sid = d
         .prepare(`INSERT INTO serials (variant_id, serial_no, location_id, status, note, created_at)
@@ -2833,6 +2864,12 @@ function createApp(d) {
     const q = req.query;
     const where = ['pr.active = 1'];
     const args = [];
+    // R-2: branch pricing is branch data — managers see global rules + their own branch
+    if (req.user.role !== 'owner') {
+      const vis = visibleBranches(d, req.user).map((b) => b.id);
+      where.push(`(pr.branch_id IS NULL OR pr.branch_id IN (${vis.map(() => '?').join(',')}))`);
+      args.push(...vis);
+    }
     if (q.variant_id) { where.push('pr.variant_id = ?'); args.push(numOrNull(q.variant_id)); }
     if (q.product_id) { where.push('pr.variant_id IN (SELECT id FROM variants WHERE product_id = ?)'); args.push(numOrNull(q.product_id)); }
     res.json(
@@ -4377,10 +4414,26 @@ function createApp(d) {
     ).get(id);
   }
 
+  // Branch visibility (R-2): non-owners only see customers of their own
+  // branches plus customers not tied to a branch (shared/central records).
+  function customerVisible(user, c) {
+    if (!c) return false;
+    if (user.role === 'owner') return true;
+    const vis = visibleBranches(d, user).map((b) => b.id);
+    return c.branch_id == null || vis.includes(c.branch_id);
+  }
+
   app.get('/api/customers', me, can('customers.view'), (req, res) => {
     const q = String(req.query.q || '').trim();
-    const where = q ? "(c.name LIKE ? OR c.phone LIKE ?)" : '1=1';
-    const args = q ? [`%${q}%`, `%${q}%`] : [];
+    const args = [];
+    const parts = [];
+    if (req.user.role !== 'owner') {
+      const vis = visibleBranches(d, req.user).map((b) => b.id);
+      parts.push(`(c.branch_id IS NULL OR c.branch_id IN (${vis.map(() => '?').join(',')}))`);
+      args.push(...vis);
+    }
+    if (q) { parts.push('(c.name LIKE ? OR c.phone LIKE ?)'); args.push(`%${q}%`, `%${q}%`); }
+    const where = parts.length ? parts.join(' AND ') : '1=1';
     const rows = d.prepare(
       `SELECT c.*,
          (SELECT COALESCE(SUM(CASE WHEN type = 'credit_sale' THEN amount WHEN type = 'repayment' THEN -amount ELSE 0 END), 0)
@@ -4440,7 +4493,7 @@ function createApp(d) {
   app.get('/api/customers/:id', me, can('customers.view'), (req, res) => {
     const id = numOrNull(req.params.id);
     const c = customerRow(d, id);
-    if (!c) return res.status(404).json({ error: 'customer not found' });
+    if (!customerVisible(req.user, c)) return res.status(404).json({ error: 'customer not found' });
     const ledger = d.prepare(
       `SELECT id, type, amount, ref, note, created_at FROM customer_ledger WHERE customer_id = ? ORDER BY created_at DESC, id DESC LIMIT 100`
     ).all(id);
@@ -4475,7 +4528,7 @@ function createApp(d) {
     try {
       const id = numOrNull(req.params.id);
       const c = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
-      if (!c) return res.status(404).json({ error: 'customer not found' });
+      if (!customerVisible(req.user, c)) return res.status(404).json({ error: 'customer not found' });
       const b = req.body || {};
       const name = b.name !== undefined ? String(b.name).trim() : c.name;
       if (!name) return res.status(400).json({ error: 'name required' });
@@ -4513,7 +4566,7 @@ function createApp(d) {
     try {
       const id = numOrNull(req.params.id);
       const c = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
-      if (!c) return res.status(404).json({ error: 'customer not found' });
+      if (!customerVisible(req.user, c)) return res.status(404).json({ error: 'customer not found' });
       const amt = Number((req.body || {}).amount);
       if (!Number.isInteger(amt) || amt <= 0) return res.status(400).json({ error: 'amount must be whole shillings > 0' });
       const method = String((req.body || {}).method || 'cash').trim();
@@ -4569,7 +4622,7 @@ function createApp(d) {
     try {
       const id = numOrNull(req.params.id);
       const c = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
-      if (!c) return res.status(404).json({ error: 'customer not found' });
+      if (!customerVisible(req.user, c)) return res.status(404).json({ error: 'customer not found' });
       const amt = Number((req.body || {}).amount);
       if (!Number.isInteger(amt) || amt <= 0) return res.status(400).json({ error: 'amount must be whole shillings > 0' });
       const method = String((req.body || {}).method || 'cash').trim();
@@ -4609,7 +4662,7 @@ function createApp(d) {
     try {
       const id = numOrNull(req.params.id);
       const c = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
-      if (!c) return res.status(404).json({ error: 'customer not found' });
+      if (!customerVisible(req.user, c)) return res.status(404).json({ error: 'customer not found' });
       const delta = Number((req.body || {}).delta);
       if (!Number.isInteger(delta) || delta === 0) return res.status(400).json({ error: 'delta must be a non-zero whole number of shillings' });
       const newBal = (c.store_credit || 0) + delta;
@@ -4640,7 +4693,7 @@ function createApp(d) {
   app.get('/api/customers/:id/statement', me, can('customers.view'), (req, res) => {
     const id = numOrNull(req.params.id);
     const c = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
-    if (!c) return res.status(404).json({ error: 'customer not found' });
+    if (!customerVisible(req.user, c)) return res.status(404).json({ error: 'customer not found' });
     const from = req.query.from ? String(req.query.from) : null;
     const to = req.query.to ? String(req.query.to) : null;
     const opening = from
@@ -4672,6 +4725,331 @@ function createApp(d) {
       totals: { credit_sales: salesTotal, repayments: repayTotal },
       rows: out
     });
+  });
+
+  // ==================== Phase 12 — inter-branch & inter-location transfers (R-3) ====================
+  // Lifecycle: requested → approved → shipped → received (cancel before ship).
+  // Stock: transfer_out at SHIP from the source location (batch-tracked lines
+  // must name the batch that physically moves); transfer_in at RECEIVE into the
+  // destination location with received_qty. Discrepancy per line = qty −
+  // received_qty, kept on the transfer line and in the audit trail.
+  // Visibility: owner sees every transfer; a manager sees transfers touching a
+  // branch they can see; approve/receive additionally requires seeing the
+  // RECEIVING branch (the receiving side controls what enters its books).
+
+  function transferVisible(d, user, t) {
+    if (user.role === 'owner') return true;
+    const vis = visibleBranches(d, user).map((b) => b.id);
+    return vis.includes(t.from_branch) || vis.includes(t.to_branch);
+  }
+
+  function transferItemNames(d, li) {
+    const v = li.variant_id
+      ? d.prepare('SELECT * FROM variants WHERE id = ?').get(li.variant_id)
+      : d.prepare("SELECT * FROM variants WHERE product_id = ? AND axes_key = '{}'").get(li.product_id);
+    const p = d.prepare('SELECT * FROM products WHERE id = ?').get(li.product_id);
+    const b = li.batch_id ? d.prepare('SELECT batch_no FROM batches WHERE id = ?').get(li.batch_id) : null;
+    return {
+      product_name: p ? p.name : `product ${li.product_id}`,
+      variant_name: v ? v.name : '',
+      batch_no: b ? b.batch_no : null,
+      unit_cost: v ? (v.cost || p.cost || 0) : 0,
+      line_value: v ? (v.cost || p.cost || 0) * li.qty : 0
+    };
+  }
+
+  function transferPayload(d, t) {
+    const fromB = d.prepare('SELECT name FROM branches WHERE id = ?').get(t.from_branch);
+    const toB = d.prepare('SELECT name FROM branches WHERE id = ?').get(t.to_branch);
+    const fromL = t.from_location ? d.prepare('SELECT name FROM locations WHERE id = ?').get(t.from_location) : null;
+    const toL = t.to_location ? d.prepare('SELECT name FROM locations WHERE id = ?').get(t.to_location) : null;
+    const by = d.prepare('SELECT name FROM users WHERE id = ?').get(t.created_by);
+    const items = d.prepare('SELECT * FROM transfer_items WHERE transfer_id = ? ORDER BY id').all(t.id);
+    const full = items.map((li) => Object.assign({}, li, transferItemNames(d, li), {
+      discrepancy: li.qty - (li.received_qty || 0)
+    }));
+    return Object.assign({}, t, {
+      from_branch_name: fromB ? fromB.name : '',
+      to_branch_name: toB ? toB.name : '',
+      from_location_name: fromL ? fromL.name : '',
+      to_location_name: toL ? toL.name : '',
+      created_by_name: by ? by.name : '',
+      item_count: items.length,
+      total_units: items.reduce((sum, li) => sum + li.qty, 0),
+      discrepancies: full.filter((li) => li.discrepancy).length,
+      items: full
+    });
+  }
+
+  app.get('/api/transfers', me, (req, res) => {
+    const user = req.user;
+    const status = req.query.status ? String(req.query.status) : null;
+    if (status && !['requested', 'approved', 'shipped', 'received', 'cancelled'].includes(status)) {
+      return res.status(400).json({ error: `unknown status '${status}'` });
+    }
+    const vis = user.role === 'owner' ? null : visibleBranches(d, user).map((b) => b.id);
+    const ph = vis ? vis.map(() => '?').join(',') : '';
+    const where = user.role === 'owner' ? '1=1' : `t.from_branch IN (${ph}) OR t.to_branch IN (${ph})`;
+    const sql = `SELECT t.* FROM transfers t WHERE ${where}` + (status ? ' AND t.status = ?' : '') + ' ORDER BY t.id DESC LIMIT 200';
+    const p = vis ? [...vis, ...vis] : [];
+    if (status) p.push(status);
+    const rows = d.prepare(sql).all(...p);
+    res.json(rows.map((t) => {
+      const base = transferPayload(d, t);
+      delete base.items;
+      return base;
+    }));
+  });
+
+  app.get('/api/transfers/:id', me, (req, res) => {
+    const user = req.user;
+    const t = d.prepare('SELECT * FROM transfers WHERE id = ?').get(numOrNull(req.params.id));
+    if (!t || !transferVisible(d, user, t)) return res.status(404).json({ error: 'transfer not found' });
+    res.json({ transfer: transferPayload(d, t) });
+  });
+
+  app.post('/api/transfers', me, can('stock.adjust'), (req, res) => {
+    try {
+      const b = req.body || {};
+      const fromLoc = numOrNull(b.from_location);
+      const toLoc = numOrNull(b.to_location);
+      const items = Array.isArray(b.items) ? b.items : [];
+      if (!fromLoc || !toLoc) return res.status(400).json({ error: 'from_location and to_location are required' });
+      if (fromLoc === toLoc) return res.status(400).json({ error: 'a transfer needs two different locations' });
+      if (!items.length) return res.status(400).json({ error: 'items[] is required' });
+      const user = req.user;
+      const note = String(b.note || '').trim();
+      const id = d.transaction(() => {
+        const fl = d.prepare('SELECT * FROM locations WHERE id = ?').get(fromLoc);
+        const tl = d.prepare('SELECT * FROM locations WHERE id = ?').get(toLoc);
+        if (!fl || !tl) throw httpError(400, 'location not found');
+        if (user.role !== 'owner') {
+          const vis = visibleBranches(d, user).map((b) => b.id);
+          if (!vis.includes(fl.branch_id) || !vis.includes(tl.branch_id)) {
+            throw httpError(403, 'you can only transfer stock within branches you can see');
+          }
+        }
+        // Validate + resolve every line up front (all-or-nothing).
+        const resolved = items.map((it) => {
+          const qty = Number(it.qty);
+          if (!Number.isInteger(qty) || qty <= 0) throw httpError(400, 'item qty must be a whole number > 0');
+          let v = null;
+          if (it.variant_id) v = d.prepare('SELECT * FROM variants WHERE id = ?').get(Number(it.variant_id));
+          else if (it.product_id) v = d.prepare("SELECT * FROM variants WHERE product_id = ? AND axes_key = '{}'").get(Number(it.product_id));
+          if (!v) throw httpError(400, 'an item must reference a known product or variant');
+          const p = d.prepare('SELECT * FROM products WHERE id = ?').get(v.product_id);
+          if (!p) throw httpError(400, 'unknown product');
+          const onHand = stockQty(d, v.id, fromLoc);
+          if (onHand + 1e-9 < qty) throw httpError(400, `insufficient stock for ${p.name}: ${onHand} at source location`);
+          let batchId = null;
+          if (p.track_batches) {
+            batchId = numOrNull(it.batch_id);
+            if (!batchId) throw httpError(400, `${p.name} is batch-tracked — each line needs a batch_id`);
+            const batch = d.prepare('SELECT * FROM batches WHERE id = ? AND variant_id = ? AND location_id = ?').get(batchId, v.id, fromLoc);
+            if (!batch) throw httpError(400, `batch not found for ${p.name} at the source location`);
+            if (batch.qty + 1e-9 < qty) throw httpError(400, `batch ${batch.batch_no} holds ${batch.qty}, need ${qty}`);
+          } else if (it.batch_id) {
+            throw httpError(400, `${p.name} is not batch-tracked — batch_id not allowed`);
+          }
+          return { v, p, qty, batchId };
+        });
+        const ref = dbm.nextCounter(d, 'trf', 'TR-');
+        const row = d.prepare(
+          `INSERT INTO transfers (ref, from_branch, to_branch, from_location, to_location, status, created_by, created_at, note)
+           VALUES (?, ?, ?, ?, ?, 'requested', ?, ?, ?)`
+        ).run(ref, fl.branch_id, tl.branch_id, fromLoc, toLoc, user.id, new Date().toISOString(), note);
+        for (const r of resolved) {
+          d.prepare('INSERT INTO transfer_items (transfer_id, product_id, variant_id, qty, batch_id) VALUES (?, ?, ?, ?, ?)')
+            .run(row.lastInsertRowid, r.v.product_id, r.v.id, r.qty, r.batchId);
+        }
+        dbm.audit(d, {
+          userId: user.id, branchId: fl.branch_id, action: 'transfer/request',
+          entity: 'transfer', entityId: String(row.lastInsertRowid),
+          detail: { ref, from: fl.name, to: tl.name, lines: resolved.length }
+        });
+        return row.lastInsertRowid;
+      })();
+      res.json({ transfer: transferPayload(d, d.prepare('SELECT * FROM transfers WHERE id = ?').get(id)) });
+    } catch (e) {
+      const st = e.status || 500;
+      if (st === 500) console.error(e);
+      res.status(st).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/transfers/:id/approve', me, can('transfers.approve'), (req, res) => {
+    try {
+      const user = req.user;
+      const t = d.prepare('SELECT * FROM transfers WHERE id = ?').get(numOrNull(req.params.id));
+      if (!t || !transferVisible(d, user, t)) return res.status(404).json({ error: 'transfer not found' });
+      if (t.status !== 'requested') return res.status(400).json({ error: `only requested transfers can be approved (currently ${t.status})` });
+      if (user.role !== 'owner' && !visibleBranches(d, user).map((b) => b.id).includes(t.to_branch)) {
+        return res.status(403).json({ error: 'the receiving branch must be one you can see' });
+      }
+      d.prepare("UPDATE transfers SET status = 'approved' WHERE id = ?").run(t.id);
+      dbm.audit(d, { userId: user.id, branchId: t.to_branch, action: 'transfer/approve', entity: 'transfer', entityId: String(t.id), detail: { ref: t.ref } });
+      res.json({ transfer: transferPayload(d, d.prepare('SELECT * FROM transfers WHERE id = ?').get(t.id)) });
+    } catch (e) {
+      const st = e.status || 500;
+      if (st === 500) console.error(e);
+      res.status(st).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/transfers/:id/ship', me, can('stock.adjust'), (req, res) => {
+    try {
+      const user = req.user;
+      const t = d.prepare('SELECT * FROM transfers WHERE id = ?').get(numOrNull(req.params.id));
+      if (!t || !transferVisible(d, user, t)) return res.status(404).json({ error: 'transfer not found' });
+      if (t.status !== 'approved') return res.status(400).json({ error: `only approved transfers can be shipped (currently ${t.status})` });
+      const now = new Date().toISOString();
+      d.transaction(() => {
+        const lines = d.prepare('SELECT * FROM transfer_items WHERE transfer_id = ? ORDER BY id').all(t.id);
+        for (const li of lines) {
+          const v = d.prepare('SELECT * FROM variants WHERE id = ?').get(li.variant_id || (
+            d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(li.product_id) || { id: null }).id);
+          const p = d.prepare('SELECT * FROM products WHERE id = ?').get(li.product_id);
+          if (!v || !p) throw httpError(400, `transfer line ${li.id} references missing product data`);
+          if (stockQty(d, v.id, t.from_location) + 1e-9 < li.qty) {
+            throw httpError(400, `cannot ship: ${p.name} stock at source dropped to ${stockQty(d, v.id, t.from_location)}, need ${li.qty}`);
+          }
+          writeMove(d, {
+            product: p, variant: v, branchId: t.from_branch, locationId: t.from_location,
+            qty: -li.qty, type: 'transfer_out', reason: 'transfer_out', ref: t.ref,
+            batchId: li.batch_id || undefined, unitCost: v.cost || p.cost || 0, userId: user.id, note: `to ${t.to_location}`
+          });
+        }
+        d.prepare("UPDATE transfers SET status = 'shipped', shipped_at = ? WHERE id = ?").run(now, t.id);
+        dbm.audit(d, {
+          userId: user.id, branchId: t.from_branch, action: 'transfer/ship',
+          entity: 'transfer', entityId: String(t.id), detail: { ref: t.ref, lines: lines.length }
+        });
+      })();
+      res.json({ transfer: transferPayload(d, d.prepare('SELECT * FROM transfers WHERE id = ?').get(t.id)) });
+    } catch (e) {
+      const st = e.status || 500;
+      if (st === 500) console.error(e);
+      res.status(st).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/transfers/:id/receive', me, can('transfers.approve'), (req, res) => {
+    try {
+      const user = req.user;
+      const t = d.prepare('SELECT * FROM transfers WHERE id = ?').get(numOrNull(req.params.id));
+      if (!t || !transferVisible(d, user, t)) return res.status(404).json({ error: 'transfer not found' });
+      if (t.status !== 'shipped') return res.status(400).json({ error: `only shipped transfers can be received (currently ${t.status})` });
+      if (user.role !== 'owner' && !visibleBranches(d, user).map((b) => b.id).includes(t.to_branch)) {
+        return res.status(403).json({ error: 'the receiving branch must be one you can see' });
+      }
+      const lines = Array.isArray((req.body || {}).items) ? req.body.items : [];
+      if (!lines.length) return res.status(400).json({ error: 'items[] with item_id + received_qty is required' });
+      const note = String((req.body || {}).note || '').trim();
+      const now = new Date().toISOString();
+      d.transaction(() => {
+        let discrepancies = 0;
+        for (const ln of lines) {
+          const ti = d.prepare('SELECT * FROM transfer_items WHERE id = ? AND transfer_id = ?').get(numOrNull(ln.item_id), t.id);
+          if (!ti) throw httpError(400, 'unknown item_id for this transfer');
+          if (ti.received_at) throw httpError(400, `line ${ti.id} was already received`);
+          const rq = Number(ln.received_qty);
+          if (!Number.isInteger(rq) || rq < 0 || rq > ti.qty + 1e-9) {
+            throw httpError(400, `received_qty for line ${ti.id} must be a whole number between 0 and ${ti.qty}`);
+          }
+          if (rq > 0) {
+            const v = d.prepare('SELECT * FROM variants WHERE id = ?').get(ti.variant_id || (
+              d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(ti.product_id) || { id: null }).id);
+            const p = d.prepare('SELECT * FROM products WHERE id = ?').get(ti.product_id);
+            if (!v || !p) throw httpError(400, `transfer line ${ti.id} references missing product data`);
+            writeMove(d, {
+              product: p, variant: v, branchId: t.to_branch, locationId: t.to_location,
+              qty: rq, type: 'transfer_in', reason: 'transfer_in', ref: t.ref,
+              batchId: ti.batch_id || undefined, unitCost: v.cost || p.cost || 0, userId: user.id, note: `from ${t.from_location}${note ? ' — ' + note : ''}`
+            });
+            if (ti.batch_id) d.prepare('UPDATE batches SET location_id = ? WHERE id = ?').run(t.to_location, ti.batch_id);
+          }
+          discrepancies += ti.qty - rq;
+          d.prepare('UPDATE transfer_items SET received_qty = ?, received_at = ? WHERE id = ?').run(rq, now, ti.id);
+        }
+        const remaining = d.prepare('SELECT COUNT(*) AS n FROM transfer_items WHERE transfer_id = ? AND received_at IS NULL').get(t.id).n;
+        if (remaining === 0) d.prepare("UPDATE transfers SET status = 'received', received_at = ? WHERE id = ?").run(now, t.id);
+        dbm.audit(d, {
+          userId: user.id, branchId: t.to_branch, action: 'transfer/receive',
+          entity: 'transfer', entityId: String(t.id),
+          detail: { ref: t.ref, lines: lines.length, discrepancies, note }
+        });
+      })();
+      res.json({ transfer: transferPayload(d, d.prepare('SELECT * FROM transfers WHERE id = ?').get(t.id)) });
+    } catch (e) {
+      const st = e.status || 500;
+      if (st === 500) console.error(e);
+      res.status(st).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/transfers/:id/cancel', me, (req, res) => {
+    try {
+      const user = req.user;
+      if (!perms.userHasPerm(d, user, 'stock.adjust') && !perms.userHasPerm(d, user, 'transfers.approve')) {
+        return res.status(403).json({ error: 'stock.adjust or transfers.approve required' });
+      }
+      const t = d.prepare('SELECT * FROM transfers WHERE id = ?').get(numOrNull(req.params.id));
+      if (!t || !transferVisible(d, user, t)) return res.status(404).json({ error: 'transfer not found' });
+      if (!['requested', 'approved'].includes(t.status)) return res.status(400).json({ error: `only requested/approved transfers can be cancelled (currently ${t.status})` });
+      d.prepare("UPDATE transfers SET status = 'cancelled' WHERE id = ?").run(t.id);
+      dbm.audit(d, { userId: user.id, branchId: t.from_branch, action: 'transfer/cancel', entity: 'transfer', entityId: String(t.id), detail: { ref: t.ref } });
+      res.json({ transfer: transferPayload(d, d.prepare('SELECT * FROM transfers WHERE id = ?').get(t.id)) });
+    } catch (e) {
+      const st = e.status || 500;
+      if (st === 500) console.error(e);
+      res.status(st).json({ error: e.message });
+    }
+  });
+
+  // ---- Phase 12 — branch comparison (R-3): rank visible branches by sales ----
+  // margin ≈ Σ(gross − cost×qty) over confirmed sale items; shrinkage = cost of
+  // stock lost to damage / expiry write-off / negative adjustments in the window.
+  app.get('/api/reports/branches', me, can('reports.view'), (req, res) => {
+    const user = req.user;
+    const vis = visibleBranches(d, user).map((b) => b.id);
+    const from = req.query.from ? new Date(req.query.from).toISOString() : null;
+    const to = req.query.to ? new Date(req.query.to).toISOString() : null;
+    const win = (col) => {
+      const w = [];
+      const p = [];
+      if (from) { w.push(`${col} >= ?`); p.push(from); }
+      if (to) { w.push(`${col} <= ?`); p.push(to); }
+      return { sql: w.length ? 'AND ' + w.join(' AND ') : '', p };
+    };
+    const ws = win('created_at');
+    const wsm = win('s.created_at');
+    const wm = win('created_at');
+    const branches = d.prepare(`SELECT id, name FROM branches WHERE id IN (${vis.map(() => '?').join(',')}) ORDER BY id`).all(...vis);
+    const rows = branches.map((b) => {
+      const sales = d.prepare(
+        `SELECT COUNT(*) AS orders, COALESCE(SUM(gross), 0) AS sales FROM sales WHERE branch_id = ? AND status IN ('paid', 'partial') ${ws.sql}`
+      ).get(b.id, ...ws.p);
+      const margin = d.prepare(
+        `SELECT COALESCE(SUM(si.gross - COALESCE(COALESCE(v.cost, p.cost), 0) * si.qty), 0) AS margin
+         FROM sale_items si JOIN sales s ON s.id = si.sale_id
+         LEFT JOIN variants v ON v.id = si.variant_id
+         LEFT JOIN products p ON p.id = si.product_id
+         WHERE s.branch_id = ? AND s.status IN ('paid', 'partial') ${wsm.sql}`
+      ).get(b.id, ...wsm.p).margin;
+      const shrinkage = d.prepare(
+        `SELECT COALESCE(SUM(-qty * unit_cost), 0) AS shrinkage FROM stock_moves
+         WHERE branch_id = ? AND (type = 'damage' OR type = 'expiry_writeoff' OR (type = 'adjustment' AND qty < 0)) ${wm.sql}`
+      ).get(b.id, ...wm.p).shrinkage;
+      return {
+        id: b.id, name: b.name,
+        orders: sales.orders, sales: sales.sales,
+        margin: Number(margin.toFixed(0)),
+        shrinkage: Number(shrinkage.toFixed(0))
+      };
+    });
+    rows.sort((a, b) => b.sales - a.sales || a.id - b.id);
+    rows.forEach((r, i) => { r.rank = i + 1; });
+    res.json({ branches: rows, from, to });
   });
 
   // ---- CSV import/export (products + variants + packs in one file) --------------------------------
@@ -4919,7 +5297,7 @@ if (require.main === module) {
   auth.pruneSessions(db);
   app.listen(PORT, '0.0.0.0', () => {
     const s = dbm.getSetting(db, 'business', {});
-    console.log(`OpenPOS v2 (Phase 11)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
+    console.log(`OpenPOS v2 (Phase 12 — multi-branch)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
   });
 }
 

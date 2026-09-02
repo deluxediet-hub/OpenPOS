@@ -292,6 +292,22 @@
             <th>Code</th><th data-i18n="name">Name</th><th>VAT</th><th>Default</th><th data-i18n="today">Today</th><th></th>
           </tr></thead><tbody id="b-rows"></tbody></table>
         </div>
+        <div class="card" id="lay-cmp-wrap" style="margin-bottom:14px">
+          <h3 data-i18n="branch_comparison">Branch comparison</h3>
+          <div class="row" style="margin-bottom:10px">
+            <input type="date" id="cmp-from" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px">
+            <input type="date" id="cmp-to" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px">
+            <button class="btn small" id="cmp-run" data-i18n="run">Run</button>
+          </div>
+          <div style="overflow:auto">
+            <table><thead><tr>
+              <th data-i18n="rank">Rank</th><th data-i18n="branch">Branch</th>
+              <th data-i18n="orders">Orders</th><th data-i18n="sales">Sales</th>
+              <th data-i18n="margin">Margin</th><th data-i18n="shrinkage">Shrinkage</th>
+            </tr></thead><tbody id="cmp-rows"></tbody></table>
+            <div class="muted small" id="cmp-empty" data-i18n="no_rows">No rows</div>
+          </div>
+        </div>
         <div class="card">
           <h3 id="b-form-title" data-i18n="add_branch">Add branch</h3>
           <input type="hidden" id="b-id">
@@ -308,6 +324,62 @@
             <button class="btn ghost hidden" id="b-clear" data-i18n="cancel">Cancel</button>
             <div class="msg" id="b-msg" style="margin:0"></div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ TRANSFERS (Phase 12, Day 16) ============ -->
+    <section id="tab-transfers" class="hidden">
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="new_transfer">New transfer</h3>
+        </div>
+        <div class="grid cols-3">
+          <label class="f"><span data-i18n="from_loc">From location</span><select id="tf-from"></select></label>
+          <label class="f"><span data-i18n="to_loc">To location</span><select id="tf-to"></select></label>
+        </div>
+        <div style="margin:10px 0">
+          <table style="max-width:780px"><thead><tr>
+            <th data-i18n="product">Product</th><th data-i18n="batch_l">Batch</th><th data-i18n="qty">Qty</th><th></th>
+          </tr></thead><tbody id="tf-items"></tbody></table>
+          <div class="row"><button class="btn small" id="tf-add-item" data-i18n="add_line">Add line</button></div>
+        </div>
+        <div class="row">
+          <button class="btn" id="tf-create" data-i18n="create_transfer">Create transfer</button>
+          <div class="msg" id="tf-msg" style="margin:0"></div>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:14px" id="tf-detail" >
+        <h3 id="tf-d-ref" style="margin-bottom:4px"></h3>
+        <div class="muted small" id="tf-d-route" style="margin-bottom:10px"></div>
+        <div style="overflow:auto">
+          <table><thead><tr>
+            <th data-i18n="product">Product</th><th data-i18n="qty">Sent</th>
+            <th data-i18n="received_l">Received</th><th data-i18n="discrepancy">Discrepancy</th><th data-i18n="value">Value</th>
+          </tr></thead><tbody id="tf-d-lines"></tbody></table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="transfers">Transfers</h3>
+          <span class="spacer"></span>
+          <select id="tf-filter" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px">
+            <option value="">all</option>
+            <option value="requested">requested</option>
+            <option value="approved">approved</option>
+            <option value="shipped">shipped</option>
+            <option value="received">received</option>
+            <option value="cancelled">cancelled</option>
+          </select>
+          <button class="btn small" id="tf-reload" data-i18n="reload">Reload</button>
+        </div>
+        <div style="overflow:auto">
+          <table><thead><tr>
+            <th>Ref</th><th data-i18n="route">Route</th><th data-i18n="status">Status</th>
+            <th data-i18n="lines">Lines</th><th data-i18n="units">Units</th>
+            <th data-i18n="discrepancy">Discrepancy</th><th data-i18n="by">By</th><th data-i18n="at">At</th><th></th>
+          </tr></thead><tbody id="tf-body"></tbody></table>
+          <div class="muted small" id="tf-empty" data-i18n="no_rows">No rows</div>
         </div>
       </div>
     </section>
@@ -794,6 +866,7 @@ const TABS = [
   { id: 'shifts',     label: 'shifts',     always: true },
   { id: 'returns',    label: 'returns',    always: true },
   { id: 'customers',  label: 'customers', always: true },
+  { id: 'transfers',  label: 'transfers', cap: 'multi_branch' },
   { id: 'purchasing', label: 'purchasing', cap: 'purchasing' },
   { id: 'payments',   label: 'payments',   always: true },
   { id: 'pricing',    label: 'pricing',    always: true },
@@ -834,6 +907,162 @@ function selectTab(name) {
   if (name === 'shifts') loadShiftsM();
   if (name === 'returns') loadReturnsM();
   if (name === 'customers') loadCustomersM();
+  if (name === 'transfers') loadTransfers();
+}
+
+// ---------------- transfers & branch comparison (Phase 12) ----------------
+let TF_PRODUCTS = [];
+async function loadTransfers() {
+  if (!$('#tf-from').dataset.wired) {
+    $('#tf-from').dataset.wired = '1';
+    const opt = (l) => `<option value="${l.id}">${esc(l.name)} — ${esc(((BOOT.branches || []).find((b) => b.id === l.branch_id) || {}).name || '')}</option>`;
+    const locs = BOOT.allLocations || BOOT.locations || [];
+    $('#tf-from').innerHTML = locs.map(opt).join('');
+    $('#tf-to').innerHTML = locs.map(opt).join('');
+    if (locs[1]) $('#tf-to').value = String(locs[1].id);
+    $('#tf-from').onchange = loadTfProducts;
+    $('#tf-add-item').onclick = addTfLine;
+    $('#tf-create').onclick = createTransfer;
+    $('#tf-reload').onclick = drawTransfers;
+    $('#tf-filter').onchange = drawTransfers;
+    $('#tf-detail').style.display = 'none';
+    addTfLine();
+  }
+  await loadTfProducts();
+  drawTransfers();
+}
+
+async function loadTfProducts() {
+  const fromLoc = (BOOT.locations || []).find((l) => l.id === Number($('#tf-from').value));
+  TF_PRODUCTS = await api(`/api/products${fromLoc ? `?branch_id=${fromLoc.branch_id}` : ''}`).catch(() => []);
+  document.querySelectorAll('#tf-items select[data-tf-p]').forEach((sel) => {
+    const v = sel.value;
+    sel.innerHTML = TF_PRODUCTS.map((p) => `<option value="${p.id}">${esc(p.name)}${p.track_batches ? ' ★' : ''}</option>`).join('');
+    if (v) sel.value = v;
+    fillTfBatchesSel(sel);
+  });
+}
+
+async function fillTfBatchesSel(pSel) {
+  const bSel = pSel.closest('tr').querySelector('[data-tf-b]');
+  const p = TF_PRODUCTS.find((x) => x.id === Number(pSel.value));
+  bSel.innerHTML = '<option value="">—</option>';
+  if (!p || !p.track_batches) return;
+  const fromLoc = (BOOT.locations || []).find((l) => l.id === Number($('#tf-from').value));
+  const batches = await api(`/api/batches?product_id=${p.id}&open=1${fromLoc ? `&location_id=${fromLoc.id}` : ''}`).catch(() => []);
+  bSel.innerHTML = '<option value="">—</option>' + batches.map((b) =>
+    `<option value="${b.id}">${esc(b.batch_no)}${b.expiry_date ? ' · ' + esc(String(b.expiry_date).slice(0, 10)) : ''} (${b.qty})</option>`).join('');
+}
+
+function addTfLine() {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td style="min-width:220px"><select data-tf-p style="padding:6px;border:1px solid #cbd5e1;border-radius:6px;width:100%">${TF_PRODUCTS.map((p) => `<option value="${p.id}">${esc(p.name)}${p.track_batches ? ' ★' : ''}</option>`).join('')}</select></td>
+  <td><select data-tf-b style="padding:6px;border:1px solid #cbd5e1;border-radius:6px;width:100%"><option value="">—</option></select></td>
+  <td style="width:90px"><input data-tf-q type="number" min="1" step="1" value="1" style="width:80px;padding:6px;border:1px solid #cbd5e1;border-radius:6px"></td>
+  <td style="width:36px"><button class="btn small ghost" data-tf-x>✕</button></td>`;
+  $('#tf-items').appendChild(tr);
+  tr.querySelector('[data-tf-p]').onchange = (e) => fillTfBatchesSel(e.target);
+  tr.querySelector('[data-tf-x]').onclick = () => tr.remove();
+}
+
+async function createTransfer() {
+  const msg = $('#tf-msg');
+  const items = [...document.querySelectorAll('#tf-items tr')].map((tr) => ({
+    product_id: Number(tr.querySelector('[data-tf-p]').value),
+    batch_id: tr.querySelector('[data-tf-b]').value || undefined,
+    qty: Number(tr.querySelector('[data-tf-q]').value)
+  })).filter((i) => i.qty > 0);
+  if (!items.length) { msg.textContent = t('tf_need_line'); return; }
+  const r = await api('/api/transfers', { method: 'POST', body: { from_location: Number($('#tf-from').value), to_location: Number($('#tf-to').value), items } }).catch(() => null);
+  if (!r || r.error) { msg.textContent = (r && r.error) || t('tf_create_fail'); return; }
+  msg.textContent = t('tf_created').replace('{ref}', r.transfer.ref);
+  document.querySelectorAll('#tf-items tr').forEach((tr) => tr.remove());
+  addTfLine();
+  drawTransfers();
+}
+
+async function drawTransfers() {
+  const st = $('#tf-filter').value;
+  const rows = await api(`/api/transfers${st ? `?status=${st}` : ''}`).catch(() => []);
+  const body = $('#tf-body');
+  body.innerHTML = rows.map((tr) => {
+    const route = `${esc(tr.from_location_name)} → ${esc(tr.to_location_name)}<div class="muted small">${esc(tr.from_branch_name)} → ${esc(tr.to_branch_name)}</div>`;
+    const acts = [];
+    if (tr.status === 'requested') acts.push(`<button class="btn small" data-tfa="approve" data-id="${tr.id}">${t('approve')}</button> <button class="btn small ghost" data-tfa="cancel" data-id="${tr.id}">${t('cancel')}</button>`);
+    if (tr.status === 'approved') acts.push(`<button class="btn small" data-tfa="ship" data-id="${tr.id}">${t('ship')}</button> <button class="btn small ghost" data-tfa="cancel" data-id="${tr.id}">${t('cancel')}</button>`);
+    if (tr.status === 'shipped') acts.push(`<button class="btn small" data-tfa="receive" data-id="${tr.id}">${t('receive')}</button>`);
+    return `<tr class="clickable" data-tfid="${tr.id}"><td>${esc(tr.ref)}</td><td>${route}</td><td><span class="pill ${tr.status === 'received' ? 'g' : tr.status === 'cancelled' ? 'r' : ''}">${t('tf_' + tr.status)}</span></td><td>${tr.item_count}</td><td>${tr.total_units}</td><td>${tr.discrepancies ? `<span class="pill r">${tr.discrepancies}</span>` : '—'}</td><td>${esc(tr.created_by_name || '')}</td><td>${esc((tr.created_at || '').slice(0, 16).replace('T', ' '))}</td><td>${acts.join(' ')}</td></tr>`;
+  }).join('');
+  $('#tf-empty').style.display = rows.length ? 'none' : '';
+  document.querySelectorAll('#tf-body [data-tfa]').forEach((b) => {
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      const id = Number(b.dataset.id);
+      const action = b.dataset.tfa;
+      if (action === 'receive') { await receiveTransfer(id); return; }
+      const r = await api(`/api/transfers/${id}/${action}`, { method: 'POST', body: {} }).catch(() => null);
+      if (r && r.error) { alert(r.error); return; }
+      drawTransfers();
+    };
+  });
+  document.querySelectorAll('#tf-body tr[data-tfid]').forEach((trEl) => {
+    trEl.onclick = () => showTransferDetail(Number(trEl.dataset.tfid));
+  });
+}
+
+async function showTransferDetail(id) {
+  const r = await api(`/api/transfers/${id}`).catch(() => null);
+  if (!r || r.error) return;
+  const tr = r.transfer;
+  $('#tf-d-ref').textContent = `${tr.ref} — ${t('tf_' + tr.status)}`;
+  $('#tf-d-route').textContent = `${tr.from_location_name} (${tr.from_branch_name}) → ${tr.to_location_name} (${tr.to_branch_name}) · ${tr.created_by_name || ''}`;
+  $('#tf-d-lines').innerHTML = tr.items.map((li) =>
+    `<tr><td>${esc(li.product_name)}${li.variant_name ? ' — ' + esc(li.variant_name) : ''}${li.batch_no ? ' · ' + esc(li.batch_no) : ''}</td><td>${li.qty}</td><td>${li.received_at ? li.received_qty : '—'}</td><td>${li.discrepancy ? `<span class="pill r">${li.discrepancy}</span>` : '—'}</td><td>${fmt(li.line_value)}</td></tr>`
+  ).join('');
+  $('#tf-detail').style.display = '';
+}
+
+async function receiveTransfer(id) {
+  const r0 = await api(`/api/transfers/${id}`).catch(() => null);
+  if (!r0 || r0.error) return;
+  const tr = r0.transfer;
+  const pending = tr.items.filter((li) => !li.received_at);
+  if (!pending.length) return;
+  const items = [];
+  for (const li of pending) {
+    const raw = prompt(`${li.product_name}${li.batch_no ? ' · ' + li.batch_no : ''}\n${t('tf_sent')}: ${li.qty}\n${t('tf_received_qty')}?`);
+    if (raw === null) return;
+    const v = Number(raw);
+    if (!Number.isInteger(v) || v < 0 || v > li.qty) { alert(`${t('tf_received_qty')}: 0–${li.qty}`); return; }
+    items.push({ item_id: li.id, received_qty: v });
+  }
+  const r = await api(`/api/transfers/${id}/receive`, { method: 'POST', body: { items } }).catch(() => null);
+  if (!r || r.error) { alert((r && r.error) || t('tf_receive_fail')); return; }
+  showTransferDetail(id);
+  drawTransfers();
+}
+
+// Branch comparison (Phase 12) — ranks visible branches by sales
+async function loadBranchComparison() {
+  if (!$('#cmp-run').dataset.wired) {
+    $('#cmp-run').dataset.wired = '1';
+    $('#cmp-run').onclick = drawBranchComparison;
+  }
+  drawBranchComparison();
+}
+
+async function drawBranchComparison() {
+  const from = $('#cmp-from').value, to = $('#cmp-to').value;
+  const q = [];
+  if (from) q.push(`from=${from}`);
+  if (to) q.push(`to=${to}`);
+  const r = await api(`/api/reports/branches${q.length ? '?' + q.join('&') : ''}`).catch(() => null);
+  if (!r || r.error) return;
+  const medal = (i) => i === 0 ? ' 🥇' : i === 1 ? ' 🥈' : i === 2 ? ' 🥉' : '';
+  $('#cmp-rows').innerHTML = r.branches.map((b, i) =>
+    `<tr><td>${b.rank}${medal(i)}</td><td>${esc(b.name)}</td><td>${b.orders}</td><td>${fmt(b.sales)}</td><td>${fmt(b.margin)}</td><td>${b.shrinkage ? `<span class="pill r">${fmt(b.shrinkage)}</span>` : '0'}</td></tr>`
+  ).join('');
+  $('#cmp-empty').style.display = r.branches.length ? 'none' : '';
 }
 
 // ---------------- customers & deni (Phase 11) ----------------
@@ -1510,7 +1739,7 @@ const MOVE_TYPES_UI = ['opening','purchase','sale','return_in','return_out','tra
 let STK_OPEN = null; // open stocktake draft being counted
 
 async function loadStock() {
-  $('#stk-loc').innerHTML = BOOT.locations.map((l) =>
+  $('#stk-loc').innerHTML = (BOOT.allLocations || BOOT.locations).map((l) =>
     `<option value="${l.id}">${esc(l.name)}${l.is_warehouse ? ' (warehouse)' : ''}</option>`).join('');
   $('#st-move-type').innerHTML = '<option value="">all types</option>' +
     MOVE_TYPES_UI.map((m) => `<option value="${m}">${m}</option>`).join('');
@@ -1897,6 +2126,7 @@ $('#s-save').onclick = async () => {
 async function loadLayout() {
   const showLoc = BOOT.caps.multi_location;
   const showBr = BOOT.caps.multi_branch;
+  if (showBr) loadBranchComparison();
   $('#lay-empty').style.display = (showLoc || showBr) ? 'none' : '';
   $('#lay-loc-wrap').style.display = showLoc ? '' : 'none';
   $('#lay-br-wrap').style.display = showBr ? '' : 'none';

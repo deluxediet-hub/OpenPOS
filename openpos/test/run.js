@@ -2438,6 +2438,277 @@ function section(title) { console.log(`\n${title}`); }
     assert.ok(Array.isArray(detail.body.items) && Array.isArray(detail.body.payments));
   });
 
+  // ================= Phase 12 — multi-branch operating system (R-2/R-3) =================
+  section('Phase 12 — multi-branch: transfers, visibility, comparison (R-2/R-3)');
+
+  const p12 = {};
+  await test('setup: P12 fixtures — branch, manager, products, opening stock', async () => {
+    const nb = await authJ({ path: '/api/branches', method: 'POST', body: { name: 'P12 North Branch' } });
+    assert.strictEqual(nb.status, 200, JSON.stringify(nb.body));
+    p12.brNorth = nb.body.id;
+    const m1 = await authJ({ path: '/api/staff', method: 'POST', body: { name: 'Mgr Main', role: 'manager', pin: '7442', branch_id: 1 } });
+    assert.strictEqual(m1.status, 200, JSON.stringify(m1.body));
+    const m2 = await authJ({ path: '/api/staff', method: 'POST', body: { name: 'Mgr East', role: 'manager', pin: '7331', branch_id: 2 } });
+    assert.strictEqual(m2.status, 200, JSON.stringify(m2.body));
+    const l1 = await authJ({ path: '/api/login', method: 'POST', body: { name: 'Mgr Main', pin: '7442' } });
+    const l2 = await authJ({ path: '/api/login', method: 'POST', body: { name: 'Mgr East', pin: '7331' } });
+    p12.mgr1 = withCookie(l1.headers.get('set-cookie').split(';')[0]);
+    p12.mgr2 = withCookie(l2.headers.get('set-cookie').split(';')[0]);
+    p12.mgr1User = m1.body.id; p12.mgr2User = m2.body.id;
+    const pw = await authJ({ path: '/api/products', method: 'POST', body: { name: 'P12 Widget', barcode: '99921', cost: 100, price: 150 } });
+    const pg = await authJ({ path: '/api/products', method: 'POST', body: { name: 'P12 Gadget', barcode: '99922', cost: 50, price: 90 } });
+    assert.strictEqual(pw.status, 200, JSON.stringify(pw.body));
+    assert.strictEqual(pg.status, 200, JSON.stringify(pg.body));
+    p12.widget = pw.body.id; p12.gadget = pg.body.id;
+    p12.widgetV = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(p12.widget).id;
+    p12.locL1 = d.prepare("SELECT id FROM locations WHERE branch_id = 1 AND is_default = 1").get().id;
+    p12.locL2 = d.prepare("SELECT id FROM locations WHERE branch_id = 2 AND is_default = 1").get().id;
+    // Nakuru (branch 3) is deleted by the Phase 2 tests — P12 North is leg 3
+    p12.locL3 = d.prepare("SELECT id FROM locations WHERE branch_id = ? AND is_default = 1").get(p12.brNorth).id;
+    p12.locWH = d.prepare("SELECT id FROM locations WHERE is_warehouse = 1").get().id;
+    for (const [pid, qty] of [[p12.widget, 20], [p12.gadget, 10]]) {
+      const a = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: pid, qty, type: 'opening', reason: 'opening', location_id: p12.locL1 } });
+      assert.strictEqual(a.status, 200, JSON.stringify(a.body));
+    }
+    // owner opened stock at a branch-1 location — move must be tagged branch 1
+    const mv = d.prepare("SELECT * FROM stock_moves WHERE type = 'opening' AND location_id = ? ORDER BY id DESC LIMIT 1").get(p12.locL1);
+    assert.strictEqual(mv.branch_id, 1, 'owner opening stock tagged with the location branch');
+    // branch-2 customer + branch-2 sale (raw: no till open in Eastleigh in the suite)
+    const ec = await authJ({ path: '/api/customers', method: 'POST', body: { name: 'Eastleigh Traders', phone: '0700555001', branch_id: 2 } });
+    assert.strictEqual(ec.status, 200, JSON.stringify(ec.body));
+    p12.branch2Customer = (ec.body.customer || ec.body).id;
+    const wv = p12.widgetV;
+    const saleId = d.prepare(
+      "INSERT INTO sales (branch_id, location_id, order_no, invoice_no, customer_id, status, subtotal, discount, net, tax, gross, created_at) VALUES (2, ?, 900001, 'P12-E2', ?, 'paid', 1500, 0, 1293, 207, 1500, ?)"
+    ).run(p12.locL2, p12.branch2Customer, new Date().toISOString()).lastInsertRowid;
+    d.prepare(
+      "INSERT INTO sale_items (sale_id, product_id, variant_id, name, qty, unit, line_discount, net, tax, gross) VALUES (?, ?, ?, 'P12 Widget', 10, 'pc', 0, 1293, 207, 1500)"
+    ).run(saleId, p12.widget, wv);
+    p12.branch2Sale = saleId;
+  });
+
+  await test('acceptance: 3-location transfer chain with 1 discrepancy, fully traceable (R-3)', async () => {
+    // Leg 1: L1 → L2 (10 widgets, 5 gadgets); leg 2 later: L2 → L3.
+    const c = await authJ({ path: '/api/transfers', method: 'POST', body: {
+      from_location: p12.locL1, to_location: p12.locL2,
+      items: [{ product_id: p12.widget, qty: 10 }, { product_id: p12.gadget, qty: 5 }],
+      note: 'opening push'
+    } });
+    assert.strictEqual(c.status, 200, JSON.stringify(c.body));
+    assert.ok(c.body.transfer.ref.startsWith('TR-'), c.body.transfer.ref);
+    assert.strictEqual(c.body.transfer.status, 'requested');
+    p12.tr1 = c.body.transfer.id;
+    const items1 = c.body.transfer.items;
+    const wLine = items1.find((i) => i.product_id === p12.widget);
+    const gLine = items1.find((i) => i.product_id === p12.gadget);
+
+    const shipEarly = await authJ({ path: `/api/transfers/${p12.tr1}/ship`, method: 'POST', body: {} });
+    assert.strictEqual(shipEarly.status, 400, 'cannot ship before approval');
+
+    // the receiving branch's manager approves (they control what enters their books)
+    const ap = await p12.mgr2({ path: `/api/transfers/${p12.tr1}/approve`, method: 'POST', body: {} });
+    assert.strictEqual(ap.status, 200, JSON.stringify(ap.body));
+    assert.strictEqual(ap.body.transfer.status, 'approved');
+
+    const sh = await authJ({ path: `/api/transfers/${p12.tr1}/ship`, method: 'POST', body: {} });
+    assert.strictEqual(sh.status, 200, JSON.stringify(sh.body));
+    assert.strictEqual(sh.body.transfer.status, 'shipped');
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(p12.widgetV, p12.locL1).qty, 10, 'source stock deducted');
+
+    // receive with ONE discrepancy: 8 of 10 widgets arrived
+    const rc = await p12.mgr2({ path: `/api/transfers/${p12.tr1}/receive`, method: 'POST', body: {
+      items: [{ item_id: wLine.id, received_qty: 8 }, { item_id: gLine.id, received_qty: 5 }],
+      note: '2 widgets short'
+    } });
+    assert.strictEqual(rc.status, 200, JSON.stringify(rc.body));
+    assert.strictEqual(rc.body.transfer.status, 'received');
+    assert.strictEqual(rc.body.transfer.discrepancies, 1);
+    const gotW = rc.body.transfer.items.find((i) => i.product_id === p12.widget);
+    assert.strictEqual(gotW.discrepancy, 2, 'line-level discrepancy = sent − received');
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(p12.widgetV, p12.locL2).qty, 8, 'destination stock = received qty');
+
+    // the ledger tells the whole story for this transfer
+    const trail = d.prepare("SELECT * FROM stock_moves WHERE ref = ? ORDER BY id").all(c.body.transfer.ref);
+    assert.strictEqual(trail.length, 4, '4 moves: 2 out + 2 in');
+    assert.ok(trail.some((m) => m.type === 'transfer_out' && m.qty === -10 && m.branch_id === 1));
+    assert.ok(trail.some((m) => m.type === 'transfer_out' && m.qty === -5 && m.branch_id === 1));
+    assert.ok(trail.some((m) => m.type === 'transfer_in' && m.qty === 8 && m.branch_id === 2));
+    assert.ok(trail.some((m) => m.type === 'transfer_in' && m.qty === 5 && m.branch_id === 2));
+    const aud = d.prepare("SELECT detail FROM audit_log WHERE action = 'transfer/receive' AND entity_id = ?").get(String(p12.tr1));
+    assert.ok(aud && JSON.parse(aud.detail).discrepancies === 2, 'audit records the discrepancy total');
+
+    // Leg 2: L2 → L3 (6 of the 8 widgets that arrived) — the 3rd location
+    const c2 = await authJ({ path: '/api/transfers', method: 'POST', body: {
+      from_location: p12.locL2, to_location: p12.locL3,
+      items: [{ product_id: p12.widget, qty: 6 }]
+    } });
+    assert.strictEqual(c2.status, 200, JSON.stringify(c2.body));
+    p12.tr2 = c2.body.transfer.id;
+    p12.tr2Ref = c2.body.transfer.ref;
+    const a2 = await p12.mgr2({ path: `/api/transfers/${p12.tr2}/approve`, method: 'POST', body: {} });
+    assert.strictEqual(a2.status, 403, 'Eastleigh manager cannot approve into a branch they cannot see');
+    const a3 = await authJ({ path: `/api/transfers/${p12.tr2}/approve`, method: 'POST', body: {} });
+    assert.strictEqual(a3.status, 200);
+    const s3 = await authJ({ path: `/api/transfers/${p12.tr2}/ship`, method: 'POST', body: {} });
+    assert.strictEqual(s3.status, 200);
+    const l3 = c2.body.transfer.items[0].id;
+    const r3 = await authJ({ path: `/api/transfers/${p12.tr2}/receive`, method: 'POST', body: { items: [{ item_id: l3, received_qty: 6 }] } });
+    assert.strictEqual(r3.status, 200, JSON.stringify(r3.body));
+    assert.strictEqual(r3.body.transfer.status, 'received');
+    assert.strictEqual(r3.body.transfer.discrepancies, 0);
+    const total = d.prepare('SELECT COALESCE(SUM(qty), 0) AS t FROM stock WHERE variant_id = ?').get(p12.widgetV).t;
+    assert.strictEqual(total, 18, '20 opened − 2 lost in transit = 18 across all locations');
+  });
+
+  await test('transfer state machine + guard rails (double ship/receive/over-receive/cancel)', async () => {
+    const c = await authJ({ path: '/api/transfers', method: 'POST', body: {
+      from_location: p12.locL1, to_location: p12.locL2, items: [{ product_id: p12.gadget, qty: 2 }]
+    } });
+    assert.strictEqual(c.status, 200);
+    const id = c.body.transfer.id;
+    const line = c.body.transfer.items[0].id;
+    const ap = await authJ({ path: `/api/transfers/${id}/approve`, method: 'POST', body: {} });
+    assert.strictEqual(ap.status, 200);
+    const sh = await authJ({ path: `/api/transfers/${id}/ship`, method: 'POST', body: {} });
+    assert.strictEqual(sh.status, 200);
+    assert.strictEqual((await authJ({ path: `/api/transfers/${id}/ship`, method: 'POST', body: {} })).status, 400, 'double ship refused');
+    assert.strictEqual((await authJ({ path: `/api/transfers/${id}/approve`, method: 'POST', body: {} })).status, 400, 're-approve refused');
+    const over = await authJ({ path: `/api/transfers/${id}/receive`, method: 'POST', body: { items: [{ item_id: line, received_qty: 99 }] } });
+    assert.strictEqual(over.status, 400, 'cannot receive more than sent');
+    const ok = await authJ({ path: `/api/transfers/${id}/receive`, method: 'POST', body: { items: [{ item_id: line, received_qty: 2 }] } });
+    assert.strictEqual(ok.status, 200);
+    assert.strictEqual(ok.body.transfer.status, 'received');
+    const again = await authJ({ path: `/api/transfers/${id}/receive`, method: 'POST', body: { items: [{ item_id: line, received_qty: 0 }] } });
+    assert.strictEqual(again.status, 400, 'line already received');
+    assert.strictEqual((await authJ({ path: `/api/transfers/${id}/cancel`, method: 'POST', body: {} })).status, 400, 'no cancel after ship');
+    // cancel works pre-ship
+    const c2 = await authJ({ path: '/api/transfers', method: 'POST', body: {
+      from_location: p12.locL1, to_location: p12.locL2, items: [{ product_id: p12.gadget, qty: 1 }]
+    } });
+    const cx = await authJ({ path: `/api/transfers/${c2.body.transfer.id}/cancel`, method: 'POST', body: {} });
+    assert.strictEqual(cx.status, 200);
+    assert.strictEqual(cx.body.transfer.status, 'cancelled');
+    // insufficient stock at source is refused up front
+    const big = await authJ({ path: '/api/transfers', method: 'POST', body: {
+      from_location: p12.locL1, to_location: p12.locL2, items: [{ product_id: p12.gadget, qty: 9999 }]
+    } });
+    assert.strictEqual(big.status, 400, 'insufficient stock refused');
+  });
+
+  await test('batch-tracked transfer: batch moves with the stock; batch_id mandatory', async () => {
+    const milk = d.prepare("SELECT id FROM products WHERE name = 'Milk 1L'").get();
+    if (!milk) return; // batch product only exists if Phase 5 fixtures ran
+    const mv = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(milk.id).id;
+    const batch = d.prepare('SELECT * FROM batches WHERE variant_id = ? AND location_id = ? AND qty > 5 ORDER BY id DESC LIMIT 1').get(mv, p12.locL1);
+    if (!batch) return;
+    const noBatch = await authJ({ path: '/api/transfers', method: 'POST', body: {
+      from_location: p12.locL1, to_location: p12.locL2, items: [{ product_id: milk.id, qty: 4 }]
+    } });
+    assert.strictEqual(noBatch.status, 400, 'batch-tracked product needs a batch_id');
+    const c = await authJ({ path: '/api/transfers', method: 'POST', body: {
+      from_location: p12.locL1, to_location: p12.locL2, items: [{ product_id: milk.id, qty: 4, batch_id: batch.id }]
+    } });
+    assert.strictEqual(c.status, 200, JSON.stringify(c.body));
+    const id = c.body.transfer.id;
+    assert.strictEqual((await authJ({ path: `/api/transfers/${id}/approve`, method: 'POST', body: {} })).status, 200);
+    assert.strictEqual((await authJ({ path: `/api/transfers/${id}/ship`, method: 'POST', body: {} })).status, 200);
+    const rc = await authJ({ path: `/api/transfers/${id}/receive`, method: 'POST', body: { items: [{ item_id: c.body.transfer.items[0].id, received_qty: 4 }] } });
+    assert.strictEqual(rc.status, 200, JSON.stringify(rc.body));
+    const after = d.prepare('SELECT * FROM batches WHERE id = ?').get(batch.id);
+    assert.strictEqual(after.location_id, p12.locL2, 'the batch itself moved to the destination');
+    assert.strictEqual(after.qty, batch.qty, 'net batch qty unchanged by a clean transfer');
+  });
+
+  await test('acceptance: branch manager cannot read branch 2 data (R-2)', async () => {
+    const raw = p12.mgr1; // manager of branch 1
+    const as = (pathOrObj) => raw(typeof pathOrObj === 'string' ? { path: pathOrObj } : pathOrObj);
+    // customers: branch-2 customer invisible; shared (branch-less) customers still visible
+    const list = await as('/api/customers');
+    assert.strictEqual(list.status, 200);
+    assert.ok(list.body.every((c) => c.branch_id == null || c.branch_id === 1), 'no branch-2 customers leak');
+    assert.ok(!list.body.find((c) => c.id === p12.branch2Customer), 'branch-2 customer absent');
+    const detail = await as(`/api/customers/${p12.branch2Customer}`);
+    assert.strictEqual(detail.status, 404, 'branch-2 customer detail → 404');
+    const stmt = await as(`/api/customers/${p12.branch2Customer}/statement`);
+    assert.strictEqual(stmt.status, 404, 'branch-2 customer statement → 404');
+    const up = await as({ path: `/api/customers/${p12.branch2Customer}`, method: 'PUT', body: { note: 'x' } });
+    assert.strictEqual(up.status, 404, 'branch-2 customer update → 404');
+    // sales / stock ledger / balances / pricing: no branch-2 rows
+    const sales = await as('/api/sales?limit=100');
+    assert.ok(sales.body.every((s) => s.branch_id === 1), 'no branch-2 sales');
+    const moves = await as('/api/stock/moves?limit=500');
+    assert.ok(moves.body.every((m) => m.branch_id === 1), 'no branch-2 stock moves');
+    const bal = await as('/api/stock/balances');
+    const br1Locs = new Set(d.prepare("SELECT id FROM locations WHERE branch_id = 1").all().map((l) => l.id));
+    assert.ok(bal.body.every((b) => b.locations.every((l) => br1Locs.has(l.location_id))), 'no branch-2 balance rows');
+    const rules = await as('/api/price-rules');
+    assert.ok(rules.body.every((r) => !r.branch_id || r.branch_id === 1), 'no branch-2 price rules');
+    // transfers: a transfer entirely outside branch 1 is invisible
+    const tlist = await as('/api/transfers');
+    assert.ok(tlist.body.every((t) => t.from_branch === 1 || t.to_branch === 1), 'transfers touching branch 1 only');
+    assert.ok(!tlist.body.find((t) => t.ref === p12.tr2Ref), 'L2→L3 transfer absent');
+    const tdetail = await as(`/api/transfers/${p12.tr2}`);
+    assert.strictEqual(tdetail.status, 404, 'foreign transfer detail → 404');
+    // bootstrap location map: owner sees every branch's locations, manager only their own
+    const bootO = await authJ('/api/bootstrap');
+    assert.ok(bootO.body.allLocations.length >= 2, 'owner bootstrap lists all locations');
+    assert.ok(bootO.body.allLocations.some((l) => l.branch_id !== 1), 'owner sees other-branch locations');
+    const bootM = await as('/api/bootstrap');
+    assert.ok(bootM.body.allLocations.every((l) => l.branch_id === 1), 'manager bootstrap scoped to own branch');
+    // structure: only own branch; no cross-branch product reads
+    const brs = await as('/api/branches');
+    assert.strictEqual(brs.body.length, 1, 'one branch visible');
+    assert.strictEqual(brs.body[0].id, 1);
+    const prod = await as('/api/products?branch_id=2');
+    assert.strictEqual(prod.status, 404, 'manager cannot read branch-2 catalogue stock');
+    const prodOk = await authJ('/api/products?branch_id=2');
+    assert.strictEqual(prodOk.status, 200, 'owner can');
+  });
+
+  await test('acceptance: branch comparison ranks by sales, shows margin + shrinkage (R-3)', async () => {
+    // shrinkage evidence in branch 1: one damaged widget
+    const dmg = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: p12.widget, qty: -1, type: 'damage', reason: 'damage', location_id: p12.locL1, unit_cost: 100 } });
+    assert.strictEqual(dmg.status, 200, JSON.stringify(dmg.body));
+    const rep = await authJ('/api/reports/branches');
+    assert.strictEqual(rep.status, 200, JSON.stringify(rep.body));
+    const rows = rep.body.branches;
+    assert.ok(rows.length >= 3, `expected >=3 visible branches, got ${rows.length}`);
+    assert.strictEqual(rows[0].rank, 1);
+    for (let i = 1; i < rows.length; i++) assert.ok(rows[i - 1].sales >= rows[i].sales, 'ranked by sales desc');
+    const b1 = rows.find((r) => r.id === 1);
+    const b2 = rows.find((r) => r.id === 2);
+    assert.ok(b2, 'branch 2 in report');
+    assert.strictEqual(b2.orders, 1, 'branch-2 fixture sale counted');
+    assert.strictEqual(b2.sales, 1500);
+    assert.strictEqual(b2.margin, 500, 'margin = gross − cost×qty');
+    assert.ok(b1.shrinkage >= 100, `branch-1 shrinkage includes the damaged widget: ${b1.shrinkage}`);
+    assert.strictEqual(b2.shrinkage, 0, 'branch 2 has no shrinkage yet');
+    // windowed: future window = everything zero
+    const fut = await authJ('/api/reports/branches?from=2999-01-01&to=2999-12-31');
+    assert.strictEqual(fut.status, 200);
+    assert.ok(fut.body.branches.every((r) => r.sales === 0 && r.orders === 0));
+    // a manager only gets their own branch in the report
+    const m2rep = await p12.mgr2({ path: '/api/reports/branches' });
+    assert.strictEqual(m2rep.body.branches.length, 1);
+    assert.strictEqual(m2rep.body.branches[0].id, 2);
+    assert.strictEqual(m2rep.body.branches[0].rank, 1);
+  });
+
+  await test('inter-location transfer inside one branch (store → warehouse)', async () => {
+    const c = await authJ({ path: '/api/transfers', method: 'POST', body: {
+      from_location: p12.locL1, to_location: p12.locWH, items: [{ product_id: p12.gadget, qty: 3 }]
+    } });
+    assert.strictEqual(c.status, 200, JSON.stringify(c.body));
+    const id = c.body.transfer.id;
+    assert.strictEqual((await authJ({ path: `/api/transfers/${id}/approve`, method: 'POST', body: {} })).status, 200);
+    assert.strictEqual((await authJ({ path: `/api/transfers/${id}/ship`, method: 'POST', body: {} })).status, 200);
+    const rc = await authJ({ path: `/api/transfers/${id}/receive`, method: 'POST', body: { items: [{ item_id: c.body.transfer.items[0].id, received_qty: 3 }] } });
+    assert.strictEqual(rc.status, 200, JSON.stringify(rc.body));
+    assert.strictEqual(rc.body.transfer.status, 'received');
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(
+      d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(p12.gadget).id, p12.locWH).qty, 3);
+  });
+
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 

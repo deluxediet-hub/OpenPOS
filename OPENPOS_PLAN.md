@@ -340,7 +340,7 @@ contradicts the doc without a change-log entry.**
   **124 tests green** (was 119) incl. manager override, M-Pesa reconciliation,
   statement-vs-ledger tie; 22-step UI smoke green.
 
-### Phase 12 — Multi-Branch Operating System · Days 16–17
+### Phase 12 — Multi-Branch Operating System · Days 16–17 ✅ (Day 16)
 - Branch dashboards; branch users/permissions/stock/pricing/expenses/suppliers/customers;
   **inter-branch & inter-location transfers**: request → approve → dispatch → receive,
   partial, discrepancies; transfer history; branch comparison
@@ -348,6 +348,16 @@ contradicts the doc without a change-log entry.**
   cashier = their register**
 - **Acceptance:** 3-location transfer with 1 discrepancy fully traceable; branch manager's
   API cannot read branch 2 (tested); comparison report ranks branches by sales/margin/shrinkage.
+- **Day 16 done:** transfers engine (requested→approved→shipped→received, cancel pre-ship,
+  per-line received_qty, discrepancy = sent−received, history, TR- refs on every stock move,
+  batch lines move the batch itself); receiving-branch approval rule; visibility audit closed 6
+  leaks (customers, stock moves, balances, price rules, batches, batch write-off) + owner
+  stock/batch/serial moves now tagged with the location's own branch; branch comparison report
+  (ranked sales + margin + shrinkage, windowed, scoped); manager Transfers tab + Branch
+  Comparison card (i18n EN/SW); products?branch_id= for cross-branch reads. 131 tests (was 124)
+  + 37-step smoke; all three acceptance criteria in the suite. Day 17: branch dashboard polish,
+  transfer UX (scheduled/periodic transfers, transfer cost), supplier/expense branch views as
+  Phases 13–14 land.
 
 ### Phase 13 — Stock-Taking, Shrinkage & Reconciliation · Day 18
 - Full / partial / **blind** counts, expected-vs-actual, variance with **reason codes**,
