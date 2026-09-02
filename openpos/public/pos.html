@@ -43,6 +43,12 @@
   .act-row { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 8px; margin-top: 10px; }
   .followup { margin-top: 10px; padding: 10px; border: 1px dashed #94a3b8; border-radius: 8px; background: #f8fafc; }
   .followup .row { gap: 6px; }
+  .shift-bar { background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; margin-bottom: 8px; }
+  .shift-bar.warn { background: #fef3c7; border-color: #fcd34d; }
+  .shift-bar .row { gap: 6px; margin-top: 6px; }
+  .shift-bar input { padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; }
+  .variance-ok { color: #15803d; font-weight: 700; }
+  .variance-bad { color: #b91c1c; font-weight: 700; }
   .tip { background: var(--green-soft); border: 1px solid #bfe3d0; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; margin-bottom: 8px; }
   .tip b { color: var(--green-dark); }
   .tip button { float: right; border: none; background: none; cursor: pointer; color: var(--muted); font-size: 14px; }
@@ -105,6 +111,7 @@
   </div>
   <div class="pos-right">
     <div class="tip hidden" id="p-tip"><button id="p-tip-x">✕</button><span data-i18n="till_tip"></span></div>
+    <div class="shift-bar hidden" id="p-shift"></div>
     <div class="cust-row">
       <select id="p-cust" style="flex:1"></select>
       <input id="p-promo" placeholder="Promo" style="width:90px" title="Promo code">
@@ -178,6 +185,7 @@ let CART = [];            // {variant_id, product_id, name, sub, qty, unit_price
 let PAY_METHOD = 'cash';
 let PAY_METHODS = [{ key: 'cash', label: 'Cash', sw: 'Taslimu', async: false, ref: false, needsCustomer: false }];
 let MPESA_CFG = { mode: 'manual', shortcode: '', paybill: '', phone: '' };
+let SHIFT = null, SHIFT_ENFORCED = false, SHIFT_RESULT = null;
 let PENDING_ADD = null;   // add waiting on age confirm
 let PIN_CB = null;        // supervisor PIN callback
 let RESUME_SALE = null;   // held sale being paid {id, gross}
@@ -250,6 +258,7 @@ async function initMain() {
   applyI18n();
   wireCart();
   loadPayMethods();
+  if (ME.role === 'cashier' || ME.role === 'staff') loadShift();
   if (!localStorage.getItem('op_till_tip_v1')) $('#p-tip').classList.remove('hidden');
   setTimeout(() => $('#scan').focus(), 50);
 }
@@ -699,7 +708,85 @@ function showReceipt(data) {
   if (CUST_ID()) $('#p-cust').value = '';
   drawCart(); $('#p-amount').value = '';
   wireFollowup(data, pendingPay, balance);
+  if (ME && (ME.role === 'cashier' || ME.role === 'staff')) loadShift();
   $('#scan').focus();
+}
+
+// ---------------- shift & till control ----------------
+async function loadShift() {
+  try {
+    const r = await api('/api/shifts/mine');
+    SHIFT = r.shift; SHIFT_ENFORCED = !!r.enforced;
+  } catch { SHIFT = null; }
+  drawShift();
+}
+
+function drawShift() {
+  const el = $('#p-shift');
+  if (!$('#p-shift')) return;
+  const f = (n) => `${OP.sym || 'Ksh'} ${Number(n || 0).toLocaleString('en-KE')}`;
+  const sellBtn = $('#sell-btn');
+  if (!SHIFT) {
+    const enforced = SHIFT_ENFORCED && (ME.role === 'cashier');
+    el.classList.remove('hidden');
+    el.classList.toggle('warn', enforced);
+    el.innerHTML = `<div class="r"><b>${t('no_shift_open')}</b><span>${enforced ? t('till_enforced') : t('shift_hint')}</span></div>
+      <div class="row"><button class="btn small" id="sh-open">${t('open_shift')}</button>
+      <span class="hidden" id="sh-float-wrap"><input id="sh-float" type="number" min="0" placeholder="${t('float')} (0 ok)" style="width:130px"><button class="btn small" id="sh-float-go">${t('confirm')}</button></span></div>`;
+    el.querySelector('#sh-open').onclick = () => { el.querySelector('#sh-float-wrap').classList.remove('hidden'); el.querySelector('#sh-float').focus(); };
+    el.querySelector('#sh-float-go').onclick = async () => {
+      try {
+        await api('/api/shifts', { method: 'POST', body: { float_open: Number($('#sh-float').value) || 0 } });
+        SHIFT_RESULT = null; await loadShift();
+      } catch (e) { toast($('#p-msg'), e.message, false); }
+    };
+    if (enforced && sellBtn) sellBtn.disabled = true;
+    return;
+  }
+  if (sellBtn) sellBtn.disabled = false;
+  el.classList.remove('hidden', 'warn');
+  let body;
+  if (SHIFT.status === 'open') {
+    body = `<div class="r"><b>${t('shift_open')}: #${SHIFT.id}</b><span>${esc(SHIFT.register_name || '')} · ${t('float')} ${f(SHIFT.float_open)} · ${t('drawer')}: <b>${f(SHIFT.float_open + SHIFT.cash_in - SHIFT.cash_refunded - SHIFT.payouts - SHIFT.deposits)}</b></span></div>
+      <div class="row"><span class="muted small">${t('expected')}: ${f(SHIFT.expected_cash)}</span>
+      <span class="spacer"></span>
+      <button class="btn ghost small" id="sh-payout">${t('payout')}</button>
+      <button class="btn small" id="sh-close">${t('close_shift')}</button></div>
+      <div class="hidden" id="sh-payout-wrap" style="margin-top:6px"><input id="sh-payout-amt" type="number" min="1" placeholder="amount" style="width:100px"> <input id="sh-payout-reason" placeholder="${t('reason')}" style="flex:1"> <button class="btn small" id="sh-payout-go">${t('add')}</button></div>
+      <div class="hidden" id="sh-close-wrap" style="margin-top:6px"><input id="sh-counted" type="number" min="0" placeholder="${t('counted')}" style="width:120px"> <input id="sh-note" placeholder="${t('note')}" style="flex:1"> <button class="btn small" id="sh-close-go">${t('close_shift')}</button></div>`;
+  } else {
+    const v = SHIFT.variance || 0;
+    body = `<div class="r"><b>${t('shift_closed')}: #${SHIFT.id}</b><span>${t('expected')} ${f(SHIFT.expected_cash)} · ${t('counted')} ${f(SHIFT.counted_cash)} · ${t('variance')}: <span class="${v === 0 ? 'variance-ok' : 'variance-bad'}">${v === 0 ? '0 ✓' : (v > 0 ? '+' : '') + f(v).replace('Ksh ', '')}</span></span></div>
+      <div class="row"><button class="btn small" id="sh-new">${t('new_shift')}</button></div>`;
+  }
+  el.innerHTML = body;
+  const po = el.querySelector('#sh-payout');
+  if (po) {
+    po.onclick = () => el.querySelector('#sh-payout-wrap').classList.toggle('hidden');
+    el.querySelector('#sh-payout-go').onclick = async () => {
+      try {
+        await api(`/api/shifts/${SHIFT.id}/payouts`, { method: 'POST', body: { amount: Number($('#sh-payout-amt').value), reason: $('#sh-payout-reason').value.trim() } });
+        await loadShift();
+      } catch (e) { toast($('#p-msg'), e.message, false); }
+    };
+  }
+  const cl = el.querySelector('#sh-close');
+  if (cl) {
+    cl.onclick = () => el.querySelector('#sh-close-wrap').classList.toggle('hidden');
+    el.querySelector('#sh-close-go').onclick = async () => {
+      try {
+        const r = await api(`/api/shifts/${SHIFT.id}/close`, { method: 'POST', body: { counted_cash: Number($('#sh-counted').value) || 0, note: $('#sh-note').value.trim() } });
+        SHIFT = r.shift; drawShift();
+      } catch (e) { toast($('#p-msg'), e.message, false); }
+    };
+  }
+  const nw = el.querySelector('#sh-new');
+  if (nw) nw.onclick = async () => {
+    try {
+      await api('/api/shifts', { method: 'POST', body: { float_open: Number(prompt(t('float') + '?', '0')) || 0 } });
+      await loadShift();
+    } catch (e) { toast($('#p-msg'), e.message, false); }
+  };
 }
 
 function wireFollowup(data, pendingPay, balance) {

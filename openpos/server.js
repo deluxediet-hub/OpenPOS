@@ -388,7 +388,7 @@ function createApp(d) {
   app.use(express.static(path.join(__dirname, 'public')));
 
   // ---- health / status ------------------------------------------------------
-  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 8 }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 9 }));
 
   app.get('/api/setup/status', (req, res) => {
     res.json({
@@ -3098,6 +3098,7 @@ function createApp(d) {
   // One call = scan-to-receipt: validate → freeze prices → (stock + pay) or hold.
   app.post('/api/sales', me, (req, res) => {
     try {
+      requireOpenShift(d, req.user);
       const b = req.body || {};
       const kind = b.kind === 'quote' ? 'quote' : 'sale';
       if (kind === 'quote' && b.payment) {
@@ -3244,6 +3245,7 @@ function createApp(d) {
   // Resume a held sale (kind 'sale'): stock moves exactly once, here.
   app.post('/api/sales/:id/pay', me, (req, res) => {
     try {
+      requireOpenShift(d, req.user);
       const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(req.params.id));
       if (!sale) return res.status(404).json({ error: 'not found' });
       if (sale.status !== 'suspended') return res.status(400).json({ error: `sale is ${sale.status}, not held` });
@@ -3268,6 +3270,7 @@ function createApp(d) {
   // re-validates its lines, and moves stock exactly once — then it is an invoice.
   app.post('/api/sales/:id/convert', me, (req, res) => {
     try {
+      requireOpenShift(d, req.user);
       const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(req.params.id));
       if (!sale) return res.status(404).json({ error: 'not found' });
       if (sale.kind !== 'quote') return res.status(400).json({ error: 'only quotes can be converted' });
@@ -3388,6 +3391,7 @@ function createApp(d) {
   // takes its stock step here — exactly once, on the first money in.
   app.post('/api/sales/:id/payments', me, (req, res) => {
     try {
+      requireOpenShift(d, req.user);
       const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(req.params.id));
       if (!sale) return res.status(404).json({ error: 'not found' });
       if (['voided', 'refunded', 'paid'].includes(sale.status)) {
@@ -3696,6 +3700,210 @@ function createApp(d) {
   });
 
 
+  // ---- Phase 9: shifts & till control ---------------------------------------
+  // A shift = one cashier's session at one till, starting with a known float.
+  // The drawer is tracked from the payment engine: expected cash =
+  //   float + cash collected − cash refunded − payouts − deposits
+  // Closing records the count; the variance is the only number that matters.
+
+  function shiftsConfig(d) {
+    return dbm.getSetting(d, 'shifts', { enforced: false }) || { enforced: false };
+  }
+
+  function openShiftForUser(d, userId) {
+    return d.prepare(`SELECT * FROM shifts WHERE user_id = ? AND status = 'open'`).get(userId) || null;
+  }
+
+  function shiftCashState(d, shift) {
+    const end = shift.closed_at || new Date().toISOString();
+    const [reg, uid] = [shift.register_id, shift.user_id];
+    // Cash ever collected for this till+cashier in the window (still in, or later
+    // refunded — the refund is subtracted below exactly once).
+    const cashIn = d.prepare(
+      `SELECT COALESCE(SUM(p.amount), 0) AS s FROM payments p JOIN sales s ON s.id = p.sale_id
+       WHERE p.method = 'cash' AND p.status IN ('confirmed', 'refunded')
+         AND s.register_id = ? AND s.user_id = ? AND s.created_at >= ? AND s.created_at < ?`
+    ).get(reg, uid, shift.opened_at, end).s;
+    // Cash that physically left the drawer while this shift was running —
+    // whoever made the sale, the money came out of THIS drawer.
+    const cashOut = d.prepare(
+      `SELECT COALESCE(SUM(p.amount), 0) AS s FROM payments p JOIN sales s ON s.id = p.sale_id
+       WHERE p.method = 'cash' AND p.status = 'refunded'
+         AND s.register_id = ? AND s.user_id = ? AND p.updated_at IS NOT NULL
+         AND p.updated_at >= ? AND p.updated_at < ?`
+    ).get(reg, uid, shift.opened_at, end).s;
+    const payouts = reg || uid
+      ? d.prepare(`SELECT COALESCE(SUM(amount), 0) AS s FROM shift_payouts WHERE shift_id = ?`).get(shift.id).s
+      : 0;
+    const deposits = reg
+      ? d.prepare(`SELECT COALESCE(SUM(amount), 0) AS s FROM deposits WHERE register_id = ? AND created_at >= ? AND created_at < ?`).get(reg, shift.opened_at, end).s
+      : 0;
+    const expected = shift.float_open + cashIn - cashOut - payouts - deposits;
+    return { cashIn, cashOut, payouts, deposits, expected };
+  }
+
+  function shiftPayload(d, shift) {
+    const cash = shiftCashState(d, shift);
+    const user = shift.user_id ? d.prepare('SELECT name FROM users WHERE id = ?').get(shift.user_id) : null;
+    const reg = shift.register_id ? d.prepare('SELECT name FROM registers WHERE id = ?').get(shift.register_id) : null;
+    const branch = d.prepare('SELECT name FROM branches WHERE id = ?').get(shift.branch_id);
+    return {
+      ...shift,
+      cashier: user ? user.name : `#${shift.user_id}`,
+      register_name: reg ? reg.name : (shift.terminal || ''),
+      branch_name: branch ? branch.name : '',
+      cash_in: cash.cashIn, cash_refunded: cash.cashOut,
+      payouts: cash.payouts, deposits: cash.deposits,
+      expected_cash: cash.expected,
+      payout_rows: d.prepare('SELECT * FROM shift_payouts WHERE shift_id = ? ORDER BY id').all(shift.id)
+    };
+  }
+
+  function requireOpenShift(d, user) {
+    if (!shiftsConfig(d).enforced) return;
+    if (user.role !== 'cashier') return; // owner/manager are not till-bound
+    if (openShiftForUser(d, user.id)) return;
+    throw httpError(403, 'open a shift before selling (till control is enforced for this business)');
+  }
+
+  // Open a shift: one open shift per cashier, at a real till, with a float.
+  app.post('/api/shifts', me, (req, res) => {
+    try {
+      const b = req.body || {};
+      const ctx = saleContext(d, req.user);
+      let register = null;
+      if (b.register_id) {
+        const rid = numOrNull(b.register_id);
+        const visible = visibleBranches(d, req.user);
+        register = rid ? d.prepare('SELECT * FROM registers WHERE id = ? AND active = 1').get(rid) : null;
+        if (!register || !visible.some((x) => x.id === register.branch_id)) throw httpError(400, 'register not found for this user');
+      } else {
+        register = ctx.register;
+      }
+      if (!register) throw httpError(400, 'no till for this user — assign a register first (or pass register_id)');
+      if (openShiftForUser(d, req.user.id)) throw httpError(409, 'you already have an open shift — close it first');
+      const float = intShillings(b.float_open);
+      if (float === null) throw httpError(400, 'float_open must be whole shillings (0 is allowed)');
+      const t = new Date().toISOString();
+      const id = d.prepare(
+        `INSERT INTO shifts (branch_id, terminal, register_id, user_id, status, opened_at, float_open, expected_cash, note)
+         VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?)`
+      ).run(register.branch_id, register.name, register.id, req.user.id, t, float, String(b.note || '').trim()).lastInsertRowid;
+      d.prepare(`INSERT INTO timeclock (user_id, branch_id, event, at) VALUES (?, ?, 'in', ?)`).run(req.user.id, register.branch_id, t);
+      dbm.audit(d, {
+        userId: req.user.id, branchId: register.branch_id, action: 'shift/open',
+        entity: 'shift', entityId: String(id), detail: { float: float, register: register.name }
+      });
+      res.json({ ok: true, shift: shiftPayload(d, d.prepare('SELECT * FROM shifts WHERE id = ?').get(id)) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/shifts:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  app.get('/api/shifts', me, (req, res) => {
+    const q = req.query;
+    const branches = visibleBranches(d, req.user);
+    if (!branches.length) return res.json([]);
+    const where = ['b.id IN (' + branches.map((x) => x.id).join(',') + ')'];
+    const args = [];
+    if (q.status) { where.push('sh.status = ?'); args.push(String(q.status)); }
+    if (q.register_id) { where.push('sh.register_id = ?'); args.push(String(q.register_id)); }
+    if (q.from) { where.push('sh.opened_at >= ?'); args.push(String(q.from)); }
+    if (q.to) { where.push('sh.opened_at < ?'); args.push(String(q.to)); }
+    const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200);
+    const rows = d.prepare(
+      `SELECT sh.*, b.name AS branch_name FROM shifts sh JOIN branches b ON b.id = sh.branch_id
+       WHERE ${where.join(' AND ')} ORDER BY sh.id DESC LIMIT ?`
+    ).all(...args, limit);
+    res.json(rows.map((sh) => shiftPayload(d, sh)));
+  });
+
+  // The till header: my current shift (or none) + whether selling is gated.
+  app.get('/api/shifts/mine', me, (req, res) => {
+    const shift = openShiftForUser(d, req.user.id);
+    res.json({ shift: shift ? shiftPayload(d, shift) : null, enforced: !!shiftsConfig(d).enforced });
+  });
+
+  // Payout = cash leaving the drawer during the shift (audited, on the close report).
+  app.post('/api/shifts/:id/payouts', me, (req, res) => {
+    try {
+      const shift = d.prepare('SELECT * FROM shifts WHERE id = ?').get(numOrNull(req.params.id));
+      if (!shift) return res.status(404).json({ error: 'shift not found' });
+      if (shift.status !== 'open') return res.status(400).json({ error: 'shift is closed' });
+      if (shift.user_id !== req.user.id) return res.status(403).json({ error: 'cashiers can only make payouts on their own shift' });
+      const b = req.body || {};
+      const amount = intShillings(b.amount);
+      if (amount === null || amount <= 0) return res.status(400).json({ error: 'payout must be whole shillings > 0' });
+      const run = d.transaction(() => {
+        d.prepare('INSERT INTO shift_payouts (shift_id, amount, reason, user_id, created_at) VALUES (?, ?, ?, ?, ?)')
+          .run(shift.id, amount, String(b.reason || '').trim(), req.user.id, new Date().toISOString());
+      });
+      run();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: shift.branch_id, action: 'shift/payout',
+        entity: 'shift', entityId: String(shift.id), detail: { amount, reason: b.reason || undefined }
+      });
+      res.json({ ok: true, shift: shiftPayload(d, d.prepare('SELECT * FROM shifts WHERE id = ?').get(shift.id)) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/shifts/:id/payouts:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Close a shift: record the count, compute expected + variance, no double-close.
+  app.post('/api/shifts/:id/close', me, (req, res) => {
+    try {
+      const shift = d.prepare('SELECT * FROM shifts WHERE id = ?').get(numOrNull(req.params.id));
+      if (!shift) return res.status(404).json({ error: 'shift not found' });
+      if (shift.status !== 'open') return res.status(409).json({ error: 'shift is already closed' });
+      const isSelf = shift.user_id === req.user.id;
+      if (!isSelf && !['owner', 'manager'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'only the shift cashier (or a manager/owner) can close this shift' });
+      }
+      const b = req.body || {};
+      const counted = intShillings(b.counted_cash);
+      if (counted === null || counted < 0) return res.status(400).json({ error: 'counted_cash must be whole shillings >= 0' });
+      const cash = shiftCashState(d, shift);
+      const variance = counted - cash.expected;
+      const t = new Date().toISOString();
+      const run = d.transaction(() => {
+        d.prepare(`UPDATE shifts SET status = 'closed', closed_at = ?, expected_cash = ?, counted_cash = ?, variance = ?, note = ? WHERE id = ?`)
+          .run(t, cash.expected, counted, variance, String(b.note || '').trim() || shift.note, shift.id);
+        d.prepare(`INSERT INTO timeclock (user_id, branch_id, event, at) VALUES (?, ?, 'out', ?)`).run(shift.user_id, shift.branch_id, t);
+      });
+      run();
+      dbm.audit(d, {
+        userId: req.user.id, branchId: shift.branch_id, action: 'shift/close',
+        entity: 'shift', entityId: String(shift.id),
+        detail: { float: shift.float_open, cash_in: cash.cashIn, cash_refunded: cash.cashOut, payouts: cash.payouts,
+          deposits: cash.deposits, expected: cash.expected, counted, variance, bySelf: isSelf, note: b.note || undefined }
+      });
+      res.json({ ok: true, shift: shiftPayload(d, d.prepare('SELECT * FROM shifts WHERE id = ?').get(shift.id)) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      console.error('[error] POST /api/shifts/:id/close:', e.message);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Till control switch (owner): when enforced, cashiers cannot sell without an open shift.
+  app.get('/api/settings/shifts', me, (req, res) => {
+    res.json(shiftsConfig(d));
+  });
+
+  app.put('/api/settings/shifts', me, can('settings.manage'), (req, res) => {
+    const b = req.body || {};
+    const cur = shiftsConfig(d);
+    const next = { enforced: !!cur.enforced };
+    if (typeof b.enforced === 'boolean') next.enforced = b.enforced;
+    dbm.setSetting(d, 'shifts', next);
+    dbm.audit(d, { userId: req.user.id, action: 'settings/shifts', entity: 'setting', entityId: 'shifts', detail: next });
+    res.json({ ok: true, ...next });
+  });
+
   // ---- CSV import/export (products + variants + packs in one file) --------------------------------
   const CSV_COLUMNS = [
     'section', 'product_id', 'product_sku', 'product_name', 'product_name_sw', 'category', 'brand',
@@ -3941,7 +4149,7 @@ if (require.main === module) {
   auth.pruneSessions(db);
   app.listen(PORT, '0.0.0.0', () => {
     const s = dbm.getSetting(db, 'business', {});
-    console.log(`OpenPOS v2 (Phase 8)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
+    console.log(`OpenPOS v2 (Phase 9)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
   });
 }
 

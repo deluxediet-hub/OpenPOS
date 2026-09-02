@@ -468,6 +468,28 @@
     </section>
 
     <!-- ============ PRICING (Day 9 — R-PR) ============ -->
+    <section id="tab-shifts" class="hidden">
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0" data-i18n="open">Open shifts</h3>
+          <span class="spacer"></span>
+          <button class="btn small" id="sh-m-reload" data-i18n="reload">Reload</button>
+        </div>
+        <div style="overflow:auto">
+          <table><thead><tr><th data-i18n="cashier">Cashier</th><th data-i18n="register_serial">Till</th><th data-i18n="branch_name">Branch</th><th data-i18n="starts_at">Opened</th><th data-i18n="float">Float</th><th data-i18n="cash_in">Cash in</th><th data-i18n="expected">Expected</th><th></th></tr></thead>
+          <tbody id="sh-open-body"></tbody>
+        </table>
+        <div class="muted small" id="sh-open-empty" data-i18n="no_rows">No rows</div>
+      </div>
+      <div class="card">
+        <h3 data-i18n="shift_closed">Closed shifts</h3>
+        <div style="overflow:auto">
+          <table><thead><tr><th data-i18n="cashier">Cashier</th><th data-i18n="register_serial">Till</th><th data-i18n="ends_at">Closed</th><th data-i18n="float">Float</th><th data-i18n="expected">Expected</th><th data-i18n="counted">Counted</th><th data-i18n="variance">Variance</th><th data-i18n="note">Note</th></tr></thead>
+          <tbody id="sh-closed-body"></tbody>
+        </table>
+        <div class="muted small" id="sh-closed-empty" data-i18n="no_rows">No rows</div>
+      </div>
+    </section>
     <section id="tab-payments" class="hidden">
       <div class="card" style="margin-bottom:14px">
         <div class="row" style="margin-bottom:10px">
@@ -675,6 +697,7 @@ const TABS = [
   { id: 'stock',      label: 'stock_ledger', always: true },
   { id: 'categories', label: 'categories', always: true },
   { id: 'tills',      label: 'tills',     always: true },
+  { id: 'shifts',     label: 'shifts',     always: true },
   { id: 'customers',  label: 'customers', always: true, badge: 'Day 15' },
   { id: 'purchasing', label: 'purchasing', cap: 'purchasing' },
   { id: 'payments',   label: 'payments',   always: true },
@@ -713,6 +736,50 @@ function selectTab(name) {
   if (name === 'stock') loadStock();
   if (name === 'pricing') loadPricing();
   if (name === 'payments') loadPayments();
+  if (name === 'shifts') loadShiftsM();
+}
+
+// ---------------- shifts (Phase 9) ----------------
+async function loadShiftsM() {
+  $('#sh-m-reload').onclick = loadShiftsM;
+  const [open, closed] = await Promise.all([
+    api('/api/shifts?status=open&limit=50'),
+    api('/api/shifts?status=closed&limit=20')
+  ]);
+  $('#sh-open-body').innerHTML = open.map((sh) =>
+    `<tr><td>${esc(sh.cashier)}</td><td>${esc(sh.register_name)}</td><td>${esc(sh.branch_name)}</td>
+     <td>${new Date(sh.opened_at).toLocaleString()}</td><td>${fmt(sh.float_open)}</td>
+     <td>${fmt(sh.cash_in)}</td><td><b>${fmt(sh.expected_cash)}</b></td>
+     <td class="row" style="gap:4px"><button class="btn ghost small" data-act="payout" data-id="${sh.id}">${t('payout')}</button>
+     <button class="btn small" data-act="close" data-id="${sh.id}" data-cashier="${esc(sh.cashier)}">${t('close_shift')}</button></td></tr>`).join('');
+  $('#sh-open-empty').style.display = open.length ? 'none' : '';
+  $('#sh-closed-body').innerHTML = closed.map((sh) => {
+    const v = sh.variance || 0;
+    return `<tr><td>${esc(sh.cashier)}</td><td>${esc(sh.register_name)}</td>
+     <td>${sh.closed_at ? new Date(sh.closed_at).toLocaleString() : '—'}</td><td>${fmt(sh.float_open)}</td>
+     <td>${fmt(sh.expected_cash)}</td><td>${sh.counted_cash === null ? '—' : fmt(sh.counted_cash)}</td>
+     <td class="${v === 0 ? 'variance-ok' : 'variance-bad'}">${v === 0 ? '0 ✓' : (v > 0 ? '+' : '') + Number(v).toLocaleString('en-KE')}</td>
+     <td class="muted small">${esc(sh.note || '')}</td></tr>`;
+  }).join('');
+  $('#sh-closed-empty').style.display = closed.length ? 'none' : '';
+  $('#sh-open-body').querySelectorAll('button[data-act]').forEach((b) => {
+    b.onclick = async () => {
+      try {
+        if (b.dataset.act === 'payout') {
+          const amount = prompt(`${t('payout')} — ${t('total')}?`);
+          if (!amount) return;
+          const reason = prompt(`${t('reason')}?`) || '';
+          await api(`/api/shifts/${b.dataset.id}/payouts`, { method: 'POST', body: { amount: Number(amount), reason } });
+        } else {
+          const counted = prompt(`${t('counted')} cash — ${b.dataset.cashier}?`);
+          if (counted === null) return;
+          const note = prompt(`${t('note')}?`) || '';
+          await api(`/api/shifts/${b.dataset.id}/close`, { method: 'POST', body: { counted_cash: Number(counted) || 0, note } });
+        }
+        await loadShiftsM();
+      } catch (e) { alert(e.message); }
+    };
+  });
 }
 
 // ---------------- payments (Phase 8) ----------------

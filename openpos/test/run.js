@@ -1860,6 +1860,131 @@ function section(title) { console.log(`\n${title}`); }
     assert.ok(aud >= 1, 'deposit audited');
   });
 
+  // ---- Phase 9: shifts & till control ---------------------------------------
+  await test('shifts: open with a float; one open shift per cashier', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const asB = (o) => withCookie(pos.cashB)(o);
+    const r = await asA({ path: '/api/shifts', method: 'POST', body: { float_open: 500 } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    pos.shiftA = r.body.shift;
+    assert.strictEqual(pos.shiftA.status, 'open');
+    assert.strictEqual(pos.shiftA.float_open, 500);
+    assert.strictEqual(pos.shiftA.register_id, pos.till1, 'shift bound to the cashier\'s till');
+    const again = await asA({ path: '/api/shifts', method: 'POST', body: { float_open: 100 } });
+    assert.strictEqual(again.status, 409, 'one open shift per cashier');
+    const rb = await asB({ path: '/api/shifts', method: 'POST', body: { float_open: 200 } });
+    assert.strictEqual(rb.status, 200, JSON.stringify(rb.body));
+    pos.shiftB = rb.body.shift;
+    const mine = await asA({ path: '/api/shifts/mine' });
+    assert.strictEqual(mine.body.shift.id, pos.shiftA.id);
+    assert.strictEqual(mine.body.enforced, false, 'till control off by default');
+  });
+
+  await test('shifts: expected cash = float + cash in − refunds − payouts − deposits (M-Pesa never touches the drawer)', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const mgrCookie = await cashierLogin('Mwenyeji M', '2345');
+    const mgr = (o) => withCookie(mgrCookie)(o);
+    // A sells 1×A (228) in cash
+    const s1 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 250 } } });
+    assert.strictEqual(s1.status, 200, JSON.stringify(s1.body));
+    // A sells 1×A by M-Pesa — never drawer cash
+    const s2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 228, phone: '0700111222' } } });
+    assert.strictEqual(s2.status, 200, JSON.stringify(s2.body));
+    await asA({ path: `/api/payments/${s2.body.payments[0].id}/confirm`, method: 'POST', body: { code: 'SFA777' } });
+    let m = (await asA({ path: '/api/shifts/mine' })).body.shift;
+    assert.strictEqual(m.cash_in, 228, 'cash collected');
+    assert.strictEqual(m.expected_cash, 500 + 228, 'mpesa does not touch the drawer');
+    // manager refunds the cash payment — money back out of the drawer
+    const cashPay = s1.body.payments[0];
+    const ref = await mgr({ path: `/api/payments/${cashPay.id}/refund`, method: 'POST', body: {} });
+    assert.strictEqual(ref.status, 200, JSON.stringify(ref.body));
+    m = (await asA({ path: '/api/shifts/mine' })).body.shift;
+    assert.strictEqual(m.cash_refunded, 228);
+    assert.strictEqual(m.expected_cash, 500, 'refund takes the cash back out');
+    // payout
+    const po = await asA({ path: `/api/shifts/${pos.shiftA.id}/payouts`, method: 'POST', body: { amount: 100, reason: 'small change' } });
+    assert.strictEqual(po.status, 200, JSON.stringify(po.body));
+    m = (await asA({ path: '/api/shifts/mine' })).body.shift;
+    assert.strictEqual(m.payouts, 100);
+    assert.strictEqual(m.expected_cash, 400);
+    // deposit from the till
+    const dep = await authJ({ path: '/api/deposits', method: 'POST', body: { amount: 150, ref: 'DEP-SHIFT', register_id: pos.till1 } });
+    assert.strictEqual(dep.status, 200, JSON.stringify(dep.body));
+    m = (await asA({ path: '/api/shifts/mine' })).body.shift;
+    assert.strictEqual(m.deposits, 150);
+    assert.strictEqual(m.expected_cash, 250, '500 + 228 − 228 − 100 − 150');
+    // cashiers cannot payout on someone else's shift
+    const asB = (o) => withCookie(pos.cashB)(o);
+    const cross = await asB({ path: `/api/shifts/${pos.shiftA.id}/payouts`, method: 'POST', body: { amount: 50 } });
+    assert.strictEqual(cross.status, 403, 'own shift only');
+  });
+
+  await test('shifts: close computes the variance; no double-close; handover by manager', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const asB = (o) => withCookie(pos.cashB)(o);
+    const mgrCookie = await cashierLogin('Mwenyeji M', '2345');
+    const mgr = (o) => withCookie(mgrCookie)(o);
+    const c = await asA({ path: `/api/shifts/${pos.shiftA.id}/close`, method: 'POST', body: { counted_cash: 250 } });
+    assert.strictEqual(c.status, 200, JSON.stringify(c.body));
+    assert.strictEqual(c.body.shift.status, 'closed');
+    assert.strictEqual(c.body.shift.expected_cash, 250);
+    assert.strictEqual(c.body.shift.variance, 0, 'counted = expected');
+    assert.ok(c.body.shift.closed_at);
+    const again = await asA({ path: `/api/shifts/${pos.shiftA.id}/close`, method: 'POST', body: { counted_cash: 250 } });
+    assert.strictEqual(again.status, 409, 'no double-close');
+    // sales still work with no open shift (enforcement off)
+    const sell = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(sell.status, 200, JSON.stringify(sell.body));
+    // handover: manager closes B's shift; a short count shows as negative variance
+    const cb = await mgr({ path: `/api/shifts/${pos.shiftB.id}/close`, method: 'POST', body: { counted_cash: 100, note: 'handover' } });
+    assert.strictEqual(cb.status, 200, JSON.stringify(cb.body));
+    assert.strictEqual(cb.body.shift.variance, -100, 'counted 100 vs expected 200');
+    // cashiers cannot close each other's shifts
+    const reopen = await asA({ path: '/api/shifts', method: 'POST', body: { float_open: 100 } });
+    assert.strictEqual(reopen.status, 200, JSON.stringify(reopen.body));
+    const cross = await asB({ path: `/api/shifts/${reopen.body.shift.id}/close`, method: 'POST', body: { counted_cash: 100 } });
+    assert.strictEqual(cross.status, 403, 'only the cashier or a manager/owner');
+    pos.shiftA2 = reopen.body.shift;
+  });
+
+  await test('shifts: enforced till control gates every selling route', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const asB = (o) => withCookie(pos.cashB)(o);
+    const on = await authJ({ path: '/api/settings/shifts', method: 'PUT', body: { enforced: true } });
+    assert.strictEqual(on.status, 200, JSON.stringify(on.body));
+    // B has no open shift (manager closed it) → every selling route refused
+    const sell = await asB({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(sell.status, 403, JSON.stringify(sell.body));
+    assert.match(sell.body.error, /open a shift/);
+    const quote = await asB({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], kind: 'quote' } });
+    assert.strictEqual(quote.status, 403, 'quotes gated too');
+    // A has an open shift → still selling
+    const okA = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], hold: true } });
+    assert.strictEqual(okA.status, 200, JSON.stringify(okA.body));
+    const payGate = await asB({ path: `/api/sales/${okA.body.sale.id}/payments`, method: 'POST', body: { method: 'cash', amount: 228 } });
+    assert.strictEqual(payGate.status, 403, 'adding a payment gated too');
+    // B opens a shift → back to selling
+    const open = await asB({ path: '/api/shifts', method: 'POST', body: { float_open: 0 } });
+    assert.strictEqual(open.status, 200, JSON.stringify(open.body));
+    const okB = await asB({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(okB.status, 200, JSON.stringify(okB.body));
+    const off = await authJ({ path: '/api/settings/shifts', method: 'PUT', body: { enforced: false } });
+    assert.strictEqual(off.status, 200);
+  });
+
+  await test('shifts: settings are owner-gated; sign-in/out lands in the timeclock', async () => {
+    const asA = (o) => withCookie(pos.cashA)(o);
+    const denied = await asA({ path: '/api/settings/shifts', method: 'PUT', body: { enforced: true } });
+    assert.strictEqual(denied.status, 403, 'cashiers cannot toggle till control');
+    const rows = d.prepare(`SELECT COUNT(*) AS n FROM timeclock WHERE user_id = ? AND event = 'in'`).get(pos.mgrId === undefined ? 1 : (d.prepare(`SELECT id FROM users WHERE name = 'POS Cashier A'`).get().id)).n;
+    assert.ok(rows >= 2, 'cashier A signed in at least twice');
+    const out = d.prepare(`SELECT COUNT(*) AS n FROM timeclock WHERE event = 'out'`).get().n;
+    assert.ok(out >= 1, 'shift closes clock out');
+    const list = (await asA({ path: '/api/shifts?status=closed&limit=5' })).body;
+    assert.ok(list.length >= 2, 'closed shifts listed');
+    assert.ok(list.every((x) => typeof x.variance === 'number'), 'variance computed on closed shifts');
+  });
+
 
   await test('two registers sell concurrently: no conflicts, stock exact, distinct tills', async () => {
     const asA = (o) => withCookie(pos.cashA)(o);

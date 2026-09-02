@@ -268,13 +268,28 @@ contradicts the doc without a change-log entry.**
   payment. **106 tests green** (was 98) + 31-step UI smoke green; health + banner report
   Phase 8.
 
-### Phase 9 — Cashier Shifts & Till Control · Day 13
+### Phase 9 — Cashier Shifts & Till Control · Day 13 ✅
 - Opening float, shift, cash movements, paid-outs, expenses, refunds, expected vs actual,
   variance, **shift handover**, closure; per-cashier accountability (discounts, refunds,
   voids, adjustments attributed)
 - **Acceptance:** shift math ties to the shilling (float + cash sales − paid-outs − refunds +
   credit = expected); a 200 KSh shortage flags with the responsible cashier; handover makes a
   clean audit break. (OpenPOS v1's shift/reconciliation concepts ported here.)
+- **Done (Day 13):** shift = one cashier's session at one till, opened with a known float
+  (`shifts.register_id`; one open shift per cashier). The drawer is computed from the
+  payment engine — **expected = float + cash collected − cash refunded − payouts − deposits**
+  (M-Pesa/card never touch the drawer; a refund is subtracted when it physically leaves, so a
+  manager refund during shift B bills shift B's drawer, not the original sale's shift).
+  Cashier payouts (audited, own shift only), deposits from the till counted out.
+  `POST /api/shifts/:id/close` records expected/counted/variance — no double-close, a
+  manager can close any shift (handover → clean audit break), cashiers can't close each
+  other's. **Till control is a capability** (`settings.shifts.enforced`, owner): when on,
+  cashiers get 403 on every selling route without an open shift — small shops leave it off.
+  Open/close clock the timeclock; every open/payout/close audited. POS shift bar (float,
+  live drawer number, payout, close → variance at a glance) + manager Shifts tab (open
+  shifts with live numbers, closed with colour-coded variance). **111 tests green**
+  (was 106) incl. cross-shift refund billing, handover variance, enforcement gating;
+  34-step UI smoke green.
 
 ### Phase 10 — Sales Lifecycle, Returns & Exchanges · Day 14
 - Sale → payment → receipt → return → refund → exchange → cancellation → void → correction,

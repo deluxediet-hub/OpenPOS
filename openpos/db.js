@@ -953,6 +953,10 @@ function migrate(d) {
   // converted at payment). Quotes never touch stock until conversion.
   addCol(d, 'sales', 'kind', "TEXT NOT NULL DEFAULT 'sale'");
 
+  // ---- Phase 9: shifts & till control (additive) ----------------------------
+  // Which till a shift belongs to (terminal = its name, kept for display).
+  addCol(d, 'shifts', 'register_id', 'INTEGER');
+
   // ---- Phase 8: payment engine (additive) ----------------------------------
   // The payments table is the per-sale payment ledger. Phase 8 widens it:
   // a full state machine (pending → confirmed | cancelled | failed;

@@ -92,6 +92,12 @@ const I18N = {
     payment_settings: 'Payment settings', refunded: 'Refunded', failed: 'Failed',
     mpesa_mode: 'M-Pesa mode', shortcode: 'Shortcode', paybill: 'Paybill/Till',
     consumer_key: 'Consumer key', consumer_secret: 'Consumer secret',
+    shifts: 'Shifts', open_shift: 'Open shift', close_shift: 'Close shift',
+    shift_open: 'Shift open', shift_closed: 'Shift closed', new_shift: 'New shift',
+    float: 'Float', cash_in: 'Cash in', drawer: 'Drawer', expected: 'Expected',
+    counted: 'Counted', variance: 'Variance', payout: 'Payout',
+    no_shift_open: 'No shift open', shift_hint: 'Sales won\'t count to a till.',
+    till_enforced: 'Till control is on — open a shift to start selling.',
   },
   sw: {
     staff_signin: 'Waketi wafanyakazi', select_staff: 'Chagua mfanyakazi', enter_pin: 'Weka PIN',
@@ -178,6 +184,12 @@ const I18N = {
     payment_settings: 'Mipangilio ya malipo', refunded: 'Imerejeshwa', failed: 'Imeshindwa',
     mpesa_mode: 'Modi ya M-Pesa', shortcode: 'Shortcode', paybill: 'Paybill/Till',
     consumer_key: 'Consumer key', consumer_secret: 'Consumer secret',
+    shifts: 'Shifuti', open_shift: 'Fungua shift', close_shift: 'Funga shift',
+    shift_open: 'Shift imefunguliwa', shift_closed: 'Shift imefungwa', new_shift: 'Shift mpya',
+    float: 'Floati', cash_in: 'Taslimu iliyopo', drawer: 'Fuku', expected: 'Inayotarajiwa',
+    counted: 'Imehesabiwa', variance: 'Tofauti', payout: 'Toleo',
+    no_shift_open: 'Hakuna shift iliyofunguliwa', shift_hint: 'Mauzo hayatahesabiwa kwa kambi.',
+    till_enforced: 'Utawala wa kambi umeanzishwa — fungua shift ili kuanza kuuza.',
   }
 };
 
