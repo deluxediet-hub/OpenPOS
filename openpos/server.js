@@ -277,7 +277,7 @@ function createApp(d) {
   app.use(express.static(path.join(__dirname, 'public')));
 
   // ---- health / status ------------------------------------------------------
-  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 2 }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 3 }));
 
   app.get('/api/setup/status', (req, res) => {
     res.json({
