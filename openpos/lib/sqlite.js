@@ -9,6 +9,14 @@ const { DatabaseSync } = require('node:sqlite');
 class Database {
   constructor(file, opts = {}) {
     this.db = new DatabaseSync(file, opts);
+    // Transaction depth — nested transactions become SAVEPOINTs so a helper
+    // called inside an open transaction (e.g. module activation during setup)
+    // cannot abort the caller's work by starting its own BEGIN.
+    this._txDepth = 0;
+  }
+
+  get inTransaction() {
+    return this._txDepth > 0;
   }
 
   pragma(sql) {
@@ -33,17 +41,29 @@ class Database {
     };
   }
 
-  /** Better-sqlite3-style transaction helper: BEGIN / COMMIT / ROLLBACK. */
+  /**
+   * Better-sqlite3-style transaction helper: BEGIN / COMMIT / ROLLBACK.
+   * Nested calls use SAVEPOINT, so a helper may open its own transaction even
+   * when the caller already has one open — the outer unit of work stays atomic.
+   */
   transaction(fn) {
     const self = this;
     return function tx(...args) {
-      self.db.exec('BEGIN');
+      const nested = self._txDepth > 0;
+      const name = `sp${self._txDepth + 1}`;
+      self._txDepth++;
+      self.db.exec(nested ? `SAVEPOINT ${name}` : 'BEGIN');
       try {
         const r = fn(...args);
-        self.db.exec('COMMIT');
+        self.db.exec(nested ? `RELEASE ${name}` : 'COMMIT');
+        self._txDepth--;
         return r;
       } catch (e) {
-        try { self.db.exec('ROLLBACK'); } catch { /* already rolled back */ }
+        self._txDepth--;
+        try {
+          self.db.exec(nested ? `ROLLBACK TO ${name}` : 'ROLLBACK');
+          if (nested) self.db.exec(`RELEASE ${name}`);
+        } catch { /* already rolled back */ }
         throw e;
       }
     };

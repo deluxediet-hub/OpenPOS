@@ -1895,7 +1895,7 @@ function section(title) { console.log(`\n${title}`); }
     const mgrCookie = await cashierLogin('Mwenyeji M', '2345');
     const mgr = (o) => withCookie(mgrCookie)(o);
     // A sells 1×A (228) in cash
-    const s1 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 250 } } });
+    const s1 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 300 } } });
     assert.strictEqual(s1.status, 200, JSON.stringify(s1.body));
     // A sells 1×A by M-Pesa — never drawer cash
     const s2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 228, phone: '0700111222' } } });
@@ -2098,7 +2098,7 @@ function section(title) { console.log(`\n${title}`); }
     const asA = (o) => withCookie(pos.cashA)(o);
     const lim = await authJ({ path: '/api/settings/returns', method: 'PUT', body: { cashier_limit: 200 } });
     assert.strictEqual(lim.status, 200, JSON.stringify(lim.body));
-    const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 250 } } });
+    const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 300 } } });
     const line = (await asA({ path: `/api/sales/${s.body.sale.id}` })).body.items[0];
     const den = await asA({ path: '/api/returns', method: 'POST', body: {
       sale_id: s.body.sale.id, reason: 'other', lines: [{ sale_item_id: line.id, qty: 1 }]
@@ -2120,7 +2120,7 @@ function section(title) { console.log(`\n${title}`); }
     const asA = (o) => withCookie(pos.cashA)(o);
     const now = new Date().toISOString();
     const cid = d.prepare(`INSERT INTO customers (business_id, name, phone, created_at) VALUES (1, 'POS Return Credit', '0711333444', ?)`).run(now).lastInsertRowid;
-    const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: cid, payment: { method: 'cash', amount: 250 } } });
+    const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: cid, payment: { method: 'cash', amount: 300 } } });
     assert.strictEqual(s.status, 200, JSON.stringify(s.body));
     const line = (await asA({ path: `/api/sales/${s.body.sale.id}` })).body.items[0];
     const r = await asA({ path: '/api/returns', method: 'POST', body: {
@@ -2134,7 +2134,7 @@ function section(title) { console.log(`\n${title}`); }
     const p = d.prepare('SELECT * FROM payments WHERE sale_id = ?').get(s.body.sale.id);
     assert.strictEqual(p.refunded, 0, 'no money out the door');
     // no customer → store credit refused
-    const s2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 250 } } });
+    const s2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 300 } } });
     const line2 = (await asA({ path: `/api/sales/${s2.body.sale.id}` })).body.items[0];
     const noCust = await asA({ path: '/api/returns', method: 'POST', body: {
       sale_id: s2.body.sale.id, reason: 'other', refund_as: 'store_credit', lines: [{ sale_item_id: line2.id, qty: 1 }]
@@ -2707,6 +2707,323 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(rc.body.transfer.status, 'received');
     assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(
       d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(p12.gadget).id, p12.locWH).qty, 3);
+  });
+
+
+  // ================= Phase 18 — industry module framework (R-M) =================
+  // Acceptance: a new industry = fields + hooks + reports + permissions + UI +
+  // template data, with NO change to the core. The fixture module below is
+  // registered from this test file — that is the proof.
+  section('Phase 18 — industry module framework (R-M): new industry, no core changes');
+
+  const mods = require('../modules/loader');
+
+  const p18 = {};
+  const cookieFor = async (name, pin) =>
+    (await authJ({ path: '/api/login', method: 'POST', body: { name, pin } })).headers.get('set-cookie').split(';')[0];
+
+  await test('fixtures: a till cashier, a manager session and a plain product', async () => {
+    const s = await authJ({ path: '/api/staff', method: 'POST', body: { name: 'P18 Cashier', role: 'cashier', pin: '2468', branch_id: 1 } });
+    assert.strictEqual(s.status, 200, JSON.stringify(s.body));
+    p18.cashier = await cookieFor('P18 Cashier', '2468');
+    p18.manager = await cookieFor('Mwenyeji M', '2345');
+    p18.loc = d.prepare('SELECT id FROM locations WHERE branch_id = 1 AND is_default = 1').get().id;
+
+    const mk = async (body) => {
+      const r = await authJ({ path: '/api/products', method: 'POST', body });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      const vid = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(r.body.id).id;
+      const res = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: r.body.id, qty: body._qty || 10, type: 'opening', reason: 'opening', unit_cost: body.cost } });
+      assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+      return { id: r.body.id, vid };
+    };
+    p18.plain = await mk({ name: 'P18 Plain', barcode: '77801', cost: 100, price: 200, _qty: 20 });
+    p18.premium = await mk({ name: 'P18 Premium Malt', barcode: '77802', cost: 900, price: 1500, meta: { premium: 1 }, _qty: 10 });
+    p18.rx = await mk({ name: 'P18 Amoxicillin', barcode: '77803', cost: 150, price: 300, requires_rx: 1, _qty: 10 });
+    p18.ctl = await mk({ name: 'P18 Controlled', barcode: '77804', cost: 600, price: 1500, is_controlled: 1, _qty: 10 });
+  });
+
+  await test('registry: both industries are discovered; a duka activates neither', async () => {
+    const r = await authJ({ path: '/api/modules' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const ids = r.body.modules.map((m) => m.id);
+    assert.ok(ids.includes('spirits') && ids.includes('pharmacy'), ids.join(','));
+    assert.strictEqual(r.body.trade, 'duka');
+    assert.deepStrictEqual(r.body.active, [], 'the core must not switch an industry on by itself');
+    const pharm = r.body.modules.find((m) => m.id === 'pharmacy');
+    for (const h of ['productFields', 'checkout.validateLine', 'stock.rule', 'reports', 'permissions', 'ui']) {
+      assert.ok(pharm.provides.includes(h), `pharmacy declares ${h}: ${pharm.provides}`);
+    }
+    // the core has no industry words left in the checkout path
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    assert.ok(!/requires a prescription \(pharmacy workflow\)/.test(src), 'pharmacy rule still hardcoded in core');
+  });
+
+  await test('owner activates a module: product fields, capability and audit land with it', async () => {
+    const r = await authJ({ path: '/api/modules/spirits/activate', method: 'POST', body: {} });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.active.includes('spirits'), JSON.stringify(r.body.active));
+    // hook 1 — product fields became real attribute definitions
+    const defs = (await authJ({ path: '/api/attribute-defs' })).body.map((a) => a.key);
+    for (const k of ['abv', 'bottle_ml', 'case_size', 'premium']) assert.ok(defs.includes(k), `${k} not in ${defs}`);
+    // R-C4: the module asked for the packs capability (bottle → case)
+    assert.strictEqual(d.prepare("SELECT enabled FROM business_capabilities WHERE capability = 'packs'").get().enabled, 1);
+    // activation is audited, and idempotent
+    const aud = d.prepare("SELECT * FROM audit_log WHERE action = 'module/activate' AND entity_id = 'spirits'").all();
+    assert.ok(aud.length >= 1, 'module activation is audited');
+    await authJ({ path: '/api/modules/spirits/activate', method: 'POST', body: {} });
+    assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM modules WHERE module_id = 'spirits'").get().n, 1, 'activate twice = one row');
+  });
+
+  await test('a manager cannot switch an industry on (owner-only)', async () => {
+    const r = await withCookie(p18.manager)({ path: '/api/modules/pharmacy/activate', method: 'POST', body: {} });
+    assert.strictEqual(r.status, 403);
+    assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM modules WHERE module_id = 'pharmacy' AND active = 1").get().n, 0);
+  });
+
+  await test('bootstrap carries the module fields, UI parts and reports to the shell', async () => {
+    const b = await authJ({ path: '/api/bootstrap' });
+    assert.strictEqual(b.status, 200);
+    assert.ok(b.body.modules.active.includes('spirits'), JSON.stringify(b.body.modules));
+    assert.ok(b.body.modules.fields.some((f) => f.key === 'abv'), 'module product fields ride along');
+    const ui = b.body.modules.ui.find((u) => u.id === 'spirits-panel');
+    assert.ok(ui && ui.script === '/modules/spirits.js', 'the UI part is declared, not hardcoded');
+    assert.ok(ui.i18n.en.spirits_tab === 'Wines & Spirits', 'the module ships its own strings');
+    assert.ok(b.body.modules.reports.some((r2) => r2.id === 'premium_sales'), 'module reports are offered');
+  });
+
+  await test('checkout gate: a premium line is a manager act (module permission, not a core rule)', async () => {
+    const asCashier = withCookie(p18.cashier);
+    const blocked = await asCashier({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.premium.vid, qty: 1 }], payment: { method: 'cash', amount: 1500 } } });
+    assert.strictEqual(blocked.status, 403, JSON.stringify(blocked.body));
+    assert.ok(/premium line/.test(blocked.body.error), blocked.body.error);
+    // no stock moved, no sale written
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(p18.premium.vid, p18.loc).qty, 10);
+    // the owner holds spirits.premium by role → the same line goes through
+    const ok = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.premium.vid, qty: 2 }], payment: { method: 'cash', amount: 3000 } } });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    // hook: beforeCommit wrote the module's own evidence
+    const log = d.prepare('SELECT * FROM spirits_premium_log ORDER BY id DESC LIMIT 1').get();
+    // 2 × 1500 net + 16% VAT = 3414 tax-inclusive, the shilling the customer paid
+    assert.ok(log && log.qty === 2 && log.gross === 3414, JSON.stringify(log));
+    // the permission is real: a cashier granted it may sell premium lines
+    const uid = d.prepare("SELECT id FROM users WHERE name = 'P18 Cashier'").get().id;
+    const grant = await authJ({ path: `/api/staff/${uid}/permissions`, method: 'POST', body: { permission: 'spirits.premium', allowed: true } });
+    assert.strictEqual(grant.status, 200, JSON.stringify(grant.body));
+    const nowOk = await asCashier({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.premium.vid, qty: 1 }], payment: { method: 'cash', amount: 1500 } } });
+    assert.strictEqual(nowOk.status, 200, JSON.stringify(nowOk.body));
+    await authJ({ path: `/api/staff/${uid}/permissions`, method: 'POST', body: { permission: 'spirits.premium', allowed: false } });
+    assert.strictEqual((await asCashier({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.premium.vid, qty: 1 }], payment: { method: 'cash', amount: 1500 } } })).status, 403);
+  });
+
+  await test('module reports run through one generic door (list, run, CSV, permission)', async () => {
+    const list = await authJ({ path: '/api/reports/modules' });
+    assert.strictEqual(list.status, 200);
+    assert.ok(list.body.reports.some((r) => r.id === 'premium_sales'), JSON.stringify(list.body.reports));
+    const run = await authJ({ path: '/api/reports/modules/premium_sales' });
+    assert.strictEqual(run.status, 200, JSON.stringify(run.body));
+    assert.ok(run.body.rows.length >= 1 && run.body.rows[0].qty >= 3, JSON.stringify(run.body.rows));
+    const csv = await fetch(`${BASE}/api/reports/modules/premium_sales?format=csv`, { headers: { cookie } });
+    assert.strictEqual(csv.status, 200);
+    assert.ok((await csv.text()).includes('product_name'), 'CSV export of a module report');
+    const missing = await authJ({ path: '/api/reports/modules/nope' });
+    assert.strictEqual(missing.status, 404);
+  });
+
+  await test('pharmacy: prescription capture is a workflow, not a wall (validateLine + beforeCommit)', async () => {
+    const on = await authJ({ path: '/api/modules/pharmacy/activate', method: 'POST', body: {} });
+    assert.strictEqual(on.status, 200, JSON.stringify(on.body));
+    const asCashier = withCookie(p18.cashier);
+    // a cashier is not a dispenser
+    const noPerm = await asCashier({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.rx.vid, qty: 1, rx_ref: 'RX-1' }], payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(noPerm.status, 403, JSON.stringify(noPerm.body));
+    assert.ok(/dispenser/.test(noPerm.body.error), noPerm.body.error);
+    // a dispenser must record the prescription reference
+    const noRx = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.rx.vid, qty: 1 }], payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(noRx.status, 400, JSON.stringify(noRx.body));
+    assert.ok(/prescription reference required/.test(noRx.body.error), noRx.body.error);
+    // with the reference, it dispenses — and the evidence is kept
+    const ok = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.rx.vid, qty: 1, rx_ref: 'RX-900', prescriber: 'Dr Achieng' }], payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const rx = d.prepare("SELECT * FROM prescriptions WHERE rx_ref = 'RX-900'").get();
+    assert.ok(rx, 'prescription recorded');
+    assert.strictEqual(rx.prescriber, 'Dr Achieng');
+    assert.ok(rx.sale_id && rx.filled_at, 'linked to the sale that filled it');
+    // the module data the core carried opaquely from validateLine to commit
+    const si = d.prepare('SELECT module_data FROM sale_items WHERE sale_id = ?').get(rx.sale_id);
+    assert.ok(JSON.parse(si.module_data).pharmacy.rx_ref === 'RX-900', si.module_data);
+    // the same prescription cannot be dispensed twice
+    const again = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.rx.vid, qty: 1, rx_ref: 'RX-900' }], payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(again.status, 409, JSON.stringify(again.body));
+    // controlled drugs land in the register, with the dispenser's name
+    const ctl = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.ctl.vid, qty: 1 }], payment: { method: 'cash', amount: 1500 } } });
+    assert.strictEqual(ctl.status, 200, JSON.stringify(ctl.body));
+    const reg = d.prepare("SELECT c.*, u.name AS uname FROM controlled_register c LEFT JOIN users u ON u.id = c.user_id ORDER BY c.id DESC LIMIT 1").get();
+    assert.strictEqual(reg.product_id, p18.ctl.id);
+    assert.strictEqual(reg.direction, 'out');
+    assert.ok(reg.uname, 'the register names the dispenser');
+  });
+
+  await test('stock rule: an expired batch cannot be sold, but it can be written off', async () => {
+    const pr = await authJ({ path: '/api/products', method: 'POST', body: { name: 'P18 Expiring', barcode: '77805', cost: 100, price: 150, track_batches: true } });
+    assert.strictEqual(pr.status, 200, JSON.stringify(pr.body));
+    const vid = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(pr.body.id).id;
+    const gone = new Date(Date.now() - 5 * 86400e3).toISOString().slice(0, 10);
+    const fresh = new Date(Date.now() + 200 * 86400e3).toISOString().slice(0, 10);
+    const mkBatch = (no, exp, qty) => d.prepare('INSERT INTO batches (product_id, variant_id, branch_id, location_id, batch_no, expiry_date, qty, cost, created_at) VALUES (?,?,1,?,?,?,?,100,?)')
+      .run(pr.body.id, vid, p18.loc, no, exp, qty, new Date().toISOString()).lastInsertRowid;
+    const oldBatch = mkBatch('OLD-1', gone, 4);
+    mkBatch('NEW-1', fresh, 4);
+    d.prepare('INSERT INTO stock (variant_id, location_id, qty) VALUES (?,?,8) ON CONFLICT DO UPDATE SET qty = 8').run(vid, p18.loc);
+    for (const [b, q] of [[oldBatch, 4]]) {
+      d.prepare("INSERT INTO stock_moves (product_id, variant_id, branch_id, location_id, qty, type, reason, ref, batch_id, unit_cost, user_id, note, created_at) VALUES (?,?,1,?,?,'opening','opening','FIX',?,100,1,'fixture',?)").run(pr.body.id, vid, p18.loc, q, b, new Date().toISOString());
+    }
+    // FEFO would take the expired lot first — the module refuses
+    const blocked = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: vid, qty: 1 }], payment: { method: 'cash', amount: 150 } } });
+    assert.strictEqual(blocked.status, 409, JSON.stringify(blocked.body));
+    assert.ok(/expired on/.test(blocked.body.error), blocked.body.error);
+    // writing it off is still the lawful way out
+    const off = await authJ({ path: `/api/batches/${oldBatch}/writeoff`, method: 'POST', body: { qty: 4, reason: 'expired' } });
+    assert.strictEqual(off.status, 200, JSON.stringify(off.body));
+    const nowOk = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: vid, qty: 1 }], payment: { method: 'cash', amount: 150 } } });
+    assert.strictEqual(nowOk.status, 200, JSON.stringify(nowOk.body));
+  });
+
+  await test('a module field on a VARIANT drives a module report (R-M2: flags + config, not a fork)', async () => {
+    const vid = p18.plain.vid;
+    const set = await authJ({ path: `/api/variants/${vid}`, method: 'PUT', body: { meta: { bottle_ml: 750, abv: 40 } } });
+    assert.strictEqual(set.status, 200, JSON.stringify(set.body));
+    const rep = await authJ({ path: '/api/reports/modules/price_per_litre' });
+    assert.strictEqual(rep.status, 200, JSON.stringify(rep.body));
+    const row = rep.body.rows.find((r) => r.variant_name === '' && r.bottle_ml === 750);
+    assert.ok(row, JSON.stringify(rep.body.rows.slice(0, 3)));
+    // 200 KES for 750ml → 267 per litre, and the ABV the module asked for
+    assert.strictEqual(row.price_per_litre, 267);
+    assert.strictEqual(String(row.abv), '40');
+  });
+
+  await test('module reports can require a module permission of their own', async () => {
+    const asCashier = withCookie(p18.cashier);
+    const denied = await asCashier({ path: '/api/reports/modules/controlled_register' });
+    assert.strictEqual(denied.status, 403, JSON.stringify(denied.body));
+    const ok = await authJ({ path: '/api/reports/modules/controlled_register' });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.ok(ok.body.rows.length >= 1, 'the controlled register report shows the dispensed line');
+    const watch = await authJ({ path: '/api/reports/modules/expiry_watch?days=30' });
+    assert.strictEqual(watch.status, 200, JSON.stringify(watch.body));
+  });
+
+  // ---- the acceptance test: a brand-new industry, added without touching the core
+  const FIXTURE = {
+    id: 'test_industry',
+    name: 'Test Industry',
+    nameSw: 'Sekta ya jaribio',
+    version: 1,
+    trades: ['__never_auto__'],
+    description: 'Registered from the test file — no core file was edited for it.',
+    capabilities: [],
+    schema: `CREATE TABLE IF NOT EXISTS fixture_industry_log (id INTEGER PRIMARY KEY AUTOINCREMENT, note TEXT NOT NULL DEFAULT '');`,
+    productFields: [{ key: 'fixture_field', label: 'Fixture field', labelSw: 'Sehemu ya jaribio', type: 'text', appliesTo: 'product' }],
+    permissions: [{ perm: 'fixture.sell', label: 'Sell fixture goods', labelSw: 'Uza bidhaa za jaribio', roles: ['owner'] }],
+    checkout: {
+      validateLine({ product, helpers }) {
+        if (/^FIX-BLOCK/.test(product.name)) throw helpers.block(488, `${product.name} is not for sale (fixture policy)`);
+        return { seen: true };
+      },
+      beforeCommit({ d, sale }) {
+        d.prepare('INSERT INTO fixture_industry_log (note) VALUES (?)').run(`sale ${sale.id}`);
+      }
+    },
+    stock: {
+      rule({ product, qty, helpers }) {
+        if (/^FIX-BLOCK/.test(product.name) && qty < 0) throw helpers.block(487, `${product.name} stock is frozen (fixture policy)`);
+      }
+    },
+    reports: [{
+      id: 'fixture_report', title: 'Fixture report', titleSw: 'Ripoti ya jaribio',
+      perm: 'reports.view', columns: ['note'],
+      run: (db) => ({ rows: db.prepare('SELECT note FROM fixture_industry_log').all() })
+    }, {
+      id: 'fixture_private', title: 'Fixture private', perm: 'fixture.sell', columns: ['note'],
+      run: () => ({ rows: [] })
+    }],
+    ui: [{ id: 'fixture-panel', mount: 'manager', script: '/modules/fixture.js', label: 'fixture_tab', i18n: { en: { fixture_tab: 'Fixture industry' } } }],
+    template: { categories: [['Fixture shelf', 'Rafu ya jaribio']], products: [] }
+  };
+
+  await test('ACCEPTANCE (R-M3): a new industry costs one file — fields + hooks + reports, zero core edits', async () => {
+    const before = fs.readdirSync(path.join(__dirname, '..', 'modules')).filter((f) => f.endsWith('.js')).length;
+    mods.register(FIXTURE);
+    const act = await authJ({ path: '/api/modules/test_industry/activate', method: 'POST', body: {} });
+    assert.strictEqual(act.status, 200, JSON.stringify(act.body));
+    assert.ok(act.body.active.includes('test_industry'));
+    assert.strictEqual(fs.readdirSync(path.join(__dirname, '..', 'modules')).filter((f) => f.endsWith('.js')).length, before, 'no file was added for this industry');
+
+    // 1. productFields — the new field is live for every product form
+    const defs = (await authJ({ path: '/api/attribute-defs' })).body.map((a) => a.key);
+    assert.ok(defs.includes('fixture_field'), 'module field registered');
+    // 2. checkout.validateLine — the industry's own rule, in its own words
+    const fix = await authJ({ path: '/api/products', method: 'POST', body: { name: 'FIX-BLOCK Item', barcode: '77809', cost: 10, price: 20 } });
+    assert.strictEqual(fix.status, 200, JSON.stringify(fix.body));
+    const fvid = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(fix.body.id).id;
+    const stocked = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: fix.body.id, qty: 5, type: 'opening', reason: 'opening', unit_cost: 10 } });
+    assert.strictEqual(stocked.status, 200, JSON.stringify(stocked.body));
+    const blocked = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: fvid, qty: 1 }], payment: { method: 'cash', amount: 20 } } });
+    assert.strictEqual(blocked.status, 488, JSON.stringify(blocked.body));
+    assert.ok(/not for sale \(fixture policy\)/.test(blocked.body.error), blocked.body.error);
+    // 3. stock.rule — the same industry's stock policy blocks a direct move
+    const adj = await authJ({ path: '/api/stock/adjust', method: 'POST', body: { product_id: fix.body.id, qty: -1, reason: 'damage' } });
+    assert.strictEqual(adj.status, 487, JSON.stringify(adj.body));
+    // 4. checkout.beforeCommit + reports — the module's evidence and its report
+    const ok = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.plain.vid, qty: 1 }], payment: { method: 'cash', amount: 200 } } });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const rep = await authJ({ path: '/api/reports/modules/fixture_report' });
+    assert.strictEqual(rep.status, 200, JSON.stringify(rep.body));
+    assert.ok(rep.body.rows.some((r) => /^sale /.test(r.note)), JSON.stringify(rep.body.rows));
+    // 5. permissions — the module's own permission gates its own report
+    const denied = await withCookie(p18.cashier)({ path: '/api/reports/modules/fixture_private' });
+    assert.strictEqual(denied.status, 403, JSON.stringify(denied.body));
+    assert.strictEqual((await authJ({ path: '/api/reports/modules/fixture_private' })).status, 200, 'owner holds it by role');
+    // 6. ui — the shell is told about the panel without the shell knowing it
+    const b = await authJ({ path: '/api/bootstrap' });
+    assert.ok(b.body.modules.ui.some((u) => u.id === 'fixture-panel'), 'UI part from the new industry');
+    // 7. template — onboarding data for the new trade
+    assert.ok(mods.active(d).template().some((t) => t.module === 'test_industry'), 'template hook returns the industry starter data');
+  });
+
+  await test('a broken module fails closed, is audited, and never half-commits a sale', async () => {
+    const boom = {
+      id: 'boom_industry', name: 'Broken', trades: ['__never_auto__'], version: 1,
+      checkout: { validateLine() { throw new Error('undefined is not a function'); } },
+      productFields: [{ key: 'boom', label: 'Boom', type: 'text', appliesTo: 'product' }]
+    };
+    mods.register(boom);
+    await authJ({ path: '/api/modules/boom_industry/activate', method: 'POST', body: {} });
+    const before = d.prepare('SELECT COUNT(*) AS n FROM sales').get().n;
+    const r = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.plain.vid, qty: 1 }], payment: { method: 'cash', amount: 200 } } });
+    assert.strictEqual(r.status, 500, JSON.stringify(r.body));
+    assert.ok(/module "boom_industry" failed/.test(r.body.error), r.body.error);
+    assert.strictEqual(d.prepare('SELECT COUNT(*) AS n FROM sales').get().n, before, 'no sale was written');
+    const aud = d.prepare("SELECT * FROM audit_log WHERE action = 'module/failure' ORDER BY id DESC LIMIT 1").get();
+    assert.ok(aud && /boom_industry/.test(aud.detail), 'the failure is audited');
+    // the core keeps working the moment the broken module is switched off
+    await authJ({ path: '/api/modules/boom_industry/deactivate', method: 'POST', body: {} });
+    const ok = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.plain.vid, qty: 1 }], payment: { method: 'cash', amount: 200 } } });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+  });
+
+  await test('deactivating a module removes its rules and keeps its data', async () => {
+    const off = await authJ({ path: '/api/modules/pharmacy/deactivate', method: 'POST', body: {} });
+    assert.strictEqual(off.status, 200, JSON.stringify(off.body));
+    assert.ok(!off.body.active.includes('pharmacy'), JSON.stringify(off.body.active));
+    // the Rx gate is gone (the core has no opinion of its own)…
+    const nowOk = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.rx.vid, qty: 1 }], payment: { method: 'cash', amount: 300 } } });
+    assert.strictEqual(nowOk.status, 200, JSON.stringify(nowOk.body));
+    // …but the evidence it recorded stays (data is data)
+    assert.ok(d.prepare("SELECT COUNT(*) AS n FROM prescriptions WHERE rx_ref = 'RX-900'").get().n === 1);
+    // and a module report is no longer offered
+    const list = await authJ({ path: '/api/reports/modules' });
+    assert.ok(!list.body.reports.some((r) => r.id === 'expiry_watch'), JSON.stringify(list.body.reports.map((r) => r.id)));
   });
 
   server.close();

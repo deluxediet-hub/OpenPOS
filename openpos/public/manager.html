@@ -69,6 +69,8 @@
           <label class="check"><input type="checkbox" id="p-serials"> Track serials (IMEI)</label>
           <label class="check"><input type="checkbox" id="p-openprice"> Open price (weigh at till)</label>
         </div>
+        <!-- Phase 18: fields the active industry modules declared (e.g. ABV %, PPB no.) -->
+        <div id="p-modfields" class="row wrap" style="margin-top:8px"></div>
         <div class="row" style="margin-top:10px">
           <button class="btn" id="p-save" data-i18n="save">Save</button>
           <button class="btn ghost hidden" id="p-clear" data-i18n="cancel">Cancel</button>
@@ -1176,6 +1178,10 @@
     </section>
 
     <!-- ============ AUDIT ============ -->
+    <!-- ============ MODULE PANELS (Phase 18) ============ -->
+    <!-- Industry modules mount themselves here. No page edit per industry. -->
+    <div id="module-sections"></div>
+
     <section id="tab-audit" class="hidden">
       <div class="card">
         <div class="row" style="margin-bottom:10px">
@@ -1249,12 +1255,39 @@ function drawTabs() {
   });
 }
 
+// ---- Phase 18: industry module tabs ---------------------------------------
+// Active modules hand the shell their panels (loaded from /modules/*.js). Each
+// becomes a tab the page did not know about, rendered into its own section.
+function mountModulePanels() {
+  const host = $('#module-sections');
+  const rendered = new Set();
+  for (const p of OP.panels('manager')) {
+    const tabId = `module-${p.id}`;
+    if (!TABS.some((tb) => tb.id === tabId)) {
+      TABS.push({ id: tabId, label: p.label || p.id, always: true, modulePanel: p.id });
+    }
+    if (!$(`#tab-${tabId}`)) {
+      const sec = document.createElement('section');
+      sec.id = `tab-${tabId}`;
+      sec.className = 'hidden';
+      host.appendChild(sec);
+    }
+    if (!rendered.has(p.id)) {
+      rendered.add(p.id);
+      OP.renderPanel(p.id, $(`#tab-${tabId}`), { boot: BOOT, me: ME });
+    }
+  }
+}
+
 function selectTab(name) {
   const visible = TABS.filter(tabVisible).map((x) => x.id);
   if (!visible.includes(name)) name = 'products';
   document.querySelectorAll('#tabs button').forEach((b) =>
     b.classList.toggle('on', b.dataset.tab === name));
-  TABS.forEach((tb) => $(`#tab-${tb.id}`).classList.toggle('hidden', tb.id !== name));
+  TABS.forEach((tb) => {
+    const sec = $(`#tab-${tb.id}`);
+    if (sec) sec.classList.toggle('hidden', tb.id !== name);
+  });
   if (name === 'settings') loadSettings();
   if (name === 'audit') loadAudit();
   if (name === 'staff') loadStaff();
@@ -1879,9 +1912,13 @@ async function boot() {
   }
   $('#m-main').classList.remove('hidden');
   BOOT = await api('/api/bootstrap');
-  CATEGORIES = (await api('/api/categories')).catch(() => []);
+  CATEGORIES = await api('/api/categories').catch(() => []);
   const biz = BOOT.settings.business || {};
   $('#m-biz').textContent = `${biz.name || ''} — ${ME.name} (${t(roleKey(ME.role))})`;
+  // Load the industry modules' own panels before the tabs are drawn.
+  await OP.loadModules((BOOT.modules && BOOT.modules.ui) || []);
+  mountModulePanels();
+  resetProductForm(); // also draws the industry modules' product fields
   drawTabs();
   await Promise.all([loadProducts(), loadCategories(), loadTills(), loadSuppliers(), loadAttrs()]);
   if (tabVisible(TABS.find((x) => x.id === 'staff'))) loadStaff();
@@ -1986,6 +2023,7 @@ async function loadProducts() {
         $('#p-rx').checked = !!p.requires_rx; $('#p-controlled').checked = !!p.is_controlled;
         $('#p-batches').checked = !!p.track_batches; $('#p-serials').checked = !!p.track_serials;
         $('#p-openprice').checked = !!p.open_priced;
+        drawModuleFields(typeof p.meta === 'object' ? p.meta : {});
         $('#p-form-title').textContent = t('save');
         $('#p-clear').classList.remove('hidden');
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2174,6 +2212,41 @@ async function renderSerialList(productId) {
   } catch { box.innerHTML = ''; }
 }
 
+// ---- Phase 18: module product fields ---------------------------------------
+// The active modules' declared fields render here automatically and are stored
+// in the product's `meta`. The page knows the shape, never the industry.
+function moduleProductFields() {
+  return ((BOOT && BOOT.modules && BOOT.modules.fields) || []).filter((f) => f.appliesTo === 'product');
+}
+
+function drawModuleFields(meta) {
+  const host = $('#p-modfields');
+  const fields = moduleProductFields();
+  if (!fields.length) { host.innerHTML = ''; return; }
+  host.innerHTML = fields.map((f) => {
+    const v = (meta || {})[f.key];
+    if (f.type === 'boolean') {
+      return `<label class="check"><input type="checkbox" data-mf="${f.key}" ${v ? 'checked' : ''}> ${esc(f.label)}</label>`;
+    }
+    if (f.type === 'select') {
+      const opts = String(f.options || '').split(',').map((o) => o.trim()).filter(Boolean);
+      return `<label class="small">${esc(f.label)} <select data-mf="${f.key}"><option value=""></option>${
+        opts.map((o) => `<option value="${esc(o)}" ${String(v || '') === o ? 'selected' : ''}>${esc(o)}</option>`).join('')
+      }</select></label>`;
+    }
+    return `<label class="small">${esc(f.label)} <input data-mf="${f.key}" type="${f.type === 'number' ? 'number' : 'text'}" style="width:130px" value="${esc(v == null ? '' : v)}"></label>`;
+  }).join('');
+}
+
+function readModuleFields() {
+  const out = {};
+  $('#p-modfields').querySelectorAll('[data-mf]').forEach((el) => {
+    const k = el.dataset.mf;
+    out[k] = el.type === 'checkbox' ? (el.checked ? 1 : 0) : el.value;
+  });
+  return out;
+}
+
 function resetProductForm() {
   $('#p-id').value = '';
   ['p-name','p-namesw','p-barcode','p-cost','p-price','p-wholesale','p-kra','p-age','p-brand','p-image','p-reorder']
@@ -2181,6 +2254,7 @@ function resetProductForm() {
   $('#p-cat').value = ''; $('#p-unit').value = 'pcs'; $('#p-tax').value = 'std';
   $('#p-supplier').value = '';
   ['#p-rx', '#p-controlled', '#p-batches', '#p-serials', '#p-openprice'].forEach((id) => $(id).checked = false);
+  drawModuleFields({});
   $('#p-form-title').textContent = t('add');
   $('#p-clear').classList.add('hidden');
 }
@@ -2202,7 +2276,8 @@ $('#p-save').onclick = async () => {
     image: $('#p-image').value,
     requires_rx: $('#p-rx').checked ? 1 : 0, is_controlled: $('#p-controlled').checked ? 1 : 0,
     track_batches: $('#p-batches').checked ? 1 : 0, track_serials: $('#p-serials').checked ? 1 : 0,
-    open_priced: $('#p-openprice').checked ? 1 : 0
+    open_priced: $('#p-openprice').checked ? 1 : 0,
+    meta: readModuleFields()
   };
   try {
     if (id) await api(`/api/products/${id}`, { method: 'PUT', body });

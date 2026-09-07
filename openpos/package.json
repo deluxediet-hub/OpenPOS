@@ -6,7 +6,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node --no-warnings server.js",
-    "test": "node --no-warnings test/run.js",
+    "test": "node --no-warnings test/run.js && node --no-warnings test/ui.js",
+    "test:api": "node --no-warnings test/run.js",
+    "test:ui": "node --no-warnings test/ui.js",
     "reset": "rm -f data/openpos.db data/openpos.db-wal data/openpos.db-shm && echo 'Database reset — will re-seed on next start'"
   },
   "engines": {

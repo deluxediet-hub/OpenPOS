@@ -131,6 +131,8 @@
     </div>
     <div id="cats"></div>
     <div id="grid"></div>
+    <!-- Phase 18: panels the active industry modules add to the till -->
+    <div id="p-modules"></div>
   </div>
   <div class="pos-right">
     <div class="tip hidden" id="p-tip"><button id="p-tip-x">✕</button><span data-i18n="till_tip"></span></div>
@@ -525,6 +527,19 @@ async function initMain() {
     PRODUCTS = prods; CATEGORIES = cats; CUSTOMERS = custs;
     VAT_RATE = Number((boot.settings && boot.settings.tax && boot.settings.tax.vatRate) || 16);
     saveCache();
+    // Phase 18: an industry module may add a panel to the till itself.
+    if (boot.modules && boot.modules.ui && boot.modules.ui.length) {
+      await OP.loadModules(boot.modules.ui);
+      const host = $('#p-modules');
+      if (host) {
+        for (const panel of OP.panels('pos')) {
+          const box = document.createElement('div');
+          box.id = `pmod-${panel.id}`;
+          host.appendChild(box);
+          OP.renderPanel(panel.id, box, { boot, me: ME, products: PRODUCTS });
+        }
+      }
+    }
   } catch {
     loadCache();
   }

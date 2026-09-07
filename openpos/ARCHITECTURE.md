@@ -334,30 +334,60 @@ reporting, audit, offline sync, hardware layer, security.
 
 - **R-M1** A module = fields + checkout hooks + stock rules + reports + permissions + template
   data. It **never** modifies the payment engine, ledger core or audit.
+  *Phase 18:* the prescription and controlled-drug gates that used to sit hardcoded in
+  `prepareSaleLines` now live in `modules/pharmacy.js`; the core has no industry words
+  left in the checkout path (asserted in `npm test`).
 - **R-M2** Product/variant *flags* drive behaviour (`age_min`, `requires_rx`, `is_controlled`,
   `track_batches`, `track_serial`, `open_priced`, `cold_chain`); a module is configuration +
   hooks, not a fork.
 - **R-M3** Adding a new industry must cost ≤ 1 build-day (the Phase-23 acceptance test).
 
-## 4. Module framework (Phase 18 target shape)
+## 4. Module framework — **built in Phase 18 (Days 26–27)**
 
 ```
 modules/
-├── loader.js        # activate(business.trade) → registry
-└── spirits.js       # { name, activate(db), checkoutHooks: {validateLine, beforeCommit},
-                      #   stockRules: {feFof? no—FEFO is core, expiryBlock: yes},
-                      #   reports: [...], permissions: [...], ui: ['/modules/spirits.js'],
-                      #   template: 'spirits' }
+├── loader.js        # registry + activation + hook dispatch (the only module file the core names)
+├── spirits.js       # Wines & Spirits  — premium-line control, bottle/case economics
+├── pharmacy.js      # Chemist          — prescription capture, controlled register, expiry block
+├── ui/spirits.js    # the panel the shell mounts (browser, served at /modules/*.js)
+└── ui/pharmacy.js
 ```
 
-Hook points (core exposes these; modules plug in):
-1. `productFields` — extra variant/product columns (via generic attribute definitions)
-2. `checkout.validateLine` / `checkout.beforeCommit` — age gate, Rx check, controlled check
-3. `stock.rule` — block expired sales, FEFO enforce, serial bind
-4. `reports` — registered report definitions (Phase 15 renders them)
-5. `permissions` — role additions (e.g. controlled-drug access)
-6. `ui` — extra panels/fields rendered by the manager/POS pages
-7. `template` — onboarding sample data
+A module is a plain object; **adding an industry is adding a file**. The core
+reaches every module through one door and never names one.
+
+| Hook | Kind | What it does |
+|---|---|---|
+| `productFields` | collect | extra product/variant attributes → generic `attribute_defs` (values live in `meta` JSON) |
+| `checkout.validateLine` | gate | block or annotate a cart line (premium line, prescription, controlled drug) |
+| `checkout.beforeCommit` | gate | last look before a sale commits — the module keeps its own evidence |
+| `stock.rule` | gate | refuse a stock move (an expired batch can leave only as a write-off) |
+| `reports` | collect | definitions the core renders through `GET /api/reports/modules/:id` |
+| `permissions` | collect | permissions the owner can grant (`spirits.premium`, `pharmacy.dispense`) |
+| `ui` | collect | browser panels + their own EN/SW strings, mounted by `mount` name |
+| `template` | collect | starter catalogue rows for onboarding |
+
+**Safety semantics.** Gate hooks fail **closed** — a module that throws blocks
+the operation, is reported in the module's own words, and an unexpected failure
+is audited as `module/failure` (never a silent pass). Collect hooks fail **open**
+— a broken module is skipped and the core keeps working.
+
+**Where the line is drawn (R-M1/R-M2).** The core enforces the *generic flags it
+stores* for every trade — `age_min` (legal age), `track_serials` (whole units),
+R-S8 (no negative stock). Everything that makes a trade a *trade* lives in the
+module: premium-line restrictions, prescriptions, controlled-drug registers,
+expiry blocks, bottle economics, size/colour sell-through.
+
+**Activation is data, not deployment (R-C3).** `modules` table rows record what
+is on; setup activates the trade's modules (`syncForTrade`), an owner can switch
+one on or off (`POST /api/modules/:id/activate|deactivate`, `capabilities.manage`,
+audited). A module may add its own tables (`schema`) and columns (`columns`),
+both additive-only. Deactivating stops the rules; the data it recorded stays.
+
+**Per-line module data.** `validateLine` may return a value (e.g. an Rx
+reference). The core stores it opaquely in `sale_items.module_data` and hands it
+back at `beforeCommit` — evidence survives a held sale, an offline replay and a
+reprint, and the core never looks inside it.
 
 ## 5. Tenancy & data
 
@@ -382,6 +412,7 @@ Hook points (core exposes these; modules plug in):
 | Returns & exchanges | ✅ **Phase 10 done (Day 14):** nothing is ever edited in place. A **return** is its own document (`RET-` sequential, eTIMS-ready) whose lines point at the exact `sale_items` it undoes, with per-line restock flag and the **FEFO batch the goods land back in** (batch-tracked items return to the same batch — verified). Money goes back through the payment engine as **partial refunds to the original method, newest payment first** (a payment tracks `refunded` and flips to `refunded` only when fully back; a fully-returned sale goes terminal `refunded`), or into the customer's **store credit** (ledger-evidenced). **Exchanges** = return + a replacement sale carrying the returned value as an exchange-credit discount (VAT-exact: the tax-inclusive credit is matched to the shilling); the **price diff settles exactly** — customer pays the new sale's actual balance, or the excess is refunded to the *original* sale (never double-refunded). Approval rule = a business capability: cashiers up to `settings.returns.cashier_limit` (default 5 000), managers/owners unlimited, exchanges need `sales.discount` or a supervisor PIN. The shift drawer counts partial refunds out via the `refunded` column; sale payloads expose derived `returns`/`returns_total` (computed, never written back). POS return/exchange modal (invoice → lines → reason/restock → money or credit → exchange-for + diff settlement), manager Returns/Exchanges tab. 119 tests green (was 111) + 29-step UI smoke. |
 | Customers & deni (credit) | ✅ **Phase 11 done (Day 15):** phone-first profiles (same number = same customer, never duplicated), lifetime purchase total, last purchase. Deni accounts live off the payment engine: credit sales from checkout, **over-limit deni is a manager act** (`deni.approve`, audited `deni/override`, ledger marked "OVER LIMIT") — a cashier gets 403. Repayments (cash/M-Pesa/…) are ledger rows that reduce the balance, leave a till **deposit** when the money is cash, turn overpayments into store credit, and reconcile: `Σ credit_sale − Σ repayment = balance` to the shilling. Deposits top up store credit (the customer pays in advance and spends it at the till — the P8 store-credit payment method). The **statement is the ledger itself** with opening balance and a running balance — `statement.html` prints it, so it can never drift from the books. Customer-specific pricing already resolved through the Phase-6 chain (customer price rules show on the profile). Manager Customers tab (search, profile, ledger, recent sales, repay/deposit/adjust actions, statement link); POS customer options show phone + outstanding deni. 124 tests green (was 119) + 22-step UI smoke. |
 | Multi-branch operating system | ✅ **Phase 12 done (Day 16):** the visibility hierarchy is enforced server-side on **every** route — an audit closed six leaks (customers, stock moves, stock balances, price rules, batches, batch write-off, plus owner stock adjustments were tagged with the wrong branch). **Transfers** (inter-branch & inter-location): `POST /api/transfers` (request, stock + batch validated) → approve (receiving branch's manager/owner) → ship (`transfer_out` moves, source stock deducted, R-S8 enforced) → receive with per-line `received_qty` (`transfer_in`, destination stock = received qty; discrepancy = sent − received on the line; multiple lines, one or several receives) → cancel pre-ship; history `GET /api/transfers[?status]` scoped by visible branches; batch-tracked lines carry the batch, which changes location on receive. **Branch comparison** `GET /api/reports/branches[?from&to]` ranks visible branches by sales with margin (gross − cost×qty) and shrinkage (damage / expiry write-off / negative adjustments × unit cost) — manager reports are scoped to their own branch. Manager UI: Transfers tab (capability-gated `multi_branch`) with new-transfer builder (source/destination locations, per-line batch picker, approve/ship/receive/cancel actions, line-level discrepancy view) and a Branch Comparison card in Layout (rank medals, date window). `GET /api/products?branch_id=` lets the owner (and a manager, their branch only) read another branch's catalogue/stock. 131 tests green (was 124) — including the acceptance trio: 3-location chain with one discrepancy fully traceable through `stock_moves` + audit, branch manager's API cannot read branch 2 across customers/sales/stock/pricing/branches/transfers, comparison ranks by sales/margin/shrinkage — plus a 37-step smoke. Health + banner report Phase 12. |
+| Industry module framework | ✅ **Phase 18 done (Days 26–27):** `modules/loader.js` + 8 hook points; **spirits** and **pharmacy** modules ship as the proof. The prescription/controlled-drug gates were lifted out of `prepareSaleLines` into `modules/pharmacy.js`, so the checkout path contains no industry words (asserted in tests). New industry = new file: the acceptance test registers one from the test file and drives all seven hooks with zero core edits. 145 tests green (was 131) + 9-step UI smoke |
 | Audit hash chain + verify | ✓ R-A1/R-A4 done at core level |
 | Sales/payments schema | ✅ **Phase 8 done (Day 12):** the payment **engine** — checkout never knows what a payment is. Adapters: cash · M-Pesa · card · bank · credit (deni) · store credit · gift card · loyalty · other (enable/disable per business). State machine `pending → confirmed \| cancelled \| failed`, `confirmed → refunded`; idempotency is structural — `UNIQUE(sale_id, method, ref)` so a duplicate provider callback is a guaranteed no-op (proven in tests: 3 callbacks, 1 confirm). Split/partial payments via `POST /api/sales/:id/payments`; cash over-tender = change; non-cash can't exceed the balance; duplicate (sale, method, ref) refused. **M-Pesa lives only in `lib/mpesa.js`** (the only file that knows Daraja): manual mode (record the SMS code — works day one), sandbox (simulated STK + `simulate-callback` test hook replaying the real callback path), live (real OAuth + STK push, Phase 16 credentials). Refunds go to the original method (deni refunds release the credit limit; store credit is restored; M-Pesa leaves a reversal row). Cancelled/failed money **unwinds the stock step** (same lots, audited) so a declined prompt never leaks stock. Per-method reconcile (`/api/payments/reconcile`) + deposits (`/api/deposits`, manager act, audited) + payment settings (owner). Manager gets a Payments tab; the till gets method tabs, an awaiting-payment panel and add-a-second-payment |
 | EN/SW core strings, dashboard, manager UI | ✓ foundation; polished in Phase 34 |
@@ -449,6 +480,31 @@ Hook points (core exposes these; modules plug in):
   refunds; void marks `refunded` for consistency. POS return/exchange
   modal, manager Returns tab, EN/SW. 119 tests green (was 111) +
   29-step UI smoke. Health + banner report Phase 10.
+- **2026-09-07 (v11)** — **Phase 18 complete (Days 26–27): the industry module
+  framework (`modules/loader.js`, ARCHITECTURE §4).** Eight hook points
+  (`productFields`, `checkout.validateLine`, `checkout.beforeCommit`,
+  `stock.rule`, `reports`, `permissions`, `ui`, `template`); gate hooks fail
+  closed and are audited (`module/failure`), collect hooks fail open. Two
+  modules ship with the framework — **spirits** (premium lines, bottle/case
+  economics, price-per-litre) and **pharmacy** (prescription capture with
+  repeat-dispense guard, controlled-drug register, expiry block at the till) —
+  and the prescription/controlled rules were **removed from the core** into the
+  pharmacy module. `modules` table (additive) records activation; setup
+  activates the trade's modules; `POST /api/modules/:id/activate|deactivate` is
+  owner-only and audited; `GET /api/reports/modules[?format=csv]` runs any
+  module report through one generic door; bootstrap carries module fields, UI
+  parts and reports to the shell; `sale_items.module_data` carries per-line
+  module evidence (opaque to the core) from validate through commit;
+  `lib/permissions.js` gained a module source so module permissions are
+  enforced and grantable like core ones. Also fixed along the way: nested
+  `d.transaction()` now becomes a SAVEPOINT (module activation runs inside
+  setup's transaction), `products.meta` is persisted on create **and** update
+  (it was computed and dropped, so no industry attribute could ever be saved on
+  a product), and `(await api(...)).catch` in manager.html — a TypeError that
+  stopped the whole back office from booting. **145 tests green** (was 131) +
+  a new 9-step jsdom UI smoke that boots the real manager & till pages and
+  asserts an industry panel, its own strings and its product fields appear
+  without any page knowing the industry exists.
 - **2026-09-02 (v10)** — **Phase 9 complete (Day 13):** cashier shifts & till
   control. `shifts.register_id`; open/payout/close routes +
   `/api/shifts/mine`; expected cash computed from the payment engine

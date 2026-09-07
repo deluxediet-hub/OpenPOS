@@ -33,14 +33,24 @@ const ROLE_MAP = {
   staff: ['products.view', 'stock.view', 'customers.view']
 };
 
-function roleHasPerm(role, perm) {
-  return (ROLE_MAP[role] || []).includes(perm);
+// Industry modules (Phase 18) declare permissions of their own — e.g.
+// spirits.premium, pharmacy.dispense. The server installs the source at boot;
+// enforcement stays server-side and identical for core and module perms.
+let moduleSource = () => [];
+function setModuleSource(fn) {
+  moduleSource = typeof fn === 'function' ? fn : () => [];
+}
+
+function roleHasPerm(role, perm, d) {
+  if ((ROLE_MAP[role] || []).includes(perm)) return true;
+  if (!d) return false;
+  return moduleSource(d).some((p) => p.perm === perm && p.roles.includes(role));
 }
 
 function userHasPerm(d, user, perm) {
   if (!user) return false;
   if (user.role === 'owner') return true;
-  if (roleHasPerm(user.role, perm)) return true;
+  if (roleHasPerm(user.role, perm, d)) return true;
   const row = d
     .prepare('SELECT allowed FROM user_permissions WHERE user_id = ? AND permission = ?')
     .get(user.id, perm);
@@ -49,11 +59,19 @@ function userHasPerm(d, user, perm) {
 
 function userPerms(d, user) {
   const base = ROLE_MAP[user.role] || [];
+  const fromModules = moduleSource(d)
+    .filter((p) => p.roles.includes(user.role))
+    .map((p) => p.perm);
   const grants = d
     .prepare('SELECT permission FROM user_permissions WHERE user_id = ? AND allowed = 1')
     .all(user.id)
     .map((r) => r.permission);
-  return [...new Set([...base, ...grants])];
+  return [...new Set([...base, ...fromModules, ...grants])];
+}
+
+/** Core permission, or one an active module has declared. */
+function isKnownPerm(d, perm) {
+  return PERMISSIONS.includes(perm) || moduleSource(d).some((p) => p.perm === perm);
 }
 
 function requirePerm(d, perm) {
@@ -65,4 +83,7 @@ function requirePerm(d, perm) {
   };
 }
 
-module.exports = { PERMISSIONS, ROLE_MAP, ALL, roleHasPerm, userHasPerm, userPerms, requirePerm };
+module.exports = {
+  PERMISSIONS, ROLE_MAP, ALL, roleHasPerm, userHasPerm, userPerms, requirePerm,
+  setModuleSource, isKnownPerm
+};

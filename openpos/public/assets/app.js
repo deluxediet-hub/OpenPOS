@@ -411,5 +411,70 @@ window.OP = (() => {
     update();
   }
 
-  return { t, setLang, lang: () => lang, api, fmt, esc, pinpad, toast, netBadge, I18N };
+  // ---- Phase 18: industry module UI ----------------------------------------
+  // A module ships a browser panel (modules/ui/<id>.js) that calls
+  // OP.registerPanel({ mount, id, label, i18n, render(el, ctx) }). The shell
+  // mounts panels by their `mount` name and never knows what they are — adding
+  // an industry panel costs no edit to any page.
+  const PANELS = [];
+
+  function registerPanel(panel) {
+    if (panel && panel.id) PANELS.push(panel);
+    return panel;
+  }
+
+  function panels(mount) {
+    return PANELS.filter((p) => !mount || (p.mount || 'manager') === mount);
+  }
+
+  /** Merge a module's EN/SW strings into the core dictionary. */
+  function addI18n(strings) {
+    for (const [lng, dict] of Object.entries(strings || {})) {
+      if (!I18N[lng]) I18N[lng] = {};
+      Object.assign(I18N[lng], dict);
+    }
+  }
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      if (document.querySelector(`script[data-module="${src}"]`)) return resolve();
+      const s = document.createElement('script');
+      s.src = src;
+      s.dataset.module = src;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error(`could not load ${src}`));
+      document.head.appendChild(s);
+    });
+  }
+
+  /** Load the panel scripts for the active modules (from bootstrap). */
+  async function loadModules(parts) {
+    for (const part of parts || []) {
+      try {
+        if (part.i18n) addI18n(part.i18n);
+        await loadScript(part.script);
+      } catch (e) {
+        console.warn('[modules]', part.id, e.message);
+      }
+    }
+    return PANELS.slice();
+  }
+
+  /** Mount a panel into an element. The panel gets the shell's own helpers. */
+  function renderPanel(id, el, ctx = {}) {
+    const p = PANELS.find((x) => x.id === id);
+    if (!p || !el) return false;
+    try {
+      p.render(el, { t, api, fmt, esc, ...ctx });
+      return true;
+    } catch (e) {
+      el.innerHTML = `<p class="err">${esc(e.message)}</p>`;
+      return false;
+    }
+  }
+
+  return {
+    t, setLang, lang: () => lang, api, fmt, esc, pinpad, toast, netBadge, I18N,
+    registerPanel, panels, addI18n, loadModules, loadScript, renderPanel
+  };
 })();

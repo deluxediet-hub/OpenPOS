@@ -37,7 +37,9 @@ Optional sample products load for the chosen trade.
 ## Test
 
 ```bash
-npm test         # unit (money/VAT) + full API flow on a temp DB (60 tests)
+npm test         # unit (money/VAT) + full API flow on a temp DB + jsdom UI smoke (145 + 9)
+npm run test:api # API flow only
+npm run test:ui  # boots the real manager & till pages in jsdom and clicks through them
 ```
 
 ## Build status
@@ -67,7 +69,7 @@ adapters, branch isolation, auditability, offline rules, core vs modules) plus t
 | 15 | 20–21 | Reporting & BI (4 role dashboards) |
 | 16 | 22–23 | Kenyan integration layer (real M-Pesa + eTIMS VSCU) |
 | 17 | 24–25 | Offline-first sync architecture |
-| 18 | 26–27 | Industry module framework |
+| 18 | 26–27 | Industry module framework ✅ |
 | 19–23 | 28–34 | Modules: spirits · boutique · pharmacy · mini-mart · hardware/electronics/cosmetics/footwear |
 | 24 | 35 | Promotions, loyalty & marketing |
 | 25 | 36 | WhatsApp & customer commerce |
@@ -117,6 +119,26 @@ adapters, branch isolation, auditability, offline rules, core vs modules) plus t
   (was 48), including a 10k-move rebuild == balance proof. Also fixed a real bug the new
   tests exposed: CSV import read the exported string `"0"` as true, silently flipping
   batch/serial flags on every round-trip.
+- **Day 26–27** — **the industry module framework** (Phase 18): `modules/loader.js`
+  plus eight hook points — `productFields`, `checkout.validateLine`,
+  `checkout.beforeCommit`, `stock.rule`, `reports`, `permissions`, `ui` and
+  `template`. Two modules ship with it as the proof: **spirits** (premium lines a
+  cashier may not ring up, bottle/case economics, price-per-litre report, a
+  manager panel) and **pharmacy** (prescription capture with a repeat-dispense
+  guard, controlled-drug register, and an expiry block that refuses to sell an
+  expired batch while still allowing it to be written off). The prescription and
+  controlled-drug rules were **lifted out of the core** — the checkout path no
+  longer contains the word "pharmacy" (the test suite asserts it). An industry is
+  a file: the acceptance test registers a brand-new one from the test file and
+  drives every hook with zero core edits. Activation is data (owner-only,
+  audited, per business), gate hooks fail closed and are audited, and per-line
+  module evidence rides opaquely in `sale_items.module_data` from validate to
+  commit. **145 tests green** (was 131) + a new **9-step jsdom UI smoke**.
+  Three real bugs surfaced and were fixed on the way: nested transactions now
+  become savepoints (module activation runs inside setup), `products.meta` is
+  persisted on create *and* update (industry attributes could never be saved
+  before), and a `.catch` on an awaited value in manager.html that stopped the
+  whole back office from booting.
 - **Day 7–8** — **purchasing & suppliers** (capability-gated, R-C): suppliers with KRA PIN,
   terms and **lead days**; suggested orders computed from real sales velocity
   (`ceil(velocity × (lead + cover) − stock)`, most-urgent first, top-20); purchase orders

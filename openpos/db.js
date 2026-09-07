@@ -1463,6 +1463,28 @@ function migrate(d) {
     );
     CREATE INDEX IF NOT EXISTS idx_conflicts_branch ON sync_conflicts(branch_id, created_at);
   `);
+
+  // Phase 18: per-line, module-owned data (the core stores it, never reads it —
+  // e.g. a prescription reference captured by the pharmacy module).
+  addCol(d, 'sale_items', 'module_data', "TEXT NOT NULL DEFAULT '{}'");
+
+  // ---- Phase 18 Day 26-27: industry module framework -------------------------
+  // Which industry modules are active for this business. Activation is data,
+  // never a deployment (R-C3), so the table lives with the business's own rows.
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS modules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      business_id INTEGER NOT NULL DEFAULT 1,
+      module_id TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      active INTEGER NOT NULL DEFAULT 1,
+      config TEXT NOT NULL DEFAULT '{}',
+      activated_at TEXT,
+      activated_by INTEGER,
+      deactivated_at TEXT,
+      UNIQUE(business_id, module_id)
+    );
+  `);
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

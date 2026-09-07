@@ -405,10 +405,15 @@ device restarts · two tills sell simultaneously · stock changes offline · bra
 hours · connection returns.
 - **Acceptance:** matrix green — zero lost or duplicated money or stock.
 
-### Phase 18 — Industry Module Framework · Days 26–27
+### Phase 18 — Industry Module Framework · Days 26–27 ✅
 Module loader + hook points (product fields, checkout gates, stock rules, reports,
 permissions, UI parts, template data); business trade selection; demo module proves the loader.
 - **Acceptance:** a new industry = fields + hooks + reports, **no core changes**.
+- **Done (2026-09-07):** `openpos/modules/loader.js` + eight hook points; **spirits**
+  and **pharmacy** modules ship as the demo; the prescription/controlled-drug
+  gates were lifted out of the core. The acceptance test registers a brand-new
+  industry from the test file and drives every hook with **zero core edits**.
+  145 API tests + 9 UI smoke steps green (was 131).
 
 ### Phase 19 — Wines & Spirits Module · Day 28
 Bottle/pack/case/carton economics (supplier case cost vs bottle margin), high-value stock
@@ -759,6 +764,77 @@ Phase 7 (checkout holds); actual sale/return moves land with the checkout engine
 through this same door. **Bug found & fixed along the way:** CSV import parsed flags with
 `value ? 1 : 0`, so the exported string `"0"` read as true and every product silently
 gained batch/serial tracking after a round-trip — now parsed numerically + regression test.
+### Day 26–27 — Industry Module Framework (Phase 18) ✅ (2026-09-07)
+
+> The build log below jumped from Day 8 to Day 26 because Phases 6–17 were
+> logged in `openpos/ARCHITECTURE.md` §9 (change log) instead. This entry
+> continues the log from where the roadmap left off.
+
+**Why it exists:** Phases 19–23 add eight industries (spirits, boutique,
+pharmacy, mini-mart, hardware, electronics, cosmetics, footwear). Doing that
+against a core that already contained pharmacy words would have meant forking
+the checkout for every trade. So the framework landed first.
+
+**Backend (`openpos/modules/loader.js`)**
+- A module is a plain object: `{ id, name, trades, schema, columns, productFields,
+  permissions, checkout: {validateLine, beforeCommit}, stock: {rule}, reports,
+  ui, template, activate }`. `discover()` loads every file in `modules/`;
+  `active(d)` builds the registry for a business (trade modules + anything the
+  owner switched on) and caches it until something changes.
+- **Eight hook points** (ARCHITECTURE §4): `productFields`, `checkout.validateLine`,
+  `checkout.beforeCommit`, `stock.rule`, `reports`, `permissions`, `ui`, `template`.
+- **Gate hooks fail closed** and are audited (`module/failure`); a module that
+  throws blocks the operation and says so in the module's own words. **Collect
+  hooks fail open** — a broken module is skipped, the core keeps trading.
+- **Per-line module data:** `validateLine` may return a value (e.g. an Rx
+  reference). The core stores it opaquely in `sale_items.module_data` and hands
+  it back at `beforeCommit`, so evidence survives a held sale or an offline replay.
+- Core surface, all generic: `GET /api/modules`, `POST /api/modules/:id/activate|
+  deactivate` (owner-only, audited), `GET /api/reports/modules[?format=csv]`,
+  and module fields/UI/reports riding along in `/api/bootstrap`.
+- `lib/permissions.js` gained a module source, so `spirits.premium` and
+  `pharmacy.dispense` are enforced and grantable exactly like core permissions.
+
+**Two modules ship with the framework (and seed Phases 19 & 21)**
+- **spirits** — premium lines a cashier may not ring up (module permission,
+  grantable), bottle/case fields (ABV, bottle ml, case size), a premium-sales
+  log written at commit, price-per-litre and premium-sales reports, manager panel.
+- **pharmacy** — prescription capture (Rx reference required, repeat-dispense
+  refused with 409), controlled-drug register with the dispenser's name, an
+  **expiry block** that refuses to sell an expired batch while still allowing it
+  to be written off, expiry-watch and controlled-register reports, manager panel.
+
+**Core, cleaned (the point of the whole phase):** the `requires_rx` /
+`is_controlled` gates that sat hardcoded in `prepareSaleLines` (and duplicated in
+the exchange path) are gone. The core now enforces only the generic flags it
+stores — `age_min`, `track_serials`, R-S8 — for every trade.
+
+**Acceptance (all tested):**
+- A **new industry defined inside the test file** — no core file edited, no new
+  file in `modules/` — activates and drives every hook: its field appears in
+  `/api/attribute-defs`, its checkout gate blocks a line with its own message,
+  its stock rule blocks a move, its report runs (JSON + CSV), its permission
+  gates its own report, its UI part reaches the shell, its template is returned
+  for onboarding.
+- Pharmacy flow: cashier refused → dispenser must record the Rx reference →
+  prescription row + controlled register row written → same Rx refused twice.
+- Expired batch: sale refused (409), write-off allowed, then the sale goes through.
+- Premium line: cashier refused (403), owner allowed, cashier **granted**
+  `spirits.premium` then allowed, grant revoked → refused again.
+- A module that throws: sale blocked (500), failure audited, **no sale and no
+  stock move written**; the core trades normally the moment it is switched off.
+- Deactivate: the rules stop, the evidence stays.
+
+**Bugs found & fixed along the way (all pre-existing):**
+1. `d.transaction()` could not nest — module activation runs inside setup's
+   transaction, so setup returned 500. Nested transactions are now SAVEPOINTs.
+2. `products.meta` was computed by `cleanProduct` and then dropped by both the
+   INSERT and the UPDATE: **no industry attribute could ever be saved on a
+   product**, which would have silently broken this phase's `productFields` hook.
+3. `manager.html` did `(await api('/api/categories')).catch(...)` — `.catch` on
+   an awaited value threw a TypeError that stopped the entire back office from
+   booting. No UI test existed to catch it; there is one now.
+
 ### Day 7–8 — Purchasing & Supplier System (Phase 5) ✅ (2026-09-02)
 **Backend (engines first, all capability-gated behind `purchasing`):**
 - `db.js` — schema v5 (additive): `suppliers.lead_days`; `po_items` + `gr_items` gain

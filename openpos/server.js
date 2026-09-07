@@ -14,8 +14,111 @@ const auth = require('./lib/auth');
 const perms = require('./lib/permissions');
 const caps = require('./lib/capabilities');
 const { TRADES } = require('./lib/sample');
+const mods = require('./modules/loader');
+
+// Phase 18: every file in modules/ is an industry module. Loading them here is
+// the ONLY place the core mentions modules by directory — it never names one.
+mods.discover();
+// Module-declared permissions are enforced exactly like core ones.
+perms.setModuleSource((d) => mods.active(d).permissions());
 
 const ROLES = ['owner', 'manager', 'cashier', 'staff'];
+
+// ---- module framework helpers (the core's single door to every module) -----
+function bizTrade(d) {
+  return (dbm.getSetting(d, 'business', {}) || {}).trade || null;
+}
+
+/** The registry of modules active for this business. */
+function registry(d) {
+  if (mods.isEmpty()) return EMPTY_REGISTRY;
+  return mods.active(d, { trade: bizTrade(d) });
+}
+
+// Cached "no modules" registry: writeMove calls this on every single move.
+const EMPTY_REGISTRY = new mods.Registry([], { trade: null });
+
+/**
+ * What a module hook is allowed to use. Deliberately narrow: a module can read
+ * flags and permissions and block with a message — it cannot touch the ledger,
+ * the payment engine or the audit log directly (R-M1).
+ */
+function moduleHelpers(d) {
+  return {
+    hasPerm: (user, perm) => perms.userHasPerm(d, user, perm),
+    flag: (product, variant, key) => moduleFlag(product, variant, key),
+    meta: (product, variant, key) => moduleFlag(product, variant, key),
+    block: (status, message) => mods.block(status, message),
+    setting: (key, fallback) => dbm.getSetting(d, key, fallback),
+    now: () => new Date().toISOString(),
+    trade: bizTrade(d)
+  };
+}
+
+/**
+ * Run a gating module hook (checkout.validateLine / checkout.beforeCommit /
+ * stock.rule). A module blocks by throwing block(status, message) — that becomes
+ * the HTTP error the till shows, in the module's own words. An unexpected
+ * failure inside a module is contained: it fails closed and is audited, but it
+ * is always reported as the module's fault, never as a silent pass.
+ */
+function runModuleGate(d, hook, ctx) {
+  const reg = registry(d);
+  if (!reg || !reg.has(hook)) return ctx;
+  try {
+    return reg.gate(hook, ctx);
+  } catch (e) {
+    if (e && e.status && e.status >= 500 && ctx.user) {
+      try {
+        dbm.audit(d, {
+          userId: ctx.user.id, action: 'module/failure', entity: 'module',
+          entityId: String(e.module || hook), detail: { hook, message: e.message }
+        });
+      } catch (_) {}
+    }
+    throw httpError(e.status || 500, e.message);
+  }
+}
+
+/**
+ * The last look before a sale commits: modules keep their own evidence here
+ * (a prescription record, a controlled-drug register row, a premium log).
+ * Still a gate — if a module cannot record what the law requires, the sale
+ * does not happen.
+ */
+function runModuleCommit(d, { sale, lines, user, ctx }) {
+  const reg = registry(d);
+  if (!reg.has('checkout.beforeCommit')) return;
+  try {
+    reg.gate('checkout.beforeCommit', { d, sale, lines, user, ctx, helpers: moduleHelpers(d) });
+  } catch (e) {
+    if (e && e.status && e.status >= 500 && user) {
+      try {
+        dbm.audit(d, {
+          userId: user.id, action: 'module/failure', entity: 'module', entityId: 'beforeCommit',
+          detail: { hook: 'checkout.beforeCommit', message: e.message, saleId: sale && sale.id }
+        });
+      } catch (_) {}
+    }
+    throw httpError(e.status || 400, e.message);
+  }
+}
+
+/** A module field lives in product/variant meta; the variant wins (R-M2). */
+function moduleFlag(product, variant, key) {
+  const pm = parseMeta(product && product.meta);
+  const vm = parseMeta(variant && variant.meta);
+  const v = vm[key];
+  if (v !== undefined && v !== null && v !== '') return v;
+  const p = pm[key];
+  return p === undefined ? null : p;
+}
+
+function parseMeta(m) {
+  if (!m) return {};
+  if (typeof m === 'object') return m;
+  try { return JSON.parse(m) || {}; } catch { return {}; }
+}
 
 function publicUser(u) {
   return {
@@ -228,6 +331,26 @@ function writeMove(d, { product, variant, branchId, locationId, qty, type, reaso
     if (!s || s.variant_id !== variant.id) throw httpError(400, 'serial does not belong to this variant');
   }
 
+  // Phase 18: industry stock rules (e.g. a chemist may never sell an expired
+  // batch). Every quantity change in the system passes this door. The hook sees
+  // the batch named on the move and — for a FEFO issue — the lots that WILL be
+  // consumed, so a rule can refuse before a single row is written.
+  const reg = registry(d);
+  if (reg.has('stock.rule')) {
+    const batch = batchId ? d.prepare('SELECT * FROM batches WHERE id = ?').get(batchId) : null;
+    const lots = product.track_batches && !batchId && qty < 0
+      ? d.prepare('SELECT * FROM batches WHERE variant_id = ? AND location_id = ? AND qty > 0 ORDER BY expiry_date IS NULL, expiry_date ASC, id ASC').all(variant.id, locationId)
+      : [];
+    try {
+      reg.gate('stock.rule', {
+        d, product, variant, batch, lots, qty, type, reason, ref, locationId, branchId,
+        user: userId ? { id: userId } : null, helpers: moduleHelpers(d)
+      });
+    } catch (e) {
+      throw httpError(e.status || 400, e.message);
+    }
+  }
+
   // Batch allocation
   const allocs = []; // { batchId, qty }
   if (product.track_batches) {
@@ -387,7 +510,12 @@ function cleanProduct(p) {
     minMarginPct: p.min_margin_pct === undefined || p.min_margin_pct === null || p.min_margin_pct === ''
       ? null
       : (Number.isFinite(Number(p.min_margin_pct)) && Number(p.min_margin_pct) >= 0 ? Number(p.min_margin_pct) : 0),
-    image: String(p.image || '').trim()
+    image: String(p.image || '').trim(),
+    // Phase 18: industry module fields live here as opaque JSON (R-M2). The
+    // core stores and returns them; it never reads them.
+    meta: p.meta && typeof p.meta === 'object'
+      ? JSON.stringify(p.meta)
+      : (typeof p.meta === 'string' && p.meta.trim() ? p.meta : '{}')
   };
 }
 
@@ -419,9 +547,12 @@ function createApp(d) {
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
   app.use(express.static(path.join(__dirname, 'public')));
+  // Phase 18: industry modules ship their own browser panels here. Only the
+  // modules/ui folder is public — module server code is never served.
+  app.use('/modules', express.static(path.join(__dirname, 'modules', 'ui')));
 
   // ---- health / status ------------------------------------------------------
-  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 12 }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 18, modules: mods.all().map((m) => m.id) }));
 
   app.get('/api/setup/status', (req, res) => {
     res.json({
@@ -432,6 +563,114 @@ function createApp(d) {
   });
 
   app.get('/api/trades', (req, res) => res.json(TRADES));
+
+  // ---- Phase 18: industry modules -------------------------------------------
+  // The core talks about modules generically: it lists what is registered, lets
+  // the owner switch one on, and runs whatever reports the active ones declare.
+  // It never names a module (R-M). Activation is data, never a deployment (R-C3).
+
+  /** Write a module's declared product fields into the generic attribute defs. */
+  function syncModuleFields(d, reg) {
+    const fields = reg.productFields();
+    if (!fields.length) return fields;
+    const ins = d.prepare(`
+      INSERT INTO attribute_defs (business_id, key, label, label_sw, type, options, applies_to, active, created_at)
+      VALUES (1, ?, ?, ?, ?, ?, ?, 1, ?)
+      ON CONFLICT(business_id, key) DO UPDATE SET
+        label = excluded.label, label_sw = excluded.label_sw, type = excluded.type,
+        options = excluded.options, applies_to = excluded.applies_to, active = 1
+    `);
+    const now = new Date().toISOString();
+    for (const f of fields) ins.run(f.key, f.label, f.labelSw, f.type, f.options || '', f.appliesTo, now);
+    return fields;
+  }
+
+  function moduleListPayload(d) {
+    const reg = registry(d);
+    const trade = bizTrade(d);
+    const ids = reg.ids;
+    return {
+      trade,
+      active: ids,
+      modules: mods.all().map((m) => ({
+        id: m.id, name: m.name, nameSw: m.nameSw, version: m.version,
+        description: m.description, descriptionSw: m.descriptionSw,
+        trades: m.trades, provides: mods.provides(m.id),
+        active: ids.includes(m.id),
+        auto: m.trades.includes('*') || m.trades.includes(String(trade || ''))
+      }))
+    };
+  }
+
+  app.get('/api/modules', me, (req, res) => res.json(moduleListPayload(d)));
+
+  app.post('/api/modules/:id/activate', me, can('capabilities.manage'), (req, res) => {
+    const id = String(req.params.id || '');
+    if (!mods.get(id)) return res.status(404).json({ error: `unknown module: ${id}` });
+    try {
+      mods.activate(d, id, { userId: req.user.id, audit: (a) => dbm.audit(d, a) });
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
+    // R-C4: a module may need capabilities on (bottle→case packs for spirits).
+    const m = mods.get(id);
+    caps.ensureCapabilityRows(d);
+    for (const c of m.capabilities || []) {
+      if (!caps.isCap(c)) continue;
+      d.prepare(`
+        INSERT INTO business_capabilities (capability, enabled, enabled_at) VALUES (?, 1, ?)
+        ON CONFLICT(business_id, capability) DO UPDATE SET enabled = 1, enabled_at = excluded.enabled_at
+      `).run(c, new Date().toISOString());
+    }
+    syncModuleFields(d, registry(d));
+    res.json({ ok: true, ...moduleListPayload(d) });
+  });
+
+  app.post('/api/modules/:id/deactivate', me, can('capabilities.manage'), (req, res) => {
+    const id = String(req.params.id || '');
+    if (!mods.get(id)) return res.status(404).json({ error: `unknown module: ${id}` });
+    try {
+      mods.deactivate(d, id, { userId: req.user.id, audit: (a) => dbm.audit(d, a) });
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
+    res.json({ ok: true, ...moduleListPayload(d) });
+  });
+
+  // Reports declared by active modules — one generic door, so adding a report
+  // to an industry costs nothing in the core.
+  app.get('/api/reports/modules', me, can('reports.view'), (req, res) => {
+    const rows = registry(d).reports().map((r) => ({
+      id: r.id, module: r.module, title: r.title, titleSw: r.titleSw,
+      columns: r.columns, allowed: perms.userHasPerm(d, req.user, r.perm)
+    }));
+    res.json({ reports: rows });
+  });
+
+  app.get('/api/reports/modules/:id', me, (req, res) => {
+    const rep = registry(d).report(req.params.id);
+    if (!rep) return res.status(404).json({ error: 'report not found' });
+    if (!perms.userHasPerm(d, req.user, rep.perm)) {
+      return res.status(403).json({ error: `this report needs the ${rep.perm} permission` });
+    }
+    const branches = visibleBranches(d, req.user).map((b) => b.id);
+    const branchId = numOrNull(req.query.branch_id);
+    if (branchId && !branches.includes(branchId)) return res.status(404).json({ error: 'branch not found' });
+    const { from, to } = parseRange(req);
+    let out;
+    try {
+      out = rep.run(d, { from, to, branches, branchId, days: req.query.days, user: req.user }) || { rows: [] };
+    } catch (e) {
+      return res.status(500).json({ error: `module "${rep.module}" report failed: ${e.message}` });
+    }
+    const rows = out.rows || [];
+    const columns = out.columns || rep.columns || (rows[0] ? Object.keys(rows[0]) : []);
+    if (String(req.query.format || '').toLowerCase() === 'csv') {
+      res.type('text/csv').attachment(`${rep.id}.csv`);
+      return res.send(require('./lib/csv').toCsv(columns, rows));
+    }
+    res.json({ report: { id: rep.id, module: rep.module, title: rep.title, titleSw: rep.titleSw }, columns, rows });
+  });
 
   // ---- first-run setup v2 (solo-first, R-C1) --------------------------------
   // No branch/register questions: every business gets 1 branch + "Main Store"
@@ -497,9 +736,23 @@ function createApp(d) {
       caps.ensureCapabilityRows(d);
       caps.seedForTrade(d, trade);
 
+      // Phase 18: the trade's industry modules switch themselves on. Their
+      // product fields land in the generic attribute defs, and any module
+      // template data is appended to the core's starter catalogue.
+      mods.syncForTrade(d, trade, { userId: ownerId, audit: (a) => dbm.audit(d, a) });
+      syncModuleFields(d, registry(d));
+
       if (req.body.sample) {
         const { buildSample } = require('./lib/sample');
         const sample = buildSample(trade);
+        // Hook 7 — template: a module may add starter lines for its trade.
+        for (const t of registry(d).template()) {
+          const firstCat = (sample.categories || []).length;
+          for (const c of t.categories || []) sample.categories.push(c);
+          (t.products || []).forEach((p) => {
+            sample.products.push({ ...p, categoryId: firstCat + (p.categoryId || 1) });
+          });
+        }
         const insCat = d.prepare(
           'INSERT INTO categories (branch_id, name, name_sw, active) VALUES (NULL, ?, ?, 1)'
         );
@@ -671,7 +924,18 @@ function createApp(d) {
       openShift: openShift
         ? { id: openShift.id, openedAt: openShift.opened_at, float: openShift.float_open, userName: userName(d, openShift.user_id) }
         : null,
-      suggestions: isManagerLike ? caps.getSuggestions(d) : []
+      suggestions: isManagerLike ? caps.getSuggestions(d) : [],
+      // Phase 18: what the active industry modules contribute to the UI.
+      modules: {
+        trade: bizTrade(d),
+        active: registry(d).ids,
+        fields: registry(d).productFields(),
+        ui: registry(d).ui(),
+        reports: registry(d).reports().map((r) => ({
+          id: r.id, module: r.module, title: r.title, titleSw: r.titleSw,
+          allowed: perms.userHasPerm(d, req.user, r.perm)
+        }))
+      }
     });
   });
 
@@ -1029,7 +1293,7 @@ function createApp(d) {
     const u = d.prepare('SELECT * FROM users WHERE id = ?').get(numOrNull(req.params.id));
     if (!u) return res.status(404).json({ error: 'not found' });
     const { permission, allowed } = req.body || {};
-    if (!perms.PERMISSIONS.includes(permission)) return res.status(400).json({ error: 'unknown permission' });
+    if (!perms.isKnownPerm(d, permission)) return res.status(400).json({ error: 'unknown permission' });
     if (allowed) {
       d.prepare(
         `INSERT INTO user_permissions (user_id, permission, allowed) VALUES (?, ?, 1)
@@ -1140,14 +1404,14 @@ function createApp(d) {
              (branch_id, sku, barcode, name, name_sw, category_id, brand, unit, pack_size, pack_name,
               cost, price, wholesale_price, member_price, tax_type, kra_item_code,
               age_min, requires_rx, is_controlled, track_batches, track_serials, open_priced,
-              supplier_id, reorder_level, min_margin_pct, image, active, created_at, updated_at)
-           VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+              supplier_id, reorder_level, min_margin_pct, image, meta, active, created_at, updated_at)
+           VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
         )
         .run(
           p.sku, p.barcode, p.name, p.name_sw, p.categoryId, p.brand, p.unit, p.packSize, p.packName,
           p.cost, p.price, p.wholesalePrice, p.memberPrice, p.taxType, p.kraCode,
           p.ageMin, p.requiresRx, p.isControlled, p.trackBatches, p.trackSerials, p.openPriced,
-          p.supplierId, p.reorderLevel, p.minMarginPct, p.image, now, now
+          p.supplierId, p.reorderLevel, p.minMarginPct, p.image, p.meta || '{}', now, now
         ).lastInsertRowid;
       // R-P1: every product carries at least its implicit variant
       const vid = d
@@ -1198,13 +1462,14 @@ function createApp(d) {
           unit = ?, pack_size = ?, pack_name = ?, cost = ?, price = ?, wholesale_price = ?, member_price = ?,
           tax_type = ?, kra_item_code = ?, age_min = ?, requires_rx = ?, is_controlled = ?,
           track_batches = ?, track_serials = ?, open_priced = ?, supplier_id = ?, reorder_level = ?, min_margin_pct = ?, image = ?,
-          active = ?, updated_at = ? WHERE id = ?`
+          meta = ?, active = ?, updated_at = ? WHERE id = ?`
       ).run(
         merged.sku, merged.barcode, merged.name, merged.name_sw, merged.categoryId, merged.brand,
         merged.unit, merged.packSize, merged.packName, merged.cost, merged.price, merged.wholesalePrice,
         merged.memberPrice, merged.taxType, merged.kraCode, merged.ageMin, merged.requiresRx,
         merged.isControlled, merged.trackBatches, merged.trackSerials, merged.openPriced,
         merged.supplierId, merged.reorderLevel, merged.minMarginPct, merged.image,
+        merged.meta || '{}',
         b.active !== undefined ? (b.active ? 1 : 0) : cur.active,
         new Date().toISOString(),
         cur.id
@@ -3406,11 +3671,18 @@ function createApp(d) {
       if (!variant) throw httpError(404, `unknown variant ${variantId}`);
       const product = d.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(variant.product_id);
       if (!product) throw httpError(404, 'unknown product');
-      if (product.requires_rx) throw httpError(403, `${product.name} requires a prescription (pharmacy workflow)`);
-      if (product.is_controlled) throw httpError(403, `${product.name} is controlled — licensed workflow required`);
+      // Core enforces the flags it stores, for every trade (age, serial units).
+      // Industry rules — prescription capture, controlled drugs, premium lines —
+      // are enforced by the active modules through one door (R-M).
       if (product.age_min && !it.age_verified) {
         throw httpError(400, `${product.name}: age verification required (${product.age_min}+)`);
       }
+      const gate = runModuleGate(d, 'checkout.validateLine', {
+        d, item: it, product, variant, user, ctx, helpers: moduleHelpers(d)
+      });
+      // Opaque per-line module data (e.g. an Rx reference). The core stores it
+      // on the sale line and hands it back at commit; it never reads it.
+      const moduleData = (gate && gate.results && Object.keys(gate.results).length) ? gate.results : {};
       if (product.track_serials && !Number.isInteger(qty)) throw httpError(400, 'serial-tracked items must be whole units');
       // R-PR: freeze the price the moment the line is added.
       const res = resolvePrice(d, { variantId, branchId: ctx.branchId, customerId: customer ? customer.id : null, promoCode });
@@ -3427,7 +3699,8 @@ function createApp(d) {
       lines.push({
         variant, product, qty, unitPrice: res.price, source: res.source, disc, net, tax, gross: net + tax,
         taxType, kra: eff(product, variant, 'kra_item_code') || '',
-        age: product.age_min ? 1 : 0, batchId: null, note: String(it.line_note || '').trim()
+        age: product.age_min ? 1 : 0, batchId: null, note: String(it.line_note || '').trim(),
+        moduleData
       });
     }
     return { lines, customer };
@@ -3580,12 +3853,21 @@ function createApp(d) {
           payRes = applyPayment(d, { user: req.user, saleId: id, sale, payment: b.payment, discountBy });
         }
         const ins = d.prepare(
-          `INSERT INTO sale_items (sale_id, product_id, variant_id, name, qty, unit, line_discount, net, tax, gross, tax_type, kra_item_code, batch_id, line_note, age_verified, unit_price)
-           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO sale_items (sale_id, product_id, variant_id, name, qty, unit, line_discount, net, tax, gross, tax_type, kra_item_code, batch_id, line_note, age_verified, unit_price, module_data)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         );
         for (const L of lines) {
-          ins.run(id, L.product.id, L.variant.id, L.product.name + (L.variant.name ? ` — ${L.variant.name}` : ''),
-            L.qty, L.disc, L.net, L.tax, L.gross, L.taxType, L.kra, hold ? null : L.batchId, L.note, L.age, L.unitPrice);
+          const siId = ins.run(id, L.product.id, L.variant.id, L.product.name + (L.variant.name ? ` — ${L.variant.name}` : ''),
+            L.qty, L.disc, L.net, L.tax, L.gross, L.taxType, L.kra, hold ? null : L.batchId, L.note, L.age, L.unitPrice,
+            JSON.stringify(L.moduleData || {})).lastInsertRowid;
+          L.saleItemId = Number(siId);
+        }
+        // Phase 18: modules take their last look (evidence, registers, logs).
+        if (!hold) {
+          runModuleCommit(d, {
+            d, sale: d.prepare('SELECT * FROM sales WHERE id = ?').get(id),
+            lines, user: req.user, ctx
+          });
         }
         // Phase 17 sync log
         try {
@@ -3648,7 +3930,8 @@ function createApp(d) {
       return {
         variant, product, qty: row.qty, unitPrice: row.unit_price || 0, source: 'frozen',
         disc: row.line_discount, net: row.net, tax: row.tax, gross: row.gross,
-        taxType: row.tax_type, kra: row.kra_item_code, age: row.age_verified, batchId: null, note: row.line_note, _rowId: row.id
+        taxType: row.tax_type, kra: row.kra_item_code, age: row.age_verified, batchId: null,
+        note: row.line_note, _rowId: row.id, moduleData: safeJson(row.module_data) || {}
       };
     });
     const ctx = saleContext(d, user);
@@ -3662,6 +3945,11 @@ function createApp(d) {
       if (markInvoice) d.prepare("UPDATE sales SET kind = 'invoice' WHERE id = ?").run(sale.id);
       const upd = d.prepare('UPDATE sale_items SET batch_id = ? WHERE id = ?');
       for (const L of lines) upd.run(L.batchId, L._rowId);
+      // Phase 18: the modules' last look (a held sale commits here).
+      runModuleCommit(d, {
+        d, sale: d.prepare('SELECT * FROM sales WHERE id = ?').get(sale.id),
+        lines, user, ctx
+      });
     });
     run();
     return payRes;
@@ -4657,10 +4945,17 @@ function createApp(d) {
         if (!variant) return res.status(404).json({ error: `unknown variant ${variantId}` });
         const product = d.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(variant.product_id);
         if (!product) return res.status(404).json({ error: 'unknown product' });
-        if (product.requires_rx) return res.status(403).json({ error: `${product.name} requires a prescription` });
-        if (product.is_controlled) return res.status(403).json({ error: `${product.name} is controlled — licensed workflow required` });
         if (product.age_min && !it.age_verified) {
           return res.status(400).json({ error: `${product.name}: age verification required (${product.age_min}+)` });
+        }
+        // Same industry gate as the till: exchange replacement lines go through
+        // the module door too, so a rule can never be dodged via an exchange.
+        try {
+          runModuleGate(d, 'checkout.validateLine', {
+            d, item: it, product, variant, user: req.user, ctx, helpers: moduleHelpers(d)
+          });
+        } catch (e) {
+          return res.status(e.status || 400).json({ error: e.message });
         }
         const px = resolvePrice(d, { variantId, branchId: ctx.branchId, customerId: sale.customer_id, promoCode: null });
         if (px.error) return res.status(px.status || 400).json({ error: px.error });
@@ -4738,13 +5033,18 @@ function createApp(d) {
         moveStockForSale(d, { user: req.user, ctx, lines: prepared.lines, ref: invoiceNo, allowOversell: false });
         const newSale = d.prepare('SELECT * FROM sales WHERE id = ?').get(newSaleId);
         const ins = d.prepare(
-          `INSERT INTO sale_items (sale_id, product_id, variant_id, name, qty, unit, line_discount, net, tax, gross, tax_type, kra_item_code, batch_id, line_note, age_verified, unit_price)
-           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO sale_items (sale_id, product_id, variant_id, name, qty, unit, line_discount, net, tax, gross, tax_type, kra_item_code, batch_id, line_note, age_verified, unit_price, module_data)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         );
         for (const L of prepared.lines) {
-          ins.run(newSaleId, L.product.id, L.variant.id, L.product.name + (L.variant.name ? ` — ${L.variant.name}` : ''),
-            L.qty, L.disc, L.net, L.tax, L.gross, L.taxType, L.kra, L.batchId, L.note, L.age, L.unitPrice);
+          const siId = ins.run(newSaleId, L.product.id, L.variant.id, L.product.name + (L.variant.name ? ` — ${L.variant.name}` : ''),
+            L.qty, L.disc, L.net, L.tax, L.gross, L.taxType, L.kra, L.batchId, L.note, L.age, L.unitPrice,
+            JSON.stringify(L.moduleData || {})).lastInsertRowid;
+          L.saleItemId = Number(siId);
         }
+        runModuleCommit(d, {
+          d, sale: newSale, lines: prepared.lines, user: req.user, ctx
+        });
         let payRes = null;
         let refundRows = [];
         if (owed > 0) {
@@ -7616,7 +7916,8 @@ if (require.main === module) {
   auth.pruneSessions(db);
   app.listen(PORT, '0.0.0.0', () => {
     const s = dbm.getSetting(db, 'business', {});
-    console.log(`OpenPOS v2 (Phase 12 — multi-branch)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
+    const activeMods = mods.active(db).ids;
+    console.log(`OpenPOS v2 (Phase 18 — industry modules)  ·  ${s.name || 'fresh install — run onboarding'}  ·  ${s.trade ? `trade: ${s.trade}` : 'no trade yet'}${activeMods.length ? ` · modules: ${activeMods.join(', ')}` : ''}  ·  http://0.0.0.0:${PORT}`);
   });
 }
 
