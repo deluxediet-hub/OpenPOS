@@ -8,6 +8,58 @@
 </head>
 <body>
 
+<!-- ============ VIEW: WELCOME ============ -->
+<div id="view-welcome" class="welcome hidden">
+  <div class="welcome-top">
+    <span class="brand">OpenPOS <span style="font-weight:500;color:var(--muted)">v2</span></span>
+    <span class="spacer"></span>
+    <button class="lang-toggle" id="wk-lang"
+      style="border:1px solid var(--line-strong);background:#fff;color:var(--ink-700);padding:6px 12px;border-radius:9px;cursor:pointer;font-size:13px;font-weight:600">SW</button>
+  </div>
+
+  <div class="hero">
+    <div class="eyebrow" data-i18n="welcome_eyebrow">For Kenyan shops</div>
+    <h1 data-i18n="welcome_title">The till that keeps<br><em>your books straight</em></h1>
+    <p class="lede" data-i18n="welcome_sub">Sell, track stock, take M-Pesa and print a KRA-ready receipt —
+      on the counter PC or the phone in your hand, even when the internet is gone.</p>
+    <div class="cta">
+      <button class="btn lg" id="wk-start" data-i18n="welcome_start">Set up my shop</button>
+      <button class="btn lg ghost" id="wk-signin" data-i18n="welcome_signin">I already have a shop</button>
+    </div>
+    <div class="trust">
+      <span data-i18n="welcome_offline">Works offline</span>
+      <span data-i18n="welcome_mpesa">M-Pesa built in</span>
+      <span data-i18n="welcome_kra">KRA / eTIMS ready</span>
+      <span data-i18n="welcome_yours">Your data stays yours</span>
+    </div>
+  </div>
+
+  <div class="features">
+    <div class="feature">
+      <div class="ic">⚡</div>
+      <h4 data-i18n="welcome_feat1">Sell in seconds</h4>
+      <p data-i18n="welcome_feat1d">Scan or tap. Cash, M-Pesa or credit. The receipt prints itself and the
+        stock counts itself down.</p>
+    </div>
+    <div class="feature">
+      <div class="ic">📦</div>
+      <h4 data-i18n="welcome_feat2">Know what is on the shelf</h4>
+      <p data-i18n="welcome_feat2d">Every unit is accounted for — stock takes, low-stock warnings,
+        batches and expiry, and shrinkage you can see.</p>
+    </div>
+    <div class="feature">
+      <div class="ic">🌱</div>
+      <h4 data-i18n="welcome_feat3">Grows with your shop</h4>
+      <p data-i18n="welcome_feat3d">Start with one till. Add staff, branches and an online shop when you
+        are ready — without changing systems.</p>
+    </div>
+  </div>
+
+  <div class="welcome-foot">
+    <span data-i18n="welcome_foot">Made for shops that cannot afford a mistake.</span>
+  </div>
+</div>
+
 <!-- ============ VIEW: ONBOARDING v2 (solo-first, R-C1) ============ -->
 <div id="view-onboard" class="wizard hidden">
   <div class="card">
@@ -48,6 +100,9 @@
       <button class="btn" id="w-next" data-i18n="next">Next</button>
     </div>
     <div class="msg" id="w-msg"></div>
+    <div class="center" style="margin-top:6px">
+      <a href="#" id="w-home" class="small" data-i18n="welcome_back">← Back to start</a>
+    </div>
   </div>
 </div>
 
@@ -63,8 +118,11 @@
       <select id="l-staff"></select></label>
     <div class="f"><span data-i18n="enter_pin">Enter PIN</span>
       <div id="l-pinpad"></div></div>
-    <button class="btn" id="l-go" style="width:100%" data-i18n="sign_in">Sign in</button>
+    <button class="btn lg block" id="l-go" data-i18n="sign_in">Sign in</button>
     <div class="msg" id="l-msg"></div>
+    <div class="center" style="margin-top:6px">
+      <a href="#" id="l-home" class="small" data-i18n="welcome_back">← Back to start</a>
+    </div>
   </div>
 </div>
 
@@ -79,6 +137,16 @@
     <button id="d-logout" data-i18n="logout">Sign out</button>
   </div>
   <div class="wrap">
+    <div class="dash-hero">
+      <div class="who">
+        <div class="h" id="d-hello">—</div>
+        <div class="s" id="d-today-str"></div>
+      </div>
+      <div class="acts">
+        <a class="btn" href="/pos.html" data-i18n="open_till">Open the till</a>
+        <a class="btn ghost" href="/manager.html" data-i18n="open_back_office">Back office</a>
+      </div>
+    </div>
     <div class="grid cols-4" style="margin-bottom:14px">
       <div class="card stat"><h3 data-i18n="today">Today</h3>
         <div class="num" id="d-sales">—</div><div class="sub" id="d-tx"></div></div>
@@ -112,8 +180,26 @@ const { t, setLang, api, fmt, esc, pinpad, toast, netBadge } = OP;
 const $ = (s) => document.querySelector(s);
 
 function show(view) {
-  for (const v of ['view-onboard', 'view-login', 'view-dash']) $(`#${v}`).classList.add('hidden');
+  for (const v of ['view-welcome', 'view-onboard', 'view-login', 'view-dash']) $(`#${v}`).classList.add('hidden');
   $(`#${view}`).classList.remove('hidden');
+}
+
+// The first screen a shop meets. It earns the two minutes of setup that follow.
+function showWelcome() {
+  show('view-welcome');
+  $('#wk-lang').textContent = OP.lang() === 'en' ? 'SW' : 'EN';
+  if (!$('#wk-start').dataset.wired) {
+    $('#wk-start').onclick = () => initOnboard();
+    $('#wk-signin').onclick = async () => {
+      const st = await api('/api/setup/status').catch(() => ({}));
+      initLogin(st.businessName || '');
+    };
+    $('#wk-lang').onclick = () => {
+      OP.setLang(OP.lang() === 'en' ? 'sw' : 'en');
+      $('#wk-lang').textContent = OP.lang() === 'en' ? 'SW' : 'EN';
+    };
+    $('#wk-start').dataset.wired = '1';
+  }
 }
 
 // ---------------- onboarding v2 (solo-first) ----------------
@@ -130,7 +216,7 @@ function fillTrades() {
 
 function drawSteps() {
   $('#steps').innerHTML = STEP_KEYS.map((k, i) =>
-    `<div class="s ${i <= step ? 'on' : ''}" title="${esc(t(k))}"></div>`).join('');
+    `<div class="s ${i <= step ? 'on' : ''}"><i></i><em>${esc(t(k))}</em></div>`).join('');
   for (let i = 0; i < 3; i++) $(`#w${i}`).classList.toggle('hidden', i !== step);
   $('#w-back').style.visibility = step === 0 ? 'hidden' : 'visible';
   $('#w-next').textContent = step === 2 ? t('start_trading') : t('next');
@@ -144,7 +230,9 @@ async function initOnboard() {
   fillTrades();
   drawSteps();
   pinpad($('#o-pinpad'), (p) => { ownerPin = p; });
-  $('#w-back').onclick = () => { if (step > 0) { step--; drawSteps(); } };
+  $('#w-home').onclick = (e) => { e.preventDefault(); showWelcome(); };
+  $('#l-home').onclick = (e) => { e.preventDefault(); showWelcome(); };
+  $('#w-back').onclick = () => { if (step > 0) { step--; drawSteps(); } else showWelcome(); };
   $('#w-next').onclick = async () => {
     const msg = $('#w-msg');
     if (step === 0 && !$('#o-name').value.trim()) return toast(msg, t('business_name') + ' ?', false);
@@ -250,6 +338,10 @@ async function loadDash(bizName) {
     $('#d-shift-sub').textContent = 'opens with the till (Day 13)';
   }
 
+  const hour = new Date().getHours();
+  const greet = hour < 12 ? t('good_morning') : (hour < 17 ? t('good_afternoon') : t('good_evening'));
+  $('#d-hello').textContent = `${greet}, ${BOOT.me.name || ''}`.trim();
+  $('#d-today-str').textContent = `${new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })} · ${fmt(today.total)} ${t('today').toLowerCase()}`;
   drawNav(BOOT.caps, BOOT.me);
 
   // Grow your shop (R-C5)
@@ -297,7 +389,7 @@ async function loadDash(bizName) {
   OP.setLang(OP.lang());
   const st = await api('/api/setup/status').catch(() => ({ initialized: true }));
   if (!st.initialized) {
-    await initOnboard();
+    showWelcome();
   } else {
     try {
       await api('/api/me', { noRedirect: true });

@@ -6,7 +6,9 @@
 // Nothing here ever invents a price: an offline catalogue is the last one the
 // shop itself published, and the banner on the page says so.
 // ---------------------------------------------------------------------------
-const CACHE = 'openpos-store-v1';
+// Bump this when the shell (page or stylesheet) changes: a shop that has
+// installed the storefront should not be left with last season's theme.
+const CACHE = 'openpos-store-v2';
 const SHELL = ['/store.html', '/assets/styles.css', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {

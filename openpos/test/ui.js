@@ -389,6 +389,34 @@ async function waitFor(fn, label, timeout = 8000) {
     ck('manager page smoke', false, e.message + ' :: ' + mgr.errs.join(' | '));
   }
 
+  // ---------------- welcome & dashboard: the first screen a shop meets ------
+  try {
+    const home = await bootPage('index.html');
+    await waitFor(() => {
+      const d = home.w.document.querySelector('#d-nav');
+      return d && d.querySelectorAll('a').length > 0;
+    }, 'the dashboard doors :: ' + [...home.w.document.querySelectorAll('div[id^="view-"]')]
+      .filter((v) => !v.classList.contains('hidden')).map((v) => v.id).join(','), 20000);
+    ck('the first screen loads without script errors', home.errs.length === 0, home.errs.join(' | '));
+    const hero = home.w.document.querySelector('#view-welcome .hero h1');
+    ck('the welcome screen has a headline and a way in',
+      !!hero && hero.textContent.trim().length > 10 && !!home.w.document.querySelector('#wk-start'),
+      hero && hero.textContent.trim().slice(0, 60));
+    ck('and it says what the product is, before it asks for anything',
+      /M-Pesa|offline/i.test(home.w.document.querySelector('#view-welcome').textContent),
+      home.w.document.querySelector('#view-welcome').textContent.slice(0, 80));
+    ck('the dashboard greets the shop and offers the till',
+      (home.w.document.querySelector('#d-hello').textContent || '').trim().length > 2
+      && /pos\.html/.test((home.w.document.querySelector('.dash-hero') || {}).innerHTML || ''),
+      home.w.document.querySelector('#d-hello').textContent);
+    ck('every page tells a phone how wide it is',
+      ['index.html', 'pos.html', 'manager.html', 'store.html'].every(
+        (f) => /name="viewport"/.test(fs.readFileSync(path.join(PUB, f), 'utf8'))));
+    home.w.close();
+  } catch (e) {
+    ck('welcome & dashboard', false, e.message);
+  }
+
   // ---------------- till page ----------------
   const pos = pos0;
   try {

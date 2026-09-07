@@ -5,29 +5,57 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Deni statement</title>
 <style>
+  /* A statement is a document, not a screen: it must look right on paper and
+     still be readable on the phone the customer is holding. */
+  :root { --brand: #0a6b3a; --ink: #0d1a13; --muted: #62736a; --line: #e2eae5; }
   * { box-sizing: border-box; }
-  body { font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; color: #0f172a; margin: 0; background: #f1f5f9; }
-  .page { max-width: 720px; margin: 24px auto; background: #fff; padding: 32px; border-radius: 10px; box-shadow: 0 4px 18px rgba(15,23,42,.08); }
-  .top { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f172a; padding-bottom: 14px; margin-bottom: 14px; }
-  .biz { font-size: 20px; font-weight: 800; }
-  .biz small { display: block; font-weight: 400; font-size: 12px; color: #475569; }
-  h1 { font-size: 16px; margin: 0; text-transform: uppercase; letter-spacing: .06em; color: #475569; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; margin: 12px 0 18px; font-size: 13px; }
-  .grid b { color: #334155; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font: 14px/1.55 "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink); margin: 0;
+    background: radial-gradient(900px 400px at 90% -10%, #eef6f1, transparent), #f4f7f5;
+  }
+  .page {
+    max-width: 760px; margin: 22px auto; background: #fff; padding: 34px;
+    border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 10px 34px -18px rgba(9, 32, 20, .35);
+  }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; border-bottom: 2px solid var(--ink); padding-bottom: 14px; margin-bottom: 16px; }
+  .biz { font-size: 21px; font-weight: 800; letter-spacing: -.02em; }
+  .biz small { display: block; font-weight: 500; font-size: 12px; color: var(--muted); margin-top: 2px; }
+  h1 { font-size: 13px; margin: 0; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 26px; margin: 14px 0 20px; font-size: 13px; }
+  .grid b { color: var(--ink); }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #64748b; border-bottom: 1px solid #cbd5e1; padding: 6px 8px; }
-  td { padding: 6px 8px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); border-bottom: 1px solid #c9d6cd; padding: 8px; }
+  td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover { background: #f8faf9; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  tr.credit td { color: #b45309; }
+  tr.credit td { color: #a45c07; }
   tr.repay td { color: #15803d; }
-  .tot { display: flex; gap: 28px; margin-top: 14px; font-size: 13px; }
-  .tot div { flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; }
-  .tot b { display: block; font-size: 16px; margin-top: 2px; }
-  .foot { margin-top: 22px; padding-top: 12px; border-top: 1px dashed #cbd5e1; font-size: 12px; color: #64748b; display: flex; justify-content: space-between; }
-  .btnbar { max-width: 720px; margin: 0 auto; padding: 0 0 12px; display: flex; gap: 8px; justify-content: flex-end; }
-  .btn { border: 1px solid #0f172a; background: #0f172a; color: #fff; border-radius: 8px; padding: 8px 18px; font-weight: 600; cursor: pointer; }
-  .btn.ghost { background: #fff; color: #0f172a; }
-  @media print { body { background: #fff; } .page { box-shadow: none; margin: 0; max-width: none; } .btnbar { display: none; } }
+  .tot { display: flex; gap: 14px; margin-top: 18px; font-size: 12.5px; flex-wrap: wrap; }
+  .tot div { flex: 1 1 150px; border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px; background: #fbfdfc; }
+  .tot b { display: block; font-size: 18px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .foot { margin-top: 24px; padding-top: 12px; border-top: 1px dashed #cbd5e1; font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .btnbar { max-width: 760px; margin: 0 auto; padding: 16px 16px 0; display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px;
+    border: 1px solid var(--brand); background: var(--brand); color: #fff; border-radius: 10px;
+    padding: 9px 18px; font-weight: 650; font-size: 14px; cursor: pointer; font-family: inherit;
+    box-shadow: 0 1px 2px rgba(9, 32, 20, .1);
+  }
+  .btn:hover { filter: brightness(1.08); }
+  .btn.ghost { background: #fff; color: var(--brand); }
+  @media (max-width: 640px) {
+    .page { margin: 10px; padding: 20px; border-radius: 14px; }
+    .grid { grid-template-columns: 1fr; }
+    .top { flex-direction: column; }
+  }
+  @media print {
+    body { background: #fff; }
+    .page { box-shadow: none; border: none; margin: 0; max-width: none; padding: 0; border-radius: 0; }
+    .btnbar { display: none; }
+    table { font-size: 12px; }
+  }
 </style>
 </head>
 <body>
