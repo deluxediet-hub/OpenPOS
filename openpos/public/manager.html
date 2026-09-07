@@ -1343,6 +1343,37 @@
       </div>
 
       <div class="card" style="margin-top:14px">
+        <h3>Subscription</h3>
+        <p class="muted small" style="margin:0 0 10px">What this shop is on, what it costs, and how to pay it.
+          An unpaid subscription stops the till &mdash; never your right to read and export your own book.</p>
+        <div class="row">
+          <span class="pill" id="sub-plan">plan &mdash;</span>
+          <span class="pill" id="sub-status">status &mdash;</span>
+          <span class="spacer"></span>
+          <button class="btn ghost small" id="sub-refresh">Refresh</button>
+        </div>
+        <div id="sub-out" class="small" style="margin-top:8px"></div>
+        <div id="sub-usage" class="small muted" style="margin-top:4px"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h3>Businesses on this machine</h3>
+        <p class="muted small" style="margin:0 0 10px">One shop, one book: each business below keeps its own database
+          file, so no sale, customer or shilling can cross from one to another. The check writes a mark in each book
+          and hunts for it in every other one.</p>
+        <div class="row">
+          <button class="btn ghost small" id="biz-check">Run the isolation check</button>
+          <span class="spacer"></span>
+          <button class="btn ghost small" id="biz-refresh">Refresh</button>
+        </div>
+        <table style="margin-top:8px">
+          <thead><tr><th>Business</th><th>Trade</th><th>Plan</th><th>Billing</th><th>Its book</th></tr></thead>
+          <tbody id="biz-rows"></tbody>
+        </table>
+        <div id="biz-out" class="small" style="margin-top:8px"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
         <h3>Security settings</h3>
         <div class="grid cols-3">
           <label class="f"><span>Lock after (wrong PINs)</span><input id="ev-max-fails" type="number" min="2" max="20"></label>
@@ -3758,11 +3789,34 @@ async function loadEvidence() {
   if (sys[0]) $('#sys-version').textContent = `schema ${sys[0].version}${sys[0].up_to_date ? '' : ' (behind)'}`;
   if (sys[1]) $('#sys-out').textContent = sys[1].sentence;
 
+  const sub = await api('/api/billing').catch(() => null);
+  if (sub) {
+    $('#sub-plan').textContent = `${sub.plan_name || sub.plan}${sub.price_month ? ` · Ksh ${sub.price_month}/mo` : ''}`;
+    $('#sub-status').textContent = sub.status || '—';
+    $('#sub-out').textContent = sub.sentence || '';
+    $('#sub-usage').textContent = sub.usage ? sub.usage.sentence : '';
+  }
+  await loadBusinesses();
+
   const cfg = await api('/api/settings/security').catch(() => ({}));
   $('#ev-max-fails').value = (cfg.lockout || {}).max_fails || 5;
   $('#ev-lock-mins').value = (cfg.lockout || {}).lock_minutes || 5;
   $('#ev-session-hours').value = cfg.session_hours || 12;
   $('#ev-secure-cookies').checked = !!cfg.secure_cookies;
+}
+
+// ---------- businesses & subscriptions (Phase 33) ----------
+async function loadBusinesses() {
+  const rows = $('#biz-rows');
+  if (!rows) return;
+  const list = await api('/api/admin/businesses').catch(() => []);
+  rows.innerHTML = (list || []).map((b) => `<tr>
+      <td>${esc(b.name)}<div class="small muted">${esc(b.id)}</div></td>
+      <td>${esc(b.trade || '—')}</td>
+      <td>${esc((b.billing || {}).plan_name || b.plan || '—')}</td>
+      <td class="small">${esc((b.billing || {}).sentence || '—')}</td>
+      <td class="small muted">${b.db_exists ? `${(b.db_bytes / 1024).toFixed(0)} KB` : 'missing'}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">no businesses registered yet</td></tr>';
 }
 
 // ---------- devices (Phase 27) ----------
@@ -3900,6 +3954,25 @@ $('#sys-drill').onclick = async () => {
     const drill = await api('/api/admin/dr-drill');
     $('#sys-out').textContent = drill.sentence;
     toast($('#ev-msg'), drill.pass ? 'restore drill passed' : 'the drill found a problem', drill.pass);
+  } catch (e) { toast($('#ev-msg'), e.message, false); }
+};
+$('#sub-refresh').onclick = async () => {
+  try {
+    const b = await api('/api/billing');
+    $('#sub-plan').textContent = `${b.plan_name || b.plan}${b.price_month ? ` \u00b7 Ksh ${b.price_month}/mo` : ''}`;
+    $('#sub-status').textContent = b.status || '\u2014';
+    $('#sub-out').textContent = b.sentence || '';
+    $('#sub-usage').textContent = b.usage ? b.usage.sentence : '';
+  } catch (e) { toast($('#ev-msg'), e.message, false); }
+};
+$('#biz-refresh').onclick = async () => {
+  try { await loadBusinesses(); } catch (e) { toast($('#ev-msg'), e.message, false); }
+};
+$('#biz-check').onclick = async () => {
+  try {
+    const r = await api('/api/admin/isolation-check', { method: 'POST', body: {} });
+    $('#biz-out').textContent = r.sentence;
+    toast($('#ev-msg'), r.isolated ? 'no data crosses between businesses' : 'LEAK FOUND', r.isolated);
   } catch (e) { toast($('#ev-msg'), e.message, false); }
 };
 $('#ev-save').onclick = async () => {

@@ -394,9 +394,13 @@ reprint, and the core never looks inside it.
 
 ## 5. Tenancy & data
 
-- One SQLite file per deployment; **every top-level table carries `business_id`** (default 1)
-  — Phase 33 multi-tenant SaaS = more businesses in the same DB, isolated by the column.
-- Schema versioning: `schema_version` table + additive migrations on boot (tested, reversible
+- **One SQLite file per business** (Phase 33 decision, superseding the "one DB, `business_id`
+  column" sketch). Row-level isolation can be undone by a single forgotten `WHERE` clause; a
+  file boundary cannot. It also hands the shop its own book — a file they can hold, back up and
+  take elsewhere. Each business's book runs in its own process (`OPENPOS_BUSINESS` /
+  `dbm.openPath()`), and `lib/tenancy.js` keeps the registry of books. `business_id` still
+  exists as a column, but **isolation never depends on it**.
+- Schema versioning: `schema_migrations` table + additive migrations on boot (tested, reversible
   where practical). Full export: all tables CSV + single-file DB backup.
 
 ## 6. How Day-1 code maps to this architecture
@@ -424,6 +428,7 @@ reprint, and the core never looks inside it.
 | Owner intelligence | ✅ **Phase 29 done (Days 41–42):** the owner's questions, answered by **real queries with thresholds and sentences** — no assistant, no advice that is not a number. `lib/intelligence.js` answers: cash tied up (stock × cost × idle days) · branch performance **against that branch's own history** · yesterday's real profit (revenue − VAT − COGS − expenses) · why variance is high (per-cashier, with voids/refunds/discounts as the named root causes) · what to reorder today (days of cover + a suggested quantity) · which cashier over-discounts (their own rate vs the shop average) · what has not sold in 60 days · and anomaly flags as **z-scores** on discounts, refunds, variance and velocity over 30 days. `GET /api/intelligence/*` returns the rows, the threshold and a one-line sentence; the digest folds it into one message that can be sent to the owner over WhatsApp/SMS. Manager **Insights** tab. 217 tests green (was 208) + 34 UI |
 | Breakage matrix | ✅ **Phase 31 (machine half) done:** the eight ways real shops break are asserted, each ending with the books still adding up: **internet outage** (an offline sale replayed is one sale, one stock move) · **duplicate payment** (a repeated reference is refused by `uq_payments_ref`) · **partial refund** (the money back is on the payment, the rest of the goods stay paid for, and refunding more than is left is refused) · **wrong stock count** (a stocktake writes a counted, audited move) · **cash shortage** (a shift closed short records the variance and the drill finds it, per cashier) · **M-Pesa mismatch** (a short callback leaves the sale open, never quietly paid) · **transfer not received** (in-transit stock belongs to neither shelf, and nothing vanishes) · **price changed after sale** (the sold line keeps its frozen price; the new price applies from then on). **The human half of Phase 31 — testing with real Kenyan businesses — is still to do.** 225 tests green (was 217) |
 | Hardening | ✅ **Phase 32 done (Days 46–48):** the book is **versioned** (`schema_migrations`, `dbm.schemaInfo()`, `/api/admin/schema` — every step named, additive and reversible), **restorable** (`VACUUM INTO` snapshots with a checksum manifest, verified restore, and a **DR drill** that says how old the last good copy is and how long getting back takes), **observable** (one JSON line per request with a request id, counters by route and status, `/api/admin/metrics`, `/api/health/deep` that checks SQLite integrity rather than just saying "up"), **portable** (`/api/export/{products,sales,sale_items,stock,customers,payments,expenses}.csv` — the owner's own data in their own hands), and **fast** (Phase-32 indexes; measured on this machine: **p95 checkout 22 ms** for a 20-line sale, storefront catalogue p95 5 ms — the 300 ms budget is not close). Chaos: two simultaneous sales of the last unit → exactly one wins, one stock move, one payment. 232 tests green (was 225) |
+| Deployment & SaaS layer | ✅ **Phase 33 done (Days 49–50):** `lib/tenancy.js` (registry of books) + `lib/plans.js` (plans, trials, usage, M-Pesa). **Isolation is structural, not a column**: every business gets its own database **file**, created by running the real `/api/setup` against a temporary server (not a copied template). Self-serve registration `POST /api/admin/businesses` (name, trade, owner + PIN, plan) → a book that already has a catalogue, a tax setup and an owner who can log in. Plans: **Solo** (free, one shop), **Shop** (Ksh 1 500/mo), **Chain** (Ksh 4 000/mo) — each with usage limits that **warn at 80% before they block**. Trial counts its days out loud (30), M-Pesa lands on `POST /api/admin/businesses/:id/pay` and turns it into a paid subscription; overdue warns for 7 days, then `subscriptionGate` stops the till with **402** — and never stops reading or exporting the book, because the data is the shop's, not the subscription's. `POST /api/admin/isolation-check` writes a marker into each book and hunts for it in every other one; `GET /api/version` says which build and schema it is and that **a till does not update itself** (updates are a person's decision, after a backup). Manager: Subscription card + Businesses card. 240 tests green (was 232) + 37 UI |
 | Industry module framework | ✅ **Phase 18 done (Days 26–27):** `modules/loader.js` + **9** hook points; **spirits** and **pharmacy** modules ship as the proof. The prescription/controlled-drug gates were lifted out of `prepareSaleLines` into `modules/pharmacy.js`, so the checkout path contains no industry words (asserted in tests). New industry = new file: the acceptance test registers one from the test file and drives all seven hooks with zero core edits. 145 tests green (was 131) + 9-step UI smoke |
 | Audit hash chain + verify | ✓ R-A1/R-A4 done at core level |
 | Sales/payments schema | ✅ **Phase 8 done (Day 12):** the payment **engine** — checkout never knows what a payment is. Adapters: cash · M-Pesa · card · bank · credit (deni) · store credit · gift card · loyalty · other (enable/disable per business). State machine `pending → confirmed \| cancelled \| failed`, `confirmed → refunded`; idempotency is structural — `UNIQUE(sale_id, method, ref)` so a duplicate provider callback is a guaranteed no-op (proven in tests: 3 callbacks, 1 confirm). Split/partial payments via `POST /api/sales/:id/payments`; cash over-tender = change; non-cash can't exceed the balance; duplicate (sale, method, ref) refused. **M-Pesa lives only in `lib/mpesa.js`** (the only file that knows Daraja): manual mode (record the SMS code — works day one), sandbox (simulated STK + `simulate-callback` test hook replaying the real callback path), live (real OAuth + STK push, Phase 16 credentials). Refunds go to the original method (deni refunds release the credit limit; store credit is restored; M-Pesa leaves a reversal row). Cancelled/failed money **unwinds the stock step** (same lots, audited) so a declined prompt never leaks stock. Per-method reconcile (`/api/payments/reconcile`) + deposits (`/api/deposits`, manager act, audited) + payment settings (owner). Manager gets a Payments tab; the till gets method tabs, an awaiting-payment panel and add-a-second-payment |
@@ -453,6 +458,26 @@ reprint, and the core never looks inside it.
 
 ## 9. Change log
 
+- **2026-09-08 (v19)** — **Phase 33 complete (Days 49–50): deployment & SaaS layer.** The
+  tenancy decision was revisited and **changed**: instead of many businesses sharing one
+  database behind a `business_id` column (§5 as previously written), **each business owns its
+  own SQLite file**. A shared database can be leaked by one forgotten `WHERE`; a file boundary
+  cannot, and it gives the shop a book they can physically hold, back up and take with them.
+  `lib/tenancy.js` is the registry (`<data>/businesses/registry.json`, written atomically, a
+  corrupt file is preserved rather than overwritten) and the door: `tenancy.create()` builds a
+  new book by booting a real app on a random port and running the genuine `/api/setup`, so a
+  registered business is provisioned exactly like one set up by hand. `lib/plans.js` holds the
+  three plans (Solo free · Shop Ksh 1 500 · Chain Ksh 4 000), trial state, usage limits that
+  warn at 80%, and `applyPayment()` which extends a licence from the day M-Pesa lands. Paid
+  outranks trial (money in the bank beats a countdown); overdue gets 7 days of grace, then
+  `subscriptionGate` returns **402 on `POST /api/sales`** while reads and CSV export keep
+  working — the data belongs to the shop, not to the subscription. Routes: `/api/version`,
+  `/api/billing`, `/api/admin/{businesses,plans,isolation-check}`,
+  `POST /api/admin/businesses/:id/pay`. `POST /api/admin/isolation-check` writes a marker into
+  each book and searches every other one for it, and is audited. Manager gains a Subscription
+  card (plan, status, sentence) and a Businesses card (one row per book, its plan, its billing
+  sentence, and a button that runs the isolation check from the screen). 240 tests (was 232) +
+  37 UI steps.
 - **2026-09-02 (v13)** — **Phase 12 Day 16: multi-branch operating system (transfers +
   visibility + comparison).** Inter-branch & inter-location transfers with the full lifecycle
   (request → approve → ship → receive, partial, line-level discrepancies, history, cancel

@@ -4721,6 +4721,179 @@ const commsLib = require('../lib/comms');
     const paid = d.prepare("SELECT COUNT(*) AS n FROM sales WHERE status = 'paid' AND id IN (SELECT sale_id FROM sale_items WHERE variant_id = ?)").get(p.vid).n;
     assert.strictEqual(paid, 1, 'and one sale took the money');
   });
+  // ================= Phase 33 — deployment & SaaS layer =====================
+  // Acceptance, from the plan: two businesses side by side with zero data
+  // crossing, and a trial that becomes paid through M-Pesa.
+  section('Phase 33 — SaaS: one shop one book, trial to paid by M-Pesa');
+
+  const tenancy = require('../lib/tenancy');
+  const plans = require('../lib/plans');
+
+  const mkBiz = (name, trade, owner, plan = 'pro') => authJ({
+    path: '/api/admin/businesses', method: 'POST',
+    body: { name, trade, owner, plan, sample: true }
+  });
+
+  let bizA = null, bizB = null;
+
+  await test('a new business registers itself and gets a real, working book', async () => {
+    bizA = await mkBiz('Achieng Wines', 'wines', { name: 'Achieng', pin: '4321' });
+    assert.strictEqual(bizA.status, 200, JSON.stringify(bizA.body));
+    assert.ok(bizA.body.id && bizA.body.db_path, JSON.stringify(bizA.body));
+    assert.strictEqual(bizA.body.status, 'trial');
+    assert.ok(fs.existsSync(bizA.body.db_path), 'the book exists on disk');
+    // it was set up the real way, not copied from a template
+    const info = await authJ(`/api/admin/businesses/${bizA.body.id}`);
+    assert.strictEqual(info.status, 200, JSON.stringify(info.body));
+    assert.ok(info.body.products > 0, 'seed catalogue present');
+    assert.strictEqual(info.body.users, 1, 'an owner who can log in');
+    assert.strictEqual(info.body.business_name, 'Achieng Wines');
+    assert.ok(info.body.schema, 'and the book is at the current schema');
+    const tables = dbm.openPath(bizA.body.db_path, { migrate: false })
+      .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table'").get().n;
+    assert.ok(tables > 50, `a fully built book has ${tables} tables`);
+  });
+
+  await test('two businesses, two books: nothing crosses over', async () => {
+    bizB = await mkBiz('Baraka Hardware', 'hardware', { name: 'Otieno', pin: '5678' });
+    assert.strictEqual(bizB.status, 200, JSON.stringify(bizB.body));
+    assert.notStrictEqual(bizA.body.db_path, bizB.body.db_path, 'separate files, not rows in one table');
+
+    // write a real customer into A, and look for it in B
+    const da = dbm.openPath(bizA.body.db_path, { migrate: false });
+    const marker = 'Isolation Canary 33';
+    da.prepare('INSERT INTO customers (name, phone, created_at) VALUES (?, ?, ?)').run(marker, '0711000000', new Date().toISOString());
+    da.close();
+    const db = dbm.openPath(bizB.body.db_path, { migrate: false });
+    const leaked = db.prepare('SELECT COUNT(*) AS n FROM customers WHERE name = ?').get(marker).n;
+    const inA = dbm.openPath(bizA.body.db_path, { migrate: false })
+      .prepare('SELECT COUNT(*) AS n FROM customers WHERE name = ?').get(marker).n;
+    assert.strictEqual(inA, 1, 'A has its own customer');
+    assert.strictEqual(leaked, 0, `${bizB.body.name} can see ${bizA.body.name}'s customer`);
+    db.close();
+
+    // and the machine says so too, for every business at once
+    const chk = await authJ({ path: '/api/admin/isolation-check', method: 'POST', body: { businesses: [bizA.body.id, bizB.body.id] } });
+    assert.strictEqual(chk.status, 200, JSON.stringify(chk.body));
+    assert.strictEqual(chk.body.isolated, true, JSON.stringify(chk.body.leaks));
+    assert.strictEqual(chk.body.files.length, 2);
+    assert.match(chk.body.sentence, /zero data crossing/);
+
+    // the audit remembers that the check was run
+    const n = d.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'admin/isolation_check'").get().n;
+    assert.ok(n >= 1, 'isolation is checked, and recorded');
+  });
+
+  await test('registration refuses a business it cannot run', async () => {
+    const noName = await mkBiz('   ', 'duka', { name: 'X', pin: '1234' });
+    assert.strictEqual(noName.status, 400);
+    assert.match(noName.body.error, /name/);
+    const noOwner = await authJ({ path: '/api/admin/businesses', method: 'POST', body: { name: 'Ghost Ltd', trade: 'duka', owner: {} } });
+    assert.strictEqual(noOwner.status, 400);
+    assert.match(noOwner.body.error, /owner/);
+    const badPin = await authJ({ path: '/api/admin/businesses', method: 'POST', body: { name: 'Bad Pin', trade: 'duka', owner: { name: 'Y', pin: 'ab' } } });
+    assert.strictEqual(badPin.status, 400);
+    assert.match(badPin.body.error, /PIN/);
+  });
+
+  await test('plans: free, shop and chain, priced in shillings', async () => {
+    const r = await authJ('/api/admin/plans');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.deepStrictEqual(r.body.plans.map((p) => p.id), ['solo', 'pro', 'chain']);
+    assert.strictEqual(r.body.plans[0].price_month, 0, 'a single shop is free');
+    assert.ok(r.body.plans[1].price_month > 0);
+    assert.ok(r.body.plans.every((p) => p.sw && p.limits.products > 0), 'each plan is Swahili-legible and bounded');
+    // two names for the same shop, so the numbers are unique across books
+    const u = plans.usage({ products: 600, users: 2 }, { products: 500, users: 3 });
+    assert.strictEqual(u.over.length, 1);
+    assert.match(u.sentence, /products/);
+    const near = plans.usage({ products: 450, users: 1 }, { products: 500, users: 3 });
+    assert.strictEqual(near.near.length, 1, 'it warns before it blocks');
+    assert.match(near.sentence, /close/);
+  });
+
+  await test('trial counts its days out loud, then M-Pesa turns it into a subscription', async () => {
+    let r = await authJ(`/api/admin/businesses/${bizA.body.id}`);
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.billing.status, 'trial');
+    assert.ok(r.body.billing.trial_days_left > 20, JSON.stringify(r.body.billing));
+    assert.match(r.body.billing.sentence, /trial/);
+    assert.strictEqual(r.body.billing.free, false, 'a paid plan on trial');
+
+    // put it on a paying plan first
+    const up = await authJ({ path: `/api/admin/businesses/${bizA.body.id}`, method: 'PUT', body: { plan: 'pro' } });
+    assert.strictEqual(up.status, 200, JSON.stringify(up.body));
+    assert.strictEqual(up.body.plan, 'pro');
+
+    // then money lands: Ksh 1500 to Paybill, account = the shop code
+    const pay = await authJ({ path: `/api/admin/businesses/${bizA.body.id}/pay`, method: 'POST', body: { months: 1, ref: 'QGH7X2TEST', method: 'mpesa', amount: 1500 } });
+    assert.strictEqual(pay.status, 200, JSON.stringify(pay.body));
+    assert.strictEqual(pay.body.billing.status, 'paid');
+    assert.strictEqual(pay.body.payment.method, 'mpesa');
+    assert.strictEqual(pay.body.payment.amount, 1500);
+    assert.ok(pay.body.billing.paid_days_left >= 29, JSON.stringify(pay.body.billing));
+    assert.match(pay.body.billing.sentence, /paid up/);
+
+    const after = await authJ(`/api/admin/businesses/${bizA.body.id}`);
+    assert.strictEqual(after.body.billing.status, 'paid');
+    assert.ok(after.body.last_payment && after.body.last_payment.ref === 'QGH7X2TEST', 'the receipt is kept');
+    const n = d.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'admin/business_pay'").get().n;
+    assert.ok(n >= 1, 'money in is audited');
+  });
+
+  await test('an unpaid shop is warned for seven days, then the till stops — not the book', async () => {
+    // move the trial into the past
+    const past = new Date(Date.now() - 3 * 864e5).toISOString();
+    tenancy.update(bizA.body.id, { trial_ends_at: past, paid_until: null, status: 'grace', plan: 'pro' });
+    let r = await authJ(`/api/admin/businesses/${bizA.body.id}`);
+    assert.strictEqual(r.body.billing.status, 'grace');
+    assert.ok(r.body.billing.grace_days_left > 0, JSON.stringify(r.body.billing));
+    assert.strictEqual(r.body.billing.blocked, false, 'three days late still trades');
+
+    const long = new Date(Date.now() - 40 * 864e5).toISOString();
+    tenancy.update(bizA.body.id, { trial_ends_at: long, paid_until: null });
+    r = await authJ(`/api/admin/businesses/${bizA.body.id}`);
+    assert.strictEqual(r.body.billing.blocked, true, JSON.stringify(r.body.billing));
+    assert.match(r.body.billing.sentence, /Pay Ksh 1500 to Paybill/);
+
+    // the gate: this process serves one book — point the registry at it and
+    // prove a 40-day-overdue shop cannot take a sale, but can still read.
+    const me2 = tenancy.get(bizA.body.id);
+    const realPath = me2.db_path;
+    tenancy.update(bizA.body.id, { db_path: dbm.DB_PATH });
+    const p = await mkP({ name: 'P33 Gate', sku: 'P33G', cost: 10, price: 50 }, 5);
+    const sale = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p.vid, qty: 1 }], payment: { method: 'cash', amount: 50 } } });
+    assert.strictEqual(sale.status, 402, JSON.stringify(sale.body));
+    assert.match(sale.body.error, /subscription has ended/);
+    const read = await authJ('/api/products?limit=5');
+    assert.strictEqual(read.status, 200, 'a shop can always read its own book');
+    const csv = await JCOOKIE('/api/export/sales.csv');
+    assert.strictEqual(csv.status, 200, 'and take its data with it, bill or no bill');
+    tenancy.update(bizA.body.id, { db_path: realPath, trial_ends_at: new Date(Date.now() + 30 * 864e5).toISOString() });
+    const again = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p.vid, qty: 1 }], payment: { method: 'cash', amount: 50 } } });
+    assert.strictEqual(again.status, 200, 'pay up and the till opens again');
+  });
+
+  await test('a till does not update itself, and says which version it is', async () => {
+    const r = await authJ('/api/version');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.app && r.body.schema, JSON.stringify(r.body));
+    assert.strictEqual(r.body.update.auto_update, false, 'an update is a person\'s decision with a backup taken');
+    assert.match(r.body.update.note, /backup/);
+    const pub = await J('/api/version');
+    assert.strictEqual(pub.status, 200, JSON.stringify(pub.body));
+  });
+
+  await test('the registry lists every business with its billing and its book', async () => {
+    const r = await authJ('/api/admin/businesses');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.length >= 2, JSON.stringify(r.body.map((b) => b.id)));
+    assert.ok(r.body.every((b) => b.db_exists), 'every registry entry has a real file');
+    assert.ok(r.body.every((b) => b.billing && b.billing.sentence));
+    const missing = await authJ('/api/admin/businesses/nope-nope');
+    assert.strictEqual(missing.status, 404);
+  });
+
 
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });

@@ -657,12 +657,38 @@ versioning, safe additive migrations).
 - **Chaos.** Two simultaneous sales of the last unit: exactly one wins, one unit leaves the shelf once, one sale takes the money, and the loser gets a 409 (R-S8) rather than a silent oversell.
 
 232 API tests, 34 UI steps.
-### Phase 33 — Deployment & SaaS Layer · Days 49–50
+### Phase 33 — Deployment & SaaS Layer · Days 49–50 — **done**
 Business registration (self-serve), **subscriptions** (plans, usage limits, billing via
-M-Pesa, trials), **tenant isolation live** (`business_id`), admin console, versioning + safe
+M-Pesa, trials), **tenant isolation live**, admin console, versioning + safe
 auto-updates, backups.
-- **Acceptance:** two businesses side-by-side in one DB with zero data crossing; trial →
-  paid via M-Pesa.
+- **Acceptance:** two businesses side-by-side with zero data crossing; trial → paid via
+  M-Pesa. **Met** — and the isolation is stronger than the plan asked for.
+- **Isolation decision (change from the plan, agreed while building it):** the plan said
+  "`business_id` in one DB". Built instead as **one database file per business**
+  (`lib/tenancy.js`, `dbm.openPath()`), because row-level isolation is undone by one
+  forgotten `WHERE` clause, and because a shop that owns its own book can hold it, back it
+  up and take it elsewhere. A new business is provisioned by booting a real app on a random
+  port and running the genuine `/api/setup` — not by copying a template.
+- **Registration:** `POST /api/admin/businesses` (name, trade, owner + PIN, plan) → a book
+  with a catalogue, a tax setup and an owner who can log in. Name, owner and a 4–8 digit
+  PIN are enforced; slugs are made unique; the registry is written atomically (a corrupt
+  registry is preserved, never overwritten).
+- **Subscriptions:** `lib/plans.js` — Solo (free) · Shop (Ksh 1 500/mo) · Chain
+  (Ksh 4 000/mo), each with usage limits that **warn at 80% before they block**. A trial
+  counts its 30 days out loud; M-Pesa lands on `POST /api/admin/businesses/:id/pay` and
+  turns it into a paid subscription (paid outranks trial). Overdue warns for 7 days, then
+  `subscriptionGate` stops the till with **402** — reads and CSV export keep working,
+  because the data is the shop's, not the subscription's.
+- **Admin console:** `/api/admin/businesses` (list/inspect), `/api/admin/plans`,
+  `POST /api/admin/isolation-check` (writes a marker into each book and hunts for it in
+  every other one; audited). Manager: Subscription card + Businesses card.
+- **Versioning & updates:** `/api/version` reports app + schema version and states that
+  **a till does not update itself** — an update is a person's decision, taken after a
+  backup, followed by `/api/admin/migrate`.
+- **Proof:** two businesses → two files, marker written in A absent from B, isolation check
+  `isolated: true` / "zero data crossing"; trial → M-Pesa → paid, `paid_days_left ≥ 29`;
+  40 days overdue → `POST /api/sales` 402 while `/api/products` and CSV export stay 200;
+  pay up and the till reopens. 240 API tests, 37 UI steps.
 
 ### Phase 34 — Final UX / Product Polish · Days 51–53
 Only after functionality works: cashier speed (keyboard-first, shortcuts), responsive +

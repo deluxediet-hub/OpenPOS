@@ -24,6 +24,25 @@ function open() {
   return db;
 }
 
+/**
+ * Open a DIFFERENT book (Phase 33: one database file per business).
+ * The isolation is the file: nothing in one shop's book can appear in
+ * another's, because there is nowhere for it to go.
+ */
+function openPath(dbPath, { migrate: doMigrate = true } = {}) {
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const handle = new Database(dbPath);
+  handle.pragma('journal_mode = WAL');
+  handle.pragma('foreign_keys = ON');
+  if (doMigrate) migrate(handle);
+  return handle;
+}
+
+function isInitializedPath(dbPath) {
+  const h = openPath(dbPath);
+  try { return isInitialized(h); } finally { try { h.close(); } catch (_) {} }
+}
+
 function tableExists(d, name) {
   return !!d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
 }
@@ -1742,6 +1761,7 @@ function verifyAuditChain(d) {
 
 module.exports = {
   open, DB_PATH, schemaInfo, applyMigrations, MIGRATIONS,
+  openPath, isInitializedPath,
   setSetting, getSetting, getSettings, isInitialized,
   nextCounter,
   audit, auditRows, verifyAuditChain, AUDIT_GENESIS

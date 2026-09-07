@@ -733,6 +733,167 @@ function createApp(d) {
     next();
   };
 
+  // ================= Phase 33 — deployment & SaaS layer =====================
+  // One shop, one book: every business gets its own database FILE, so no
+  // forgotten WHERE clause can ever put one shop's customer in another's till.
+  // This block is the registry of books, the plans they run on, and the door
+  // that makes a new one.
+
+  const tenancy = require('./lib/tenancy');
+  const plans = require('./lib/plans');
+
+  app.get('/api/version', (req, res) => {
+    const pkg = require('../package.json');
+    res.json({
+      app: pkg.version,
+      name: pkg.name,
+      node: process.version,
+      schema: dbm.schemaInfo(d).version,
+      schema_up_to_date: dbm.schemaInfo(d).up_to_date,
+      // A till does not surprise its shop with an update. Updates are a
+      // decision a person makes, with a backup already taken.
+      update: {
+        channel: 'manual',
+        auto_update: false,
+        note: 'this is a till: it does not update itself. Take a backup, install the new version, run /api/admin/migrate.'
+      }
+    });
+  });
+
+  app.get('/api/admin/businesses', me, can('settings.manage'), (req, res) => {
+    res.json(tenancy.list().map((b) => ({ ...b, billing: plans.status(b) })));
+  });
+
+  app.post('/api/admin/businesses', me, can('settings.manage'), async (req, res) => {
+    try {
+      const b = req.body || {};
+      const row = await tenancy.create({
+        name: b.name, trade: b.trade || 'duka',
+        owner: b.owner || {}, sample: !!b.sample, plan: b.plan || 'solo'
+      }, createApp);
+      dbm.audit(d, { userId: req.user.id, action: 'admin/business_create', entity: 'business', entityId: row.id, detail: { name: row.name, trade: row.trade } });
+      res.json(row);
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/admin/businesses/:id', me, can('settings.manage'), (req, res) => {
+    const b = tenancy.get(req.params.id);
+    if (!b) return res.status(404).json({ error: 'no such business' });
+    const info = tenancy.inspect(b);
+    const st = plans.status(b);
+    res.json({
+      ...info,
+      billing: st,
+      usage: plans.usage(
+        { products: info.products, users: info.users, branches: info.branches },
+        st.limits
+      )
+    });
+  });
+
+  app.put('/api/admin/businesses/:id', me, can('settings.manage'), (req, res) => {
+    try {
+      const b = req.body || {};
+      const patch = {};
+      if (b.plan) patch.plan = plans.planOf(b.plan).id;
+      if (b.status) patch.status = String(b.status);
+      if (b.name) patch.name = String(b.name).trim();
+      const row = tenancy.update(req.params.id, patch);
+      dbm.audit(d, { userId: req.user.id, action: 'admin/business_update', entity: 'business', entityId: row.id, detail: patch });
+      res.json(row);
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /** Money in: M-Pesa landing on a subscription extends the shop's licence. */
+  app.post('/api/admin/businesses/:id/pay', me, can('settings.manage'), (req, res) => {
+    try {
+      const b = tenancy.get(req.params.id);
+      if (!b) return res.status(404).json({ error: 'no such business' });
+      const body = req.body || {};
+      const p = plans.applyPayment(b, { months: Number(body.months) || 1, amount: body.amount, ref: body.ref || '', method: body.method || 'mpesa' });
+      const row = tenancy.update(b.id, {
+        paid_until: p.paid_until,
+        status: 'paid',
+        last_payment: { amount: p.amount, ref: p.ref, method: p.method, at: p.paid_at }
+      });
+      dbm.audit(d, { userId: req.user.id, action: 'admin/business_pay', entity: 'business', entityId: b.id, detail: { amount: p.amount, months: p.months, ref: p.ref } });
+      res.json({ ok: true, business: row, billing: plans.status(row), payment: p.payment });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/admin/plans', me, can('settings.manage'), (req, res) => {
+    res.json({ plans: plans.PLANS, paybill: plans.PAYBILL });
+  });
+
+  /**
+   * The isolation proof, run on demand: write a marker into each book, look
+   * for it in every other one, and report the crossing (if any).
+   */
+  app.post('/api/admin/isolation-check', me, can('settings.manage'), (req, res) => {
+    try {
+      const ids = (req.body || {}).businesses || tenancy.list().map((b) => b.id);
+      const out = tenancy.isolationCheck(ids.slice(0, 5));
+      dbm.audit(d, { userId: req.user.id, action: 'admin/isolation_check', entity: 'business', entityId: ids.join(','), detail: { isolated: out.isolated, leaks: out.leaks.length } });
+      res.json(out);
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /**
+   * A subscription that has run out warns for seven days, then stops the till
+   * — never the reading of the book. The shop can always see and export its
+   * own data, whatever its bill says.
+   */
+  function subscriptionGate(req, res, next) {
+    try {
+      const biz = tenancy.get(currentBusinessId());
+      if (!biz) return next();
+      const st = plans.status(biz);
+      if (st.blocked) {
+        return res.status(402).json({
+          error: 'the subscription has ended — the till is stopped, but your data is yours',
+          billing: st
+        });
+      }
+      next();
+    } catch (_) {
+      next();
+    }
+  }
+
+  /** Which business is this process serving? (one process, one book). */
+  function currentBusinessId() {
+    if (process.env.OPENPOS_BUSINESS) return process.env.OPENPOS_BUSINESS;
+    const rows = tenancy.list();
+    const mine = rows.find((b) => b.db_path === dbm.DB_PATH);
+    return mine ? mine.id : null;
+  }
+
+  app.get('/api/billing', me, (req, res) => {
+    const biz = tenancy.get(currentBusinessId());
+    const solo = plans.planOf('solo');
+    if (!biz) return res.json({
+      plan: solo.id, plan_name: solo.name, price_month: 0, price_year: 0, free: true,
+      status: 'active', standalone: true,
+      limits: solo.limits,
+      usage: plans.usage({ products: 0, users: 0, branches: 0 }, solo.limits),
+      sentence: `${solo.name} — one shop, one till, free. This book runs standalone, not in the business registry.`
+    });
+    const info = tenancy.inspect(biz);
+    const st = plans.status(biz);
+    res.json({
+      ...st,
+      usage: plans.usage({ products: info.products, users: info.users, branches: info.branches }, st.limits)
+    });
+  });
+
   // ================= Phase 32 — hardening: logs, schema, backups, perf ======
   // A shop has no ops team. These routes are the whole of it: what the server
   // has been doing, what version the book is, whether the backup is real, and
@@ -5237,7 +5398,9 @@ function createApp(d) {
     }
   }
 
-  app.post('/api/sales', me, (req, res) => {
+  // A subscription that has run out stops the till — never the reading of
+  // the book. (subscriptionGate is defined with the Phase 33 SaaS routes.)
+  app.post('/api/sales', me, subscriptionGate, (req, res) => {
     try {
       requireOpenShift(d, req.user);
       const r = createSaleNow(d, { user: req.user, body: req.body, channel: 'pos' });

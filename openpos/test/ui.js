@@ -317,6 +317,27 @@ async function waitFor(fn, label, timeout = 8000) {
         mw.document.querySelector('#mk-msg-rows').textContent.slice(0, 120));
     }
 
+      // ---------------- Phase 33: subscription & tenant isolation ----------------
+      await waitFor(() => {
+        const p = mw.document.querySelector('#sub-plan');
+        return p && !/plan —/.test(p.textContent);
+      }, 'the subscription card :: ' + (mw.document.querySelector('#sub-plan') || {}).textContent, 15000);
+      ck('the back office says what plan the shop is on',
+        /Solo|Shop|Chain/.test(mw.document.querySelector('#sub-plan').textContent),
+        mw.document.querySelector('#sub-plan').textContent);
+      ck('and says it in a sentence a person can read',
+        (mw.document.querySelector('#sub-out').textContent || '').length > 10,
+        mw.document.querySelector('#sub-out').textContent);
+
+      const bizRows = () => (mw.document.querySelector('#biz-rows') || {}).textContent || '';
+      await waitFor(() => mw.document.querySelector('#biz-rows'), 'the businesses table', 15000);
+      click(mw, mw.document.querySelector('#biz-check'));
+      await waitFor(() => /zero data crossing|leak/.test(bizRows()) || /zero data crossing|leak/.test((mw.document.querySelector('#biz-out') || {}).textContent || ''),
+        'the isolation check result :: ' + ((mw.document.querySelector('#biz-out') || {}).textContent || ''), 15000);
+      ck('the isolation check runs from the screen and reports no crossing',
+        /zero data crossing/.test((mw.document.querySelector('#biz-out') || {}).textContent || ''),
+        (mw.document.querySelector('#biz-out') || {}).textContent);
+
     ck('manager page booted without script errors', mgr.errs.length === 0, mgr.errs.join(' | '));
   } catch (e) {
     ck('manager page smoke', false, e.message + ' :: ' + mgr.errs.join(' | '));
