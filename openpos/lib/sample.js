@@ -158,6 +158,7 @@ function buildSample(trade) {
     requiresRx: flags.requiresRx || 0,
     isControlled: flags.isControlled || 0,
     trackBatches: flags.trackBatches || 0,
+    trackSerials: flags.trackSerials || 0,
     openPriced: flags.openPriced || 0,
     ageMin: flags.ageMin || null
   }));

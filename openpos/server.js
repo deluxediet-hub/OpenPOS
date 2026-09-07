@@ -557,12 +557,24 @@ function createApp(d) {
   app.get('/api/setup/status', (req, res) => {
     res.json({
       initialized: dbm.isInitialized(d),
-      trades: TRADES,
+      trades: tradeList(),
       businessName: dbm.getSetting(d, 'business', {}).name || null
     });
   });
 
-  app.get('/api/trades', (req, res) => res.json(TRADES));
+  // R-M3: an industry module may bring a trade the core has never heard of —
+  // it shows up in the setup picker without an edit to sample.js.
+  function tradeList() {
+    const out = { ...TRADES };
+    for (const m of mods.all()) {
+      for (const t of m.trades || []) {
+        if (!out[t]) out[t] = { label: m.name, sw: m.nameSw || m.name, module: m.id };
+      }
+    }
+    return out;
+  }
+
+  app.get('/api/trades', (req, res) => res.json(tradeList()));
 
   // ---- Phase 18: industry modules -------------------------------------------
   // The core talks about modules generically: it lists what is registered, lets
@@ -612,7 +624,7 @@ function createApp(d) {
     } catch (e) {
       return res.status(e.status || 400).json({ error: e.message });
     }
-    // R-C4: a module may need capabilities on (bottle→case packs for spirits).
+    // R-C4: a module may need capabilities on (e.g. bottle→case packs).
     const m = mods.get(id);
     caps.ensureCapabilityRows(d);
     for (const c of m.capabilities || []) {
@@ -647,6 +659,36 @@ function createApp(d) {
     res.json({ reports: rows });
   });
 
+  // Commands declared by active modules — one generic door for the actions an
+  // industry needs that are not sales (markdowns, recall drills, repair jobs).
+  app.post('/api/modules/:id/commands/:commandId', me, (req, res) => {
+    const reg = registry(d);
+    const mod = reg.modules.find((m) => m.id === String(req.params.id));
+    if (!mod) return res.status(404).json({ error: 'module not found' });
+    const cmd = reg.command(req.params.commandId);
+    if (!cmd || cmd.module !== mod.id) return res.status(404).json({ error: 'command not found' });
+    if (!perms.userHasPerm(d, req.user, cmd.perm)) {
+      return res.status(403).json({ error: `this needs the ${cmd.perm} permission` });
+    }
+    const params = (req.body && req.body.params) || {};
+    for (const p of cmd.params) {
+      if (p.required && (params[p.name] === undefined || params[p.name] === '')) {
+        return res.status(400).json({ error: `${p.label || p.name} is required` });
+      }
+    }
+    let out;
+    try {
+      out = cmd.run(d, { params, user: req.user, helpers: moduleHelpers(d), branches: visibleBranches(d, req.user).map((b) => b.id) }) || {};
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
+    dbm.audit(d, {
+      userId: req.user.id, action: `module/${mod.id}.${cmd.id}`, entity: 'module', entityId: mod.id,
+      detail: { params, result: out.summary || null }
+    });
+    res.json({ ok: true, command: { id: cmd.id, module: mod.id, title: cmd.title }, ...out });
+  });
+
   app.get('/api/reports/modules/:id', me, (req, res) => {
     const rep = registry(d).report(req.params.id);
     if (!rep) return res.status(404).json({ error: 'report not found' });
@@ -665,11 +707,14 @@ function createApp(d) {
     }
     const rows = out.rows || [];
     const columns = out.columns || rep.columns || (rows[0] ? Object.keys(rows[0]) : []);
+    // Anything else the report worked out (alert counts, totals) rides along:
+    // an industry panel often needs a headline, not just a table.
+    const { rows: _rows, columns: _cols, ...extra } = out;
     if (String(req.query.format || '').toLowerCase() === 'csv') {
       res.type('text/csv').attachment(`${rep.id}.csv`);
       return res.send(require('./lib/csv').toCsv(columns, rows));
     }
-    res.json({ report: { id: rep.id, module: rep.module, title: rep.title, titleSw: rep.titleSw }, columns, rows });
+    res.json({ report: { id: rep.id, module: rep.module, title: rep.title, titleSw: rep.titleSw }, columns, rows, ...extra });
   });
 
   // ---- first-run setup v2 (solo-first, R-C1) --------------------------------
@@ -683,7 +728,9 @@ function createApp(d) {
     if (!owner.name || !String(owner.name).trim()) return res.status(400).json({ error: 'owner name required' });
     const pin = String(owner.pin || '');
     if (!/^\d{4,8}$/.test(pin)) return res.status(400).json({ error: 'owner PIN must be 4-8 digits' });
-    const trade = TRADES[b.trade] ? b.trade : 'duka';
+    // R-M3: the core knows the common trades; an industry module may claim a
+    // new one without touching this file (its starter data rides `template`).
+    const trade = (TRADES[b.trade] || mods.forTrade(String(b.trade || '')).length) ? String(b.trade) : 'duka';
     const vatRate = Number(b.vatRate) > 0 ? Number(b.vatRate) : 16;
     const now = new Date().toISOString();
 
@@ -743,8 +790,10 @@ function createApp(d) {
       syncModuleFields(d, registry(d));
 
       if (req.body.sample) {
-        const { buildSample } = require('./lib/sample');
-        const sample = buildSample(trade);
+        const { buildSample, CATALOG } = require('./lib/sample');
+        // A trade the core has no catalogue for (an industry module owns it)
+        // starts empty — the module's own template fills the shelf.
+        const sample = CATALOG[trade] ? buildSample(trade) : { categories: [], products: [] };
         // Hook 7 — template: a module may add starter lines for its trade.
         for (const t of registry(d).template()) {
           const firstCat = (sample.categories || []).length;
@@ -762,8 +811,8 @@ function createApp(d) {
           `INSERT INTO products
             (branch_id, sku, barcode, name, name_sw, category_id, unit, cost, price,
              tax_type, kra_item_code, age_min, requires_rx, is_controlled, track_batches,
-             open_priced, active, created_at, updated_at)
-           VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+             track_serials, open_priced, active, created_at, updated_at)
+           VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
         );
         const insVariant = d.prepare(
           `INSERT INTO variants (product_id, name, axes, axes_key, sku, active, created_at, updated_at)
@@ -786,18 +835,29 @@ function createApp(d) {
         );
         sample.products.forEach((p, i) => {
           const cat = cats[p.categoryId - 1] || cats[0];
+          // A module template is data, not code: fill in the columns it left out.
+          const row = {
+            sku: p.sku || `${String(trade).slice(0, 3).toUpperCase()}-${String(i + 1).padStart(3, '0')}`,
+            barcode: p.barcode || '', name: p.name, name_sw: p.name_sw || '',
+            unit: p.unit || 'pcs', cost: Number(p.cost) || 0, price: Number(p.price) || 0,
+            taxType: p.taxType || 'std', kraItemCode: p.kraItemCode || '',
+            ageMin: p.ageMin ?? null,
+            requiresRx: p.requiresRx ? 1 : 0, isControlled: p.isControlled ? 1 : 0,
+            trackBatches: p.trackBatches ? 1 : 0, trackSerials: p.trackSerials ? 1 : 0,
+            openPriced: p.openPriced ? 1 : 0
+          };
           const pid = insProd.run(
-            p.sku, p.barcode, p.name, p.name_sw, cat ? cat.id : null, p.unit, p.cost, p.price,
-            p.taxType, p.kraItemCode, p.ageMin, p.requiresRx, p.isControlled, p.trackBatches,
-            p.openPriced, now, now
+            row.sku, row.barcode, row.name, row.name_sw, cat ? cat.id : null, row.unit, row.cost, row.price,
+            row.taxType, row.kraItemCode, row.ageMin, row.requiresRx, row.isControlled, row.trackBatches,
+            row.trackSerials, row.openPriced, now, now
           ).lastInsertRowid;
-          const vid = insVariant.run(pid, p.sku, now, now).lastInsertRowid;
-          if (p.barcode) insVBarcode.run(vid, p.barcode);
+          const vid = insVariant.run(pid, row.sku, now, now).lastInsertRowid;
+          if (row.barcode) insVBarcode.run(vid, row.barcode);
           stock.run(vid, locId, 24);
           move.run(pid, vid, brId, locId, 24, ownerId, now);
-          if (p.trackBatches) {
+          if (row.trackBatches) {
             const exp = new Date(Date.now() + 540 * 86400e3).toISOString().slice(0, 10);
-            insBatch.run(pid, vid, brId, locId, `S-${p.sku}`, exp, 24, p.cost, now);
+            insBatch.run(pid, vid, brId, locId, `S-${row.sku}`, exp, 24, row.cost, now);
           }
         });
       }
@@ -934,6 +994,10 @@ function createApp(d) {
         reports: registry(d).reports().map((r) => ({
           id: r.id, module: r.module, title: r.title, titleSw: r.titleSw,
           allowed: perms.userHasPerm(d, req.user, r.perm)
+        })),
+        commands: registry(d).commands().map((c) => ({
+          id: c.id, module: c.module, title: c.title, titleSw: c.titleSw,
+          params: c.params, allowed: perms.userHasPerm(d, req.user, c.perm)
         }))
       }
     });

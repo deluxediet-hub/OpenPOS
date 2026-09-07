@@ -3026,6 +3026,425 @@ function section(title) { console.log(`\n${title}`); }
     assert.ok(!list.body.reports.some((r) => r.id === 'expiry_watch'), JSON.stringify(list.body.reports.map((r) => r.id)));
   });
 
+
+  // ================= Phases 19-23 — the eight industries =================
+  // Each industry is one file in modules/ that declares product fields, checkout
+  // rules, stock rules, reports, commands, permissions, a browser panel and (for
+  // trades the core has never heard of) its own starter shelf.
+  section('Phases 19-23 — eight industries: one file each, zero core edits');
+
+  const p23 = { loc: p18.loc, cashier: p18.cashier };
+
+  const mkP = async (body, qty = 10) => {
+    const r = await authJ({ path: '/api/products', method: 'POST', body });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const vid = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(r.body.id).id;
+    if (qty) {
+      const st = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: r.body.id, qty, type: 'opening', reason: 'opening', unit_cost: body.cost } });
+      assert.strictEqual(st.status, 200, JSON.stringify(st.body));
+    }
+    return { id: r.body.id, vid };
+  };
+  const mkV = async (pid, body) => {
+    const r = await authJ({ path: `/api/products/${pid}/variants`, method: 'POST', body });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    return r.body.id;
+  };
+  const stockV = async (vid, qty, unitCost = 0) => {
+    const r = await authJ({ path: '/api/stock/moves', method: 'POST', body: { variant_id: vid, qty, type: 'opening', reason: 'opening', unit_cost: unitCost } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  };
+  const sell = (items, amount, extra = {}) =>
+    authJ({ path: '/api/sales', method: 'POST', body: { items, payment: { method: 'cash', amount }, ...extra } });
+  const command = (mod, id, params) =>
+    authJ({ path: `/api/modules/${mod}/commands/${id}`, method: 'POST', body: { params } });
+  const report = (id, qs = '') => authJ(`/api/reports/modules/${id}${qs}`);
+
+  await test('eight industries: eight module files, eight panels, and the core names none of them', async () => {
+    const dir = path.join(__dirname, '..', 'modules');
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.js'));
+    const ids = ['spirits', 'pharmacy', 'boutique', 'cosmetics', 'electronics', 'footwear', 'hardware', 'mini_mart'];
+    for (const id of ids) assert.ok(files.includes(`${id}.js`), `${id}.js missing (${files.join(', ')})`);
+    assert.strictEqual(files.filter((f) => !['loader.js', '_kit.js'].includes(f)).length, ids.length, 'one file per industry, and no strays');
+    for (const id of ids) assert.ok(fs.existsSync(path.join(dir, 'ui', `${id}.js`)), `modules/ui/${id}.js missing`);
+    // R-M1: the core has no opinion about any industry (comments aside)
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8')
+      .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    for (const id of ids) assert.ok(!new RegExp(`\\b${id}\\b`).test(src), `the core still names ${id}`);
+  });
+
+  await test('each industry activates and lands its fields, reports and commands', async () => {
+    const industries = [
+      ['boutique', 'brand'], ['cosmetics', 'shade'], ['electronics', 'warranty_months'],
+      ['footwear', 'style_code'], ['hardware', 'uom'], ['mini_mart', 'plu']
+    ];
+    for (const [id] of industries) {
+      const r = await authJ({ path: `/api/modules/${id}/activate`, method: 'POST', body: {} });
+      assert.strictEqual(r.status, 200, `${id}: ${JSON.stringify(r.body)}`);
+    }
+    const defs = (await authJ({ path: '/api/attribute-defs' })).body.map((a) => a.key);
+    for (const [, key] of industries) assert.ok(defs.includes(key), `${key} not a live product field (${defs.join(',')})`);
+    const b = await authJ({ path: '/api/bootstrap' });
+    for (const [id] of industries) assert.ok(b.body.modules.active.includes(id), b.body.modules.active.join(','));
+    const repIds = b.body.modules.reports.map((r) => r.id);
+    for (const r of ['size_sell_through', 'pack_size_sell_through', 'repair_jobs', 'shoe_size_sell_through', 'remnants', 'plu_sheet']) {
+      assert.ok(repIds.includes(r), `report ${r} missing`);
+    }
+    const cmdIds = b.body.modules.commands.map((c) => `${c.module}.${c.id}`);
+    for (const c of ['boutique.markdown', 'electronics.book_repair', 'mini_mart.repack']) {
+      assert.ok(cmdIds.includes(c), `command ${c} missing (${cmdIds.join(', ')})`);
+    }
+    const markdown = b.body.modules.commands.find((c) => c.id === 'markdown');
+    assert.deepStrictEqual(markdown.params.map((p) => p.name), ['percent', 'code', 'season', 'category_id', 'ends_at']);
+  });
+
+  // ---------------------------------------------------------------- boutique
+  await test('boutique: a size x colour matrix is sold AS a variant, never as its parent row', async () => {
+    const dress = await mkP({ name: 'P20 Summer Dress', barcode: '77901', cost: 800, price: 2500, meta: { season: 'AW', brand: 'Kitenge & Co' } }, 0);
+    p23.dressS = await mkV(dress.id, { name: 'S', axes: 'size: S', barcode: '77902' });
+    p23.dressM = await mkV(dress.id, { name: 'M', axes: 'size: M', barcode: '77903' });
+    await stockV(p23.dressS, 4, 800);
+    await stockV(p23.dressM, 6, 800);
+    // the parent row is a bookkeeping device, not something you can sell
+    const parent = await sell([{ variant_id: dress.vid, qty: 1 }], 2500);
+    assert.strictEqual(parent.status, 400, JSON.stringify(parent.body));
+    assert.ok(/pick a size/.test(parent.body.error), parent.body.error);
+    // the real variant sells
+    const ok = await sell([{ variant_id: p23.dressM, qty: 2 }], 5000);
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const st = await report('size_sell_through');
+    assert.strictEqual(st.status, 200, JSON.stringify(st.body));
+    const rowM = st.body.rows.find((r) => r.size === 'M');
+    assert.ok(rowM && rowM.sold === 2, JSON.stringify(st.body.rows));
+    assert.strictEqual(rowM.on_hand, 4, 'sell-through counts what is left too');
+    assert.strictEqual(rowM.sell_through_pct, 33);
+  });
+
+  await test('boutique: a markdown is a reversible act, and it is a manager act', async () => {
+    const denied = await withCookie(p23.cashier)({ path: '/api/modules/boutique/commands/markdown', method: 'POST', body: { params: { percent: 20, code: 'SALE20', season: 'AW' } } });
+    assert.strictEqual(denied.status, 403, 'a cashier may not mark stock down');
+    const bad = await command('boutique', 'markdown', { percent: 0, code: 'X', season: 'AW' });
+    assert.strictEqual(bad.status, 400);
+    assert.ok(/between 1 and 99/.test(bad.body.error), bad.body.error);
+    const r = await command('boutique', 'markdown', { percent: 20, code: 'SALE20', season: 'AW' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.applied >= 2, JSON.stringify(r.body));       // the S and M variants
+    // the markdown is a core price rule, not a destroyed price (R-PR stays core)
+    const rule = d.prepare("SELECT * FROM price_rules WHERE promo_code = 'SALE20' AND active = 1").all();
+    assert.ok(rule.length >= 2, 'markdown landed as a time-boxed promo rule');
+    assert.strictEqual(rule[0].price, 2000, '2500 less 20% = 2000');
+    // and the mark-down price is what a customer actually pays
+    const priced = await authJ(`/api/pricing/resolve?variant_id=${p23.dressM}&promo_code=SALE20`);
+    assert.strictEqual(priced.status, 200, JSON.stringify(priced.body));
+    assert.strictEqual(priced.body.price, 2000, JSON.stringify(priced.body));
+    const md = await report('markdowns');
+    assert.ok(md.body.rows.some((x) => x.code === 'SALE20'), JSON.stringify(md.body.rows));
+    // ending it restores the old price
+    const off = await command('boutique', 'clear_markdown', { code: 'SALE20' });
+    assert.strictEqual(off.status, 200, JSON.stringify(off.body));
+    assert.ok(off.body.ended >= 2, JSON.stringify(off.body));
+    const back = await authJ(`/api/pricing/resolve?variant_id=${p23.dressM}`);
+    assert.strictEqual(back.body.price, 2500, 'the original price is back');
+  });
+
+  await test('boutique: dead fashion stock is stock that has not moved in 60 days', async () => {
+    const r = await report('dead_fashion_stock');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const row = r.body.rows.find((x) => x.product_name === 'P20 Summer Dress');
+    assert.ok(row, JSON.stringify(r.body.rows));
+    assert.strictEqual(row.brand, 'Kitenge & Co', 'the module field is on the product (R-M2)');
+    assert.strictEqual(row.season, 'AW');
+  });
+
+  // --------------------------------------------------------------- mini-mart
+  await test('mini-mart: a scale line is checked before it is sold', async () => {
+    const tomatoes = await mkP({ name: 'P22 Tomatoes (kg)', barcode: '77911', cost: 120, price: 180, open_priced: 1, unit: 'kg', meta: { max_weight_kg: 5 } }, 40);
+    const typo = await sell([{ variant_id: tomatoes.vid, qty: 50 }], 9000);
+    assert.strictEqual(typo.status, 400, JSON.stringify(typo.body));
+    assert.ok(/above the 5 limit/.test(typo.body.error), typo.body.error);
+    const zero = await sell([{ variant_id: tomatoes.vid, qty: 0 }], 0);
+    assert.strictEqual(zero.status, 400);
+    const ok = await sell([{ variant_id: tomatoes.vid, qty: 2.5 }], 450);
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(tomatoes.vid, p23.loc).qty, 37.5);
+    // the PLU sheet is the cashier's quick-key list
+    await authJ({ path: `/api/variants/${tomatoes.vid}`, method: 'PUT', body: { meta: { plu: '4011' } } });
+    const plu = await report('plu_sheet');
+    assert.strictEqual(plu.status, 200, JSON.stringify(plu.body));
+    assert.ok(plu.body.rows.some((r) => r.plu === '4011' && r.product_name === 'P22 Tomatoes (kg)'), JSON.stringify(plu.body.rows));
+  });
+
+  await test('mini-mart: repacking bulk into sell units moves stock both ways', async () => {
+    const bulk = await mkP({ name: 'P22 Rice 25kg', barcode: '77912', cost: 1400, price: 2100, meta: { bulk: 1 } }, 50);
+    const unit = await mkP({ name: 'P22 Rice 1kg', barcode: '77913', cost: 56, price: 80 }, 0);
+    const tooMuch = await command('mini_mart', 'repack', { bulk_product_id: bulk.id, sell_product_id: unit.id, units: 200, unit_size: 1 });
+    assert.strictEqual(tooMuch.status, 400, JSON.stringify(tooMuch.body));
+    assert.ok(/not enough bulk stock/.test(tooMuch.body.error), tooMuch.body.error);
+    const r = await command('mini_mart', 'repack', { bulk_product_id: bulk.id, sell_product_id: unit.id, units: 25, unit_size: 1 });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.units, 25);
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(bulk.vid, p23.loc).qty, 25);
+    assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(unit.vid, p23.loc).qty, 25);
+    const movers = await report('bulk_movers');
+    assert.strictEqual(movers.status, 200, JSON.stringify(movers.body));
+  });
+
+  // ---------------------------------------------------------------- hardware
+  await test('hardware: a cut-from-roll line has a minimum cut and a maximum roll', async () => {
+    const cable = await mkP({ name: 'P23 Cable (per metre)', barcode: '77921', cost: 60, price: 100, unit: 'm', meta: { cut_from_roll: 1, min_cut: 2, roll_length: 100, uom: 'metre' } }, 100);
+    const offcut = await sell([{ variant_id: cable.vid, qty: 0.5 }], 50);
+    assert.strictEqual(offcut.status, 400, JSON.stringify(offcut.body));
+    assert.ok(/minimum cut is 2/.test(offcut.body.error), offcut.body.error);
+    const tooLong = await sell([{ variant_id: cable.vid, qty: 150 }], 15000);
+    assert.strictEqual(tooLong.status, 400, JSON.stringify(tooLong.body));
+    assert.ok(/longer than a full roll/.test(tooLong.body.error), tooLong.body.error);
+    const ok = await sell([{ variant_id: cable.vid, qty: 60 }], 6000);
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const rem = await report('remnants');
+    assert.strictEqual(rem.status, 200, JSON.stringify(rem.body));
+    const row = rem.body.rows.find((x) => x.product_name === 'P23 Cable (per metre)');
+    assert.ok(row, JSON.stringify(rem.body.rows));
+    assert.strictEqual(row.on_hand, 40);
+    assert.strictEqual(row.remnant_pct, 40, '40m left of a 100m roll');
+  });
+
+  // ------------------------------------------------------------- electronics
+  await test('electronics: a phone cannot leave the shop without its IMEI, and the IMEI names its owner', async () => {
+    const phone = await mkP({ name: 'P23 Smartphone A15', barcode: '77931', cost: 18000, price: 26000, track_serials: 1, meta: { warranty_months: 12, brand: 'Tecno' } }, 0);
+    const cust = await authJ({ path: '/api/customers', method: 'POST', body: { name: 'Wanjiru Electronics', phone: '0712345678' } });
+    assert.strictEqual(cust.status, 200, JSON.stringify(cust.body));
+    p23.cust = cust.body.customer.id;
+    for (const im of ['IMEI-9001', 'IMEI-9002']) {
+      const r = await authJ({ path: '/api/serials', method: 'POST', body: { product_id: phone.id, serial_no: im } });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    }
+    const noScan = await sell([{ variant_id: phone.vid, qty: 1 }], 26000, { customer_id: p23.cust });
+    assert.strictEqual(noScan.status, 400, JSON.stringify(noScan.body));
+    assert.ok(/scan 1 serial number/.test(noScan.body.error), noScan.body.error);
+    const ghost = await sell([{ variant_id: phone.vid, qty: 1, serials: ['IMEI-NOPE'] }], 26000, { customer_id: p23.cust });
+    assert.strictEqual(ghost.status, 404, JSON.stringify(ghost.body));
+    assert.ok(/not registered in stock/.test(ghost.body.error), ghost.body.error);
+    const ok = await sell([{ variant_id: phone.vid, qty: 1, serials: ['IMEI-9001'] }], 26000, { customer_id: p23.cust });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    // the sale binds the serial to the person who bought it (warranty proof)
+    const serial = d.prepare("SELECT * FROM serials WHERE serial_no = 'IMEI-9001'").get();
+    assert.strictEqual(serial.status, 'sold');
+    assert.strictEqual(serial.customer_id, p23.cust);
+    assert.ok(serial.sale_id, 'serial is bound to the sale');
+    // an already-sold IMEI cannot be sold again
+    const again = await sell([{ variant_id: phone.vid, qty: 1, serials: ['IMEI-9001'] }], 26000, { customer_id: p23.cust });
+    assert.strictEqual(again.status, 409, JSON.stringify(again.body));
+    p23.phone = phone;
+  });
+
+  await test('electronics: warranty check, repair booking and hand-over', async () => {
+    const w = await command('electronics', 'warranty_check', { serial_no: 'IMEI-9001' });
+    assert.strictEqual(w.status, 200, JSON.stringify(w.body));
+    assert.strictEqual(w.body.in_warranty, true, JSON.stringify(w.body));
+    assert.strictEqual(w.body.warranty_months, 12);
+    assert.ok(w.body.warranty_expires, 'a warranty ends on a date, not "sometime"');
+    const missing = await command('electronics', 'warranty_check', { serial_no: 'IMEI-404' });
+    assert.strictEqual(missing.status, 400, JSON.stringify(missing.body));
+    // a repair job follows the same serial through the shop
+    const job = await command('electronics', 'book_repair', { serial_no: 'IMEI-9002', fault: 'screen cracked', quoted: 4500 });
+    assert.strictEqual(job.status, 200, JSON.stringify(job.body));
+    assert.ok(/^REP-/.test(job.body.ref), JSON.stringify(job.body));
+    const done = await command('electronics', 'complete_repair', { ref: job.body.ref, charged: 4500 });
+    assert.strictEqual(done.status, 200, JSON.stringify(done.body));
+    const twice = await command('electronics', 'complete_repair', { ref: job.body.ref, charged: 4500 });
+    assert.strictEqual(twice.status, 409, 'a job is handed over once');
+    const jobs = await report('repair_jobs');
+    assert.strictEqual(jobs.status, 200, JSON.stringify(jobs.body));
+    const row = jobs.body.rows.find((r) => r.ref === job.body.ref);
+    assert.ok(row && row.status === 'collected' && row.charged === 4500, JSON.stringify(jobs.body.rows));
+    const trace = await report('serial_trace');
+    assert.ok(trace.body.rows.some((r) => r.serial_no === 'IMEI-9001' && r.status === 'sold'), JSON.stringify(trace.body.rows));
+  });
+
+  // --------------------------------------------------------------- pharmacy
+  await test('pharmacy: a recall drill answers "who received this batch?" in one command', async () => {
+    const on = await authJ({ path: '/api/modules/pharmacy/activate', method: 'POST', body: {} });
+    assert.strictEqual(on.status, 200, JSON.stringify(on.body));
+    const drug = await mkP({ name: 'P21 Amoxicillin 500mg', barcode: '77941', cost: 180, price: 280, track_batches: true }, 0);
+    const batchId = d.prepare('INSERT INTO batches (product_id, variant_id, branch_id, location_id, batch_no, expiry_date, qty, cost, created_at) VALUES (?,?,1,?,?,?,20,180,?)')
+      .run(drug.id, drug.vid, p23.loc, 'AMX-77', new Date(Date.now() + 300 * 86400e3).toISOString().slice(0, 10), new Date().toISOString()).lastInsertRowid;
+    d.prepare('INSERT INTO stock (variant_id, location_id, qty) VALUES (?,?,20) ON CONFLICT(variant_id, location_id) DO UPDATE SET qty = 20').run(drug.vid, p23.loc);
+    d.prepare("INSERT INTO stock_moves (product_id, variant_id, branch_id, location_id, qty, type, reason, ref, batch_id, unit_cost, user_id, note, created_at) VALUES (?,?,1,?,20,'opening','opening','FIX',?,180,1,'fixture',?)")
+      .run(drug.id, drug.vid, p23.loc, batchId, new Date().toISOString());
+    const sale = await sell([{ variant_id: drug.vid, qty: 3 }], 840, { customer_id: p23.cust });
+    assert.strictEqual(sale.status, 200, JSON.stringify(sale.body));
+    assert.strictEqual(d.prepare('SELECT batch_id FROM sale_items WHERE sale_id = ?').get(sale.body.sale.id).batch_id, batchId, 'the sale drew from the batch');
+    const drill = await command('pharmacy', 'recall_drill', { batch_no: 'AMX-77', reason: 'PPB alert' });
+    assert.strictEqual(drill.status, 200, JSON.stringify(drill.body));
+    assert.strictEqual(drill.body.sales_affected, 1, JSON.stringify(drill.body));
+    assert.ok(drill.body.customers.some((c) => c.id === p23.cust), JSON.stringify(drill.body.customers));
+    assert.strictEqual(drill.body.units_outstanding, 17, '20 in, 3 out');
+    assert.ok(d.prepare("SELECT COUNT(*) AS n FROM pharmacy_recalls WHERE batch_no = 'AMX-77'").get().n === 1, 'the drill is recorded');
+  });
+
+  await test('pharmacy: expiry alerts are bucketed (expired / 30 / 60 / 90)', async () => {
+    const drug = await mkP({ name: 'P21 Cough Syrup', barcode: '77942', cost: 220, price: 350, track_batches: true }, 0);
+    const mkBatch = (no, days) => d.prepare('INSERT INTO batches (product_id, variant_id, branch_id, location_id, batch_no, expiry_date, qty, cost, created_at) VALUES (?,?,1,?,?,?,5,220,?)')
+      .run(drug.id, drug.vid, p23.loc, no, new Date(Date.now() + days * 86400e3).toISOString().slice(0, 10), new Date().toISOString()).lastInsertRowid;
+    mkBatch('CS-10', 10); mkBatch('CS-45', 45); mkBatch('CS-80', 80); mkBatch('CS-200', 200);
+    const w = await report('expiry_watch', '?days=90');
+    assert.strictEqual(w.status, 200, JSON.stringify(w.body));
+    assert.ok(w.body.alerts.d30 >= 1, JSON.stringify(w.body.alerts));
+    assert.ok(w.body.alerts.d60 >= 1, JSON.stringify(w.body.alerts));
+    assert.ok(w.body.alerts.d90 >= 1, JSON.stringify(w.body.alerts));
+    const soon = w.body.rows.find((r) => r.batch_no === 'CS-10');
+    assert.strictEqual(soon.bucket, 'd30', JSON.stringify(soon));
+    assert.ok(!w.body.rows.some((r) => r.batch_no === 'CS-200'), 'a 200-day batch is not in the 90-day watch');
+    // writing off what has already expired is one command
+    const gone = await mkP({ name: 'P21 Expired Syrup', barcode: '77943', cost: 220, price: 350, track_batches: true }, 0);
+    d.prepare('INSERT INTO batches (product_id, variant_id, branch_id, location_id, batch_no, expiry_date, qty, cost, created_at) VALUES (?,?,1,?,?,?,5,220,?)')
+      .run(gone.id, gone.vid, p23.loc, 'CS-OLD', new Date(Date.now() - 3 * 86400e3).toISOString().slice(0, 10), new Date().toISOString());
+    d.prepare('INSERT INTO stock (variant_id, location_id, qty) VALUES (?,?,5) ON CONFLICT(variant_id, location_id) DO UPDATE SET qty = 5').run(gone.vid, p23.loc);
+    const off = await command('pharmacy', 'writeoff_expired', {});
+    assert.strictEqual(off.status, 200, JSON.stringify(off.body));
+    assert.ok(off.body.written >= 1, JSON.stringify(off.body));
+    assert.strictEqual(d.prepare("SELECT qty FROM batches WHERE batch_no = 'CS-OLD'").get().qty, 0);
+  });
+
+  await test('pharmacy: an insurance claim is captured at the till, not on paper', async () => {
+    const noPerm = await withCookie(p23.cashier)({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p18.plain.vid, qty: 1, insurer: 'SHA', member_no: '12345' }], payment: { method: 'cash', amount: 200 } } });
+    assert.strictEqual(noPerm.status, 403, JSON.stringify(noPerm.body));
+    assert.ok(/pharmacy.claims/.test(noPerm.body.error), noPerm.body.error);
+    const noMember = await sell([{ variant_id: p18.plain.vid, qty: 1, insurer: 'SHA' }], 200);
+    assert.strictEqual(noMember.status, 400, JSON.stringify(noMember.body));
+    assert.ok(/member number/.test(noMember.body.error), noMember.body.error);
+    const ok = await sell([{ variant_id: p18.plain.vid, qty: 2, insurer: 'SHA', member_no: '12345', claim_no: 'CLM-1', patient_name: 'Otieno' }], 400);
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const claim = d.prepare("SELECT * FROM pharmacy_claims WHERE insurer = 'SHA' ORDER BY id DESC LIMIT 1").get();
+    assert.ok(claim, 'the claim was captured');
+    assert.strictEqual(claim.member_no, '12345');
+    assert.strictEqual(claim.status, 'pending');
+    assert.ok(claim.amount > 0, 'with the amount covered');
+    const rep = await report('insurance_claims');
+    assert.strictEqual(rep.status, 200, JSON.stringify(rep.body));
+    assert.ok(rep.body.rows.some((r) => r.claim_no === 'CLM-1'), JSON.stringify(rep.body.rows));
+    const sub = await command('pharmacy', 'submit_claims', { insurer: 'SHA', claim_nos: 'CLM-1' });
+    assert.strictEqual(sub.status, 200, JSON.stringify(sub.body));
+    assert.ok(sub.body.submitted >= 1, JSON.stringify(sub.body));
+    assert.strictEqual(d.prepare("SELECT status FROM pharmacy_claims WHERE claim_no = 'CLM-1'").get().status, 'submitted');
+    // the pharmacy is switched off again so the cosmetics rule is the one on duty
+    await authJ({ path: '/api/modules/pharmacy/deactivate', method: 'POST', body: {} });
+  });
+
+  // --------------------------------------------------------------- cosmetics
+  await test('cosmetics: perishable stock is guarded by expiry, and shades are tracked', async () => {
+    const cream = await mkP({ name: 'P23 Face Cream', barcode: '77951', cost: 350, price: 550, track_batches: true, meta: { perishable: 1, brand: 'NiveaKE' } }, 0);
+    const shade = await mkV(cream.id, { name: 'Medium', axes: 'shade: Medium', barcode: '77952' });
+    const gone = new Date(Date.now() - 4 * 86400e3).toISOString().slice(0, 10);
+    const batchId = d.prepare('INSERT INTO batches (product_id, variant_id, branch_id, location_id, batch_no, expiry_date, qty, cost, created_at) VALUES (?,?,1,?,?,?,6,350,?)')
+      .run(cream.id, shade, p23.loc, 'CRM-01', gone, new Date().toISOString()).lastInsertRowid;
+    d.prepare('INSERT INTO stock (variant_id, location_id, qty) VALUES (?,?,6) ON CONFLICT(variant_id, location_id) DO UPDATE SET qty = 6').run(shade, p23.loc);
+    d.prepare("INSERT INTO stock_moves (product_id, variant_id, branch_id, location_id, qty, type, reason, ref, batch_id, unit_cost, user_id, note, created_at) VALUES (?,?,1,?,6,'opening','opening','FIX',?,350,1,'fixture',?)")
+      .run(cream.id, shade, p23.loc, batchId, new Date().toISOString());
+    const blocked = await sell([{ variant_id: shade, qty: 1 }], 550);
+    assert.strictEqual(blocked.status, 409, JSON.stringify(blocked.body));
+    assert.ok(/expired on/.test(blocked.body.error), blocked.body.error);
+    const watch = await report('cosmetics_expiry', '?days=90');
+    assert.strictEqual(watch.status, 200, JSON.stringify(watch.body));
+    assert.ok(watch.body.rows.some((r) => r.batch_no === 'CRM-01' && r.bucket === 'expired'), JSON.stringify(watch.body.rows));
+    // a fresh batch sells, and the shade shows up in sell-through
+    d.prepare('INSERT INTO batches (product_id, variant_id, branch_id, location_id, batch_no, expiry_date, qty, cost, created_at) VALUES (?,?,1,?,?,?,6,350,?)')
+      .run(cream.id, shade, p23.loc, 'CRM-02', new Date(Date.now() + 400 * 86400e3).toISOString().slice(0, 10), new Date().toISOString()).lastInsertRowid;
+    d.prepare('UPDATE stock SET qty = 6 WHERE variant_id = ? AND location_id = ?').run(shade, p23.loc);
+    d.prepare("UPDATE batches SET expiry_date = ? WHERE batch_no = 'CRM-01'").run(new Date(Date.now() + 300 * 86400e3).toISOString().slice(0, 10));
+    const ok = await sell([{ variant_id: shade, qty: 2 }], 1100);
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const st = await report('shade_sell_through');
+    assert.strictEqual(st.status, 200, JSON.stringify(st.body));
+    const row = st.body.rows.find((r) => r.shade === 'Medium');
+    assert.ok(row && row.sold === 2, JSON.stringify(st.body.rows));
+  });
+
+  // ---------------------------------------------------------------- footwear
+  await test('footwear: the size must be chosen, and broken sizes are named', async () => {
+    const shoe = await mkP({ name: 'P23 Runner', barcode: '77961', cost: 2200, price: 3500, meta: { style_code: 'RUN-1', size_scale: 'EU' } }, 0);
+    const v40 = await mkV(shoe.id, { name: '40', axes: 'size: 40', barcode: '77962' });
+    const v42 = await mkV(shoe.id, { name: '42', axes: 'size: 42', barcode: '77963' });
+    await stockV(v40, 3, 2200);
+    await stockV(v42, 3, 2200);
+    const parent = await sell([{ variant_id: shoe.vid, qty: 1 }], 3500);
+    assert.strictEqual(parent.status, 400, JSON.stringify(parent.body));
+    assert.ok(/pick a size/.test(parent.body.error), parent.body.error);
+    const ok = await sell([{ variant_id: v42, qty: 1 }], 3500);
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const st = await report('shoe_size_sell_through');
+    assert.strictEqual(st.status, 200, JSON.stringify(st.body));
+    assert.ok(st.body.rows.some((r) => r.size === '42' && r.sold === 1), JSON.stringify(st.body.rows));
+    // size 41 has no stock at all: the style is broken
+    const broken = await report('broken_sizes');
+    assert.strictEqual(broken.status, 200, JSON.stringify(broken.body));
+    const row = broken.body.rows.find((r) => r.product_name === 'P23 Runner');
+    assert.ok(row, JSON.stringify(broken.body.rows));
+    assert.ok(/41/.test(row.gap), JSON.stringify(row));
+    // a variant with no barcode of its own is a scanning problem waiting to happen
+    const gap = await mkV(shoe.id, { name: '44', axes: 'size: 44' });
+    const gaps = await report('barcode_gaps');
+    assert.strictEqual(gaps.status, 200, JSON.stringify(gaps.body));
+    assert.ok(gaps.body.rows.some((r) => r.variant_name === '44'), JSON.stringify(gaps.body.rows));
+  });
+
+  await test('the trade picker offers industries the core has never heard of', async () => {
+    const trades = (await authJ('/api/trades')).body;
+    for (const t of ['electronics', 'cosmetics', 'footwear', 'mini_mart']) {
+      assert.ok(trades[t], `${t} missing from ${Object.keys(trades).join(', ')}`);
+      assert.ok(trades[t].label, `${t} has no label`);
+    }
+    assert.strictEqual(trades.duka.label, 'General shop (duka)', 'core trades keep their own labels');
+  });
+
+  await test('onboarding a trade the core has no catalogue for (electronics starter shelf)', async () => {
+    // A second server in a child process: setup writes a business, a trade and a
+    // starter shelf, and the industry module switches itself on.
+    const script = path.join(tmp, 'setup-electronics.js');
+    fs.writeFileSync(script, `
+      const fs = require('fs'), os = require('os'), path = require('path');
+      const ROOT = process.env.OPENPOS_ROOT;
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpos-setup-'));
+      process.env.OPENPOS_DATA_DIR = dir;
+      process.env.OPENPOS_DB = path.join(dir, 't.db');
+      const dbm = require(ROOT + '/db');
+      const d = dbm.open();
+      const { createApp } = require(ROOT + '/server');
+      const app = createApp(d);
+      const srv = app.listen(0);
+      srv.once('listening', async () => {
+        const base = 'http://127.0.0.1:' + srv.address().port;
+        const r = await fetch(base + '/api/setup', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ business: { name: 'Mama Ngina Electronics', trade: 'electronics' }, owner: { name: 'Otieno', pin: '4321' }, sample: true })
+        });
+        const out = {
+          status: r.status,
+          trade: (dbm.getSetting(d, 'business', {}) || {}).trade,
+          modules: d.prepare('SELECT module_id, active FROM modules').all(),
+          categories: d.prepare('SELECT name FROM categories ORDER BY id').all().map((x) => x.name),
+          products: d.prepare('SELECT COUNT(*) AS n FROM products').get().n,
+          serialTracked: d.prepare('SELECT COUNT(*) AS n FROM products WHERE track_serials = 1').get().n,
+          fields: d.prepare("SELECT COUNT(*) AS n FROM attribute_defs WHERE key IN ('warranty_months','brand','model','spec')").get().n
+        };
+        console.log(JSON.stringify(out));
+        srv.close();
+        process.exit(0);
+      });
+    `);
+    const raw = require('child_process').execFileSync(process.execPath, [script], {
+      env: { ...process.env, OPENPOS_ROOT: path.join(__dirname, '..') }, encoding: 'utf8'
+    });
+    const out = JSON.parse(raw.trim().split('\n').pop());
+    assert.strictEqual(out.status, 200, JSON.stringify(out));
+    assert.strictEqual(out.trade, 'electronics', 'a module trade is accepted at setup');
+    assert.ok(out.modules.some((m) => m.module_id === 'electronics' && m.active === 1), JSON.stringify(out.modules));
+    assert.deepStrictEqual(out.categories, ['Phones & Tablets', 'Accessories', 'TV & Audio', 'Power & Solar', 'Repairs']);
+    assert.strictEqual(out.products, 14, 'the module starter shelf, nothing else');
+    assert.strictEqual(out.serialTracked, 5, 'phones, tablets and TVs arrive IMEI-tracked');
+    assert.strictEqual(out.fields, 4, 'the module product fields are live from the first minute');
+  });
+
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 

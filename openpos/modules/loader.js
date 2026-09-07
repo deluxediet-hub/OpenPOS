@@ -38,6 +38,7 @@ const HOOKS = {
   'checkout.beforeCommit': 'gate',
   'stock.rule': 'gate',
   reports: 'collect',
+  commands: 'collect',
   permissions: 'collect',
   ui: 'collect',
   template: 'collect'
@@ -129,6 +130,19 @@ function normalize(raw, file) {
       options: String(f.options || ''),
       appliesTo: f.appliesTo === 'product' ? 'product' : 'variant'
     })).filter((f) => f.key) : [],
+    commands: Array.isArray(raw.commands) ? raw.commands.map((c) => ({
+      id: String(c.id || ''),
+      title: String(c.title || c.id || ''),
+      titleSw: String(c.titleSw || c.title || c.id || ''),
+      perm: String(c.perm || 'products.manage'),
+      params: Array.isArray(c.params) ? c.params.map((p) => ({
+        name: String(p.name || ''),
+        label: String(p.label || p.name || ''),
+        type: ['text', 'number', 'date', 'select', 'boolean'].includes(p.type) ? p.type : 'text',
+        required: !!p.required
+      })).filter((p) => p.name) : [],
+      run: typeof c.run === 'function' ? c.run : null
+    })).filter((c) => c.id && c.run) : [],
     reports: Array.isArray(raw.reports) ? raw.reports.map((r) => ({
       id: String(r.id || ''),
       title: String(r.title || r.id || ''),
@@ -162,7 +176,8 @@ function discover(dir) {
   const base = dir || MODULE_DIR;
   let files = [];
   try {
-    files = fs.readdirSync(base).filter((f) => f.endsWith('.js') && f !== 'loader.js');
+    // _kit.js and friends are shared helpers, not modules.
+    files = fs.readdirSync(base).filter((f) => f.endsWith('.js') && f !== 'loader.js' && !f.startsWith('_'));
   } catch (_) {
     return [];
   }
@@ -423,6 +438,8 @@ class Registry {
   reports() { return this.collect('reports').map((r) => ({ ...r, module: r.module })); }
   template() { return this.collect('template'); }
 
+  commands() { return this.collect('commands'); }
+  command(id) { return this.commands().find((c) => c.id === String(id)) || null; }
   report(id) { return this.reports().find((r) => r.id === String(id)) || null; }
   field(key) { return this.productFields().find((f) => f.key === key) || null; }
   knowsPermission(perm) { return this.permissions().some((p) => p.perm === perm); }

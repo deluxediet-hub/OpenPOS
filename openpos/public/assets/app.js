@@ -460,6 +460,52 @@ window.OP = (() => {
     return PANELS.slice();
   }
 
+  // ---- Generic panel helpers (Phases 19-23) --------------------------------
+  // Every industry panel does the same two things: show a report, and run one
+  // of the industry's own commands. Both are driven by the module's descriptor,
+  // so a panel file stays about 40 lines and the shell stays industry-blind.
+  const FORMS = {};
+
+  function reportTable(rows, columns) {
+    const list = Array.isArray(rows) ? rows : [];
+    const cols = (columns && columns.length) ? columns : (list[0] ? Object.keys(list[0]) : []);
+    if (!list.length) return '<p class="hint">—</p>';
+    return `<table class="tbl"><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${
+      list.map((r) => `<tr>${cols.map((c) => `<td>${esc(r[c])}</td>`).join('')}</tr>`).join('')
+    }</tbody></table>`;
+  }
+
+  /** Render the inputs a module command declares. Bind with OP.bindForms(el). */
+  function commandForm(cmd, onSubmit) {
+    const fid = `cmd-${cmd.module}-${cmd.id}`;
+    FORMS[fid] = onSubmit;
+    const typeOf = (t2) => (t2 === 'number' ? 'number' : t2 === 'date' ? 'date' : 'text');
+    const inputs = (cmd.params || []).map((p) => `<label class="cmd-field"><span>${esc(p.label)}</span>
+      <input data-param="${esc(p.name)}" type="${typeOf(p.type)}" ${p.required ? 'required' : ''}></label>`).join('');
+    return `<form class="cmd-form" data-cmd="${esc(fid)}">${inputs}
+      <button class="btn" type="submit">${esc(cmd.title)}</button>
+      <span class="cmd-msg hint"></span></form>`;
+  }
+
+  /** Wire every command form inside el to its module endpoint. */
+  function bindForms(el) {
+    (el.querySelectorAll ? el.querySelectorAll('form[data-cmd]') : []).forEach((f) => {
+      const fid = f.dataset.cmd;
+      f.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const msg = f.querySelector('.cmd-msg');
+        const params = {};
+        f.querySelectorAll('input,select').forEach((i) => { if (i.dataset.param) params[i.dataset.param] = i.value; });
+        try {
+          const out = await FORMS[fid](params);
+          if (msg) msg.textContent = out || 'done';
+        } catch (e) {
+          if (msg) msg.textContent = e.message || String(e);
+        }
+      });
+    });
+  }
+
   /** Mount a panel into an element. The panel gets the shell's own helpers. */
   function renderPanel(id, el, ctx = {}) {
     const p = PANELS.find((x) => x.id === id);
@@ -475,6 +521,7 @@ window.OP = (() => {
 
   return {
     t, setLang, lang: () => lang, api, fmt, esc, pinpad, toast, netBadge, I18N,
-    registerPanel, panels, addI18n, loadModules, loadScript, renderPanel
+    registerPanel, panels, addI18n, loadModules, loadScript, renderPanel,
+    reportTable, commandForm, bindForms
   };
 })();
