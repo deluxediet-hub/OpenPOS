@@ -566,7 +566,29 @@ high at Branch 2 (root-cause drill) · what to reorder now · which cashier over
 what hasn't sold in 60 days · anomaly flags (z-score on discounts/refunds/variance/velocity)
 · daily owner digest (SMS/WhatsApp).
 - **Acceptance:** every intelligence item = a real query with thresholds + alerts, no chatbot.
+### Phase 29 — Owner Intelligence · Days 41–42
+Decision-making layer on real data: what's tying up the most cash (stock × cost × age) ·
+which branch underperforms (vs its own history) · actual profit yesterday · why is variance
+high at Branch 2 (root-cause drill) · what to reorder now · which cashier over-discounts ·
+what hasn't sold in 60 days · anomaly flags (z-score on discounts/refunds/variance/velocity)
+· daily owner digest (SMS/WhatsApp).
+- **Acceptance:** every intelligence item = a real query with thresholds + alerts, no chatbot.
 
+
+**Status (2026-09-07): done.** Every intelligence item is a **real query with a threshold and an alert** — a number the owner can check, not advice from nowhere. `lib/intelligence.js` answers:
+
+| the owner's question | how it is answered | threshold |
+|---|---|---|
+| what's tying up the most cash? | stock × cost, with days since it last sold | flagged at 30 days idle |
+| which branch underperforms? | this period vs the branch's **own** previous period | −15% |
+| what did I actually make yesterday? | revenue − VAT − cost of stock sold − expenses | a loss, or margin < 8% |
+| why is variance high at Branch 2? | per cashier, plus voids / refunds / discounts as named causes | > 200 a shift |
+| what should I reorder now? | at/below reorder level, with days of cover and a suggested quantity | < 3 days of cover |
+| which cashier over-discounts? | their discount as a share of **their own** sales vs the shop average | > 2× the average |
+| what hasn't sold in 60 days? | stock with no outbound move in the window, valued at cost | 60 days |
+| is anything out of the ordinary? | z-scores on discounts, refunds, variance, velocity | \|z\| ≥ 2 |
+
+Each response carries the rows it used, the threshold that fired and a one-line sentence ("Yesterday: Ksh 12,400 sold, Ksh 8,100 of stock, Ksh 0 out — profit Ksh 2,533 (20%)."). The **digest** folds the high-severity alerts into a single message that fits in one SMS and can be pushed to the owner through the Phase-25 comms layer. The Manager's **Insights** tab opens with "3 things need you today" (or "Nothing needs you today") and shows the numbers behind it. 217 API tests, 34 UI steps.
 ### Phase 30 — AI Business Assistant · later
 Answers questions and flags anomalies **from the database** (structured queries, cited rows)
 against actual sales, stock, customers, purchases, expenses, branches, payments, profit, staff

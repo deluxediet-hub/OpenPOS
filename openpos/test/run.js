@@ -4297,6 +4297,130 @@ const commsLib = require('../lib/comms');
     assert.strictEqual(bin.status, 401, 'the backup needs a signed-in owner');
   });
 
+
+  // ================= Phase 29 — owner intelligence ==========================
+  // Acceptance: every item is a real query with a threshold and an alert — a
+  // number the owner can check, not advice from nowhere.
+  section('Phase 29 — owner intelligence: the questions, answered from the book');
+
+  await test('what is tying up the most cash: stock × cost × age', async () => {
+    const r = await authJ('/api/intelligence/cash-tied-up');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.threshold, 'every answer states its threshold');
+    assert.ok(r.body.total_value >= 0 && Number.isFinite(r.body.total_value));
+    assert.ok(Array.isArray(r.body.items));
+    // a product with stock really is valued at stock × cost
+    const p = await mkP({ name: 'P29 Cashy', sku: 'P29CASH', cost: 400, price: 700 }, 5);
+    const after = await authJ('/api/intelligence/cash-tied-up?limit=500');
+    const row = after.body.items.find((i) => i.sku === 'P29CASH');
+    assert.ok(row, 'the new line appears in what is tying up cash');
+    assert.strictEqual(row.qty, 5);
+    assert.strictEqual(row.value, 2000, 'stock × cost, exactly');
+    assert.ok(/Ksh/.test(after.body.sentence), 'and the answer is a sentence');
+  });
+
+  await test('profit yesterday: revenue − VAT − stock − expenses, from real rows', async () => {
+    const r = await authJ('/api/intelligence/profit?day_offset=1');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(Number.isFinite(r.body.profit));
+    assert.strictEqual(r.body.profit, r.body.revenue - r.body.vat - r.body.cogs - r.body.expenses,
+      JSON.stringify(r.body));
+    assert.ok(/profit/.test(r.body.sentence), r.body.sentence);
+    assert.ok(r.body.threshold);
+  });
+
+  await test('what to reorder now: at or below the reorder level, with days of cover', async () => {
+    const p = await mkP({ name: 'P29 Reorder', sku: 'P29RE', cost: 50, price: 100 }, 2);
+    await authJ({ path: `/api/products/${p.id}`, method: 'PUT', body: { reorder_level: 10 } });
+    const r = await authJ('/api/intelligence/reorder');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const row = r.body.items.find((i) => i.sku === 'P29RE');
+    assert.ok(row, 'a line under its reorder level is on the list');
+    assert.strictEqual(row.qty, 2);
+    assert.strictEqual(row.reorder_level, 10);
+    assert.ok(row.order_qty > 0, 'and it says how much to order');
+    assert.ok(['now', 'soon', 'watch'].includes(row.urgency));
+    assert.ok(r.body.sentence.length > 10, r.body.sentence);
+  });
+
+  await test('what has not sold in 60 days', async () => {
+    const p = await mkP({ name: 'P29 Dusty', sku: 'P29DUST', cost: 90, price: 150 }, 4);
+    const r = await authJ('/api/intelligence/dead-stock?days=60');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const row = r.body.items.find((i) => i.sku === 'P29DUST');
+    assert.ok(row, 'stock that has never sold is dead stock');
+    assert.strictEqual(row.value, 360);
+    assert.ok(r.body.total_value >= 360);
+    // sell one and it leaves the list
+    await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p.vid, qty: 1 }], payment: { method: 'cash', amount: 150 } } });
+    const after = await authJ('/api/intelligence/dead-stock?days=60');
+    assert.ok(!after.body.items.find((i) => i.sku === 'P29DUST'), 'a line that just sold is no longer dead');
+  });
+
+  await test('who gives the most away: discount rate per cashier, with a threshold', async () => {
+    const r = await authJ('/api/intelligence/discounts?days=30');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(Array.isArray(r.body.items));
+    assert.ok(typeof r.body.average_pct === 'number');
+    assert.match(r.body.threshold, /%/, r.body.threshold);
+    // a big discount really moves the number
+    const p = await mkP({ name: 'P29 Disc', sku: 'P29D', cost: 100, price: 1000 }, 5);
+    const before = await authJ('/api/intelligence/discounts?days=30&limit=50');
+    await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p.vid, qty: 1, line_discount: 900 }], payment: { method: 'cash', amount: 100 }
+    } });
+    const after = await authJ('/api/intelligence/discounts?days=30&limit=50');
+    const sum = (r) => r.body.items.reduce((s, i) => s + i.discount, 0);
+    assert.ok(sum(after) >= sum(before) + 900, `the discount we just gave is counted: ${sum(before)} → ${sum(after)}`);
+    const me0 = after.body.items.find((i) => i.user_id === 1);
+    assert.ok(me0 && me0.discount >= 900, JSON.stringify(after.body.items));
+    assert.ok(me0.discount_pct > 0, 'and it is expressed as a share of their own sales');
+    assert.ok(after.body.alerts.length >= 1 || after.body.average_pct > 0, JSON.stringify(after.body.alerts));
+  });
+
+  await test('branch performance is measured against that branch\'s own history', async () => {
+    const r = await authJ('/api/intelligence/branches?days=7');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.items.length >= 1);
+    const b = r.body.items[0];
+    assert.ok('prev_revenue' in b && 'change_pct' in b, JSON.stringify(b));
+    assert.ok(['up', 'down', 'flat'].includes(b.flag));
+    assert.match(r.body.threshold, /15%/, r.body.threshold);
+  });
+
+  await test('cash variance has a root-cause drill, not just a number', async () => {
+    const r = await authJ('/api/intelligence/variance?days=30');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(Array.isArray(r.body.by_cashier));
+    assert.ok(Array.isArray(r.body.root_causes));
+    assert.ok(r.body.root_causes.some((c) => /void|refund|discount/i.test(c.cause)), JSON.stringify(r.body.root_causes));
+    assert.ok(/variance/i.test(r.body.sentence), r.body.sentence);
+  });
+
+  await test('anomalies are z-scores on the last 30 days, not vibes', async () => {
+    const r = await authJ('/api/intelligence/anomalies?days=30');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    for (const key of ['discounts', 'refunds', 'variance', 'velocity']) {
+      assert.ok(r.body.metrics[key], `missing metric ${key}`);
+      assert.strictEqual(r.body.metrics[key].series.length, 30, `${key} has 30 days of readings`);
+    }
+    assert.match(r.body.threshold, /z/, r.body.threshold);
+    assert.ok(Array.isArray(r.body.alerts));
+  });
+
+  await test('the digest answers in one message — and can be sent to the owner', async () => {
+    const r = await authJ('/api/intelligence/digest');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.text.includes('Yesterday:'), r.body.text.slice(0, 120));
+    assert.ok(r.body.sections.profit && r.body.sections.reorder && r.body.sections.cash_tied_up);
+    assert.strictEqual(typeof r.body.high_count, 'number');
+    const send = await authJ({ path: '/api/intelligence/digest/send', method: 'POST', body: { to: '0700000002' } });
+    assert.strictEqual(send.status, 200, JSON.stringify(send.body));
+    assert.strictEqual(send.body.message.kind, 'digest');
+    assert.ok(send.body.message.body.includes('Yesterday:'), send.body.message.body.slice(0, 120));
+    assert.ok(send.body.message.body.length < 1400, 'it fits in a message');
+  });
+
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 

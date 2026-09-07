@@ -1234,6 +1234,60 @@
       </div>
     </section>
 
+    <!-- ============ INSIGHTS (Phase 29) ============ -->
+    <section id="tab-insights" class="hidden">
+      <div class="card">
+        <div class="row" style="margin-bottom:8px">
+          <h3 style="margin:0" id="ins-headline">Insights</h3>
+          <span class="spacer"></span>
+          <button class="btn ghost small" id="ins-reload">Reload</button>
+          <button class="btn ghost small" id="ins-send">Send me the digest</button>
+        </div>
+        <p class="muted small" style="margin:0 0 10px">Every answer here is a query with a threshold and a sentence — the owner's
+          questions, answered from the shop's own book. No advice that is not a number.</p>
+        <div id="ins-alerts"></div>
+      </div>
+      <div class="grid cols-2" style="margin-top:14px">
+        <div class="card">
+          <h3>What is tying up the most cash</h3>
+          <p class="muted small" id="ins-cash-line" style="margin:0 0 8px"></p>
+          <table><thead><tr><th>Item</th><th class="mono">Qty</th><th class="mono">Value</th><th class="mono">Idle</th></tr></thead>
+            <tbody id="ins-cash"></tbody></table>
+        </div>
+        <div class="card">
+          <h3>Reorder now</h3>
+          <p class="muted small" id="ins-reorder-line" style="margin:0 0 8px"></p>
+          <table><thead><tr><th>Item</th><th class="mono">Left</th><th class="mono">Cover</th><th class="mono">Order</th></tr></thead>
+            <tbody id="ins-reorder"></tbody></table>
+        </div>
+      </div>
+      <div class="grid cols-2" style="margin-top:14px">
+        <div class="card">
+          <h3>Yesterday, in money</h3>
+          <p class="muted" id="ins-profit-line" style="margin:0 0 8px"></p>
+          <table><tbody id="ins-profit"></tbody></table>
+        </div>
+        <div class="card">
+          <h3>Out of the ordinary (z-scores)</h3>
+          <p class="muted" id="ins-anom-line" style="margin:0 0 8px"></p>
+          <table><tbody id="ins-anom"></tbody></table>
+        </div>
+      </div>
+      <div class="grid cols-2" style="margin-top:14px">
+        <div class="card">
+          <h3>Branches against their own history</h3>
+          <table><thead><tr><th>Branch</th><th class="mono">Now</th><th class="mono">Before</th><th class="mono">Change</th></tr></thead>
+            <tbody id="ins-branches"></tbody></table>
+        </div>
+        <div class="card">
+          <h3>Who gives the most away</h3>
+          <table><thead><tr><th>Cashier</th><th class="mono">Sales</th><th class="mono">Discounted</th><th class="mono">%</th></tr></thead>
+            <tbody id="ins-disc"></tbody></table>
+        </div>
+      </div>
+      <div class="msg" id="ins-msg" style="margin-top:10px"></div>
+    </section>
+
     <!-- ============ EVIDENCE (Phase 28) ============ -->
     <section id="tab-evidence" class="hidden">
       <div class="card">
@@ -1464,6 +1518,7 @@ const TABS = [
   { id: 'marketing',  label: 'marketing',  cap: ['promotions', 'loyalty'] },
   { id: 'finance',    label: 'finance',    always: true },
   { id: 'reports',    label: 'reports',    always: true },
+  { id: 'insights', label: 'insights', always: true },
   { id: 'evidence', label: 'evidence', always: true },
   { id: 'integrations', label: 'kenya', always: true },
   { id: 'sync', label: 'Sync', always: true },
@@ -1523,6 +1578,7 @@ function selectTab(name) {
   });
   if (name === 'settings') loadSettings();
   if (name === 'evidence') loadEvidence();
+  if (name === 'insights') loadInsights();
   if (name === 'audit') loadAudit();
   if (name === 'staff') loadStaff();
   if (name === 'layout') loadLayout();
@@ -3536,6 +3592,88 @@ async function saveStoreSettings() {
   }
 }
 
+// ---------- owner intelligence (Phase 29) ----------
+const KES2 = (n) => 'Ksh ' + Number(n || 0).toLocaleString('en-KE');
+
+function insPill(severity, text) {
+  return `<div class="small" style="margin:4px 0">
+    <span class="pill ${severity === 'high' ? 'r' : ''}">${esc(severity)}</span> ${esc(text)}</div>`;
+}
+
+async function loadInsights() {
+  const [cash, reorder, profit, anom, branches, disc] = await Promise.all([
+    api('/api/intelligence/cash-tied-up?limit=10').catch(() => null),
+    api('/api/intelligence/reorder?limit=10').catch(() => null),
+    api('/api/intelligence/profit').catch(() => null),
+    api('/api/intelligence/anomalies?days=30').catch(() => null),
+    api('/api/intelligence/branches?days=7').catch(() => null),
+    api('/api/intelligence/discounts?days=30').catch(() => null)
+  ]);
+  if (!cash && !reorder) return;
+
+  const alerts = [
+    ...((profit && profit.alerts) || []),
+    ...((reorder && reorder.alerts) || []).slice(0, 3),
+    ...((cash && cash.alerts) || []).slice(0, 2),
+    ...((branches && branches.alerts) || []).slice(0, 1),
+    ...((anom && anom.alerts) || []).slice(0, 2)
+  ];
+  $('#ins-headline').textContent = alerts.length
+    ? `${alerts.filter((a) => a.severity === 'high').length} thing(s) need you today`
+    : 'Nothing needs you today';
+  $('#ins-alerts').innerHTML = alerts.length
+    ? alerts.slice(0, 8).map((a) => insPill(a.severity, a.text)).join('')
+    : '<p class="muted small">no threshold is breached — the shop is behaving normally</p>';
+
+  if (cash) {
+    $('#ins-cash-line').textContent = cash.sentence;
+    $('#ins-cash').innerHTML = cash.items.slice(0, 8).map((i) => `
+      <tr><td>${esc(i.name)}</td><td class="mono">${i.qty}</td><td class="mono">${KES2(i.value)}</td>
+      <td class="mono">${i.stale ? `${i.age_days}d` : '—'}</td></tr>`).join('')
+      || '<tr><td colspan="4" class="muted">nothing on the shelf</td></tr>';
+  }
+  if (reorder) {
+    $('#ins-reorder-line').textContent = reorder.sentence;
+    $('#ins-reorder').innerHTML = reorder.items.slice(0, 8).map((i) => `
+      <tr><td>${esc(i.name)}${i.urgency === 'now' ? ' <span class="pill r">now</span>' : ''}</td>
+      <td class="mono">${i.qty}</td><td class="mono">${i.days_left >= 999 ? '—' : i.days_left + 'd'}</td>
+      <td class="mono">${i.order_qty}</td></tr>`).join('')
+      || '<tr><td colspan="4" class="muted">nothing is at its reorder level</td></tr>';
+  }
+  if (profit) {
+    $('#ins-profit-line').textContent = profit.sentence;
+    $('#ins-profit').innerHTML = [
+      ['Sales taken', profit.sales_count],
+      ['Sold (incl. VAT)', KES2(profit.revenue)],
+      ['VAT', KES2(profit.vat)],
+      ['Discounts', KES2(profit.discounts)],
+      ['Cost of stock sold', KES2(profit.cogs)],
+      ['Money out', KES2(profit.expenses)],
+      ['Profit', KES2(profit.profit)],
+      ['Margin', `${profit.margin_pct}%`]
+    ].map(([k, v]) => `<tr><td class="muted">${esc(k)}</td><td class="mono">${esc(String(v))}</td></tr>`).join('');
+  }
+  if (anom) {
+    $('#ins-anom-line').textContent = anom.sentence;
+    $('#ins-anom').innerHTML = anom.alerts.length
+      ? anom.alerts.map((a) => `<tr><td>${esc(a.text)}</td><td class="mono">z ${a.z}</td></tr>`).join('')
+      : '<tr><td class="muted">nothing unusual in the last 30 days</td></tr>';
+  }
+  if (branches) {
+    $('#ins-branches').innerHTML = branches.items.map((b) => `
+      <tr><td>${esc(b.name)}</td><td class="mono">${KES2(b.revenue)}</td><td class="mono">${KES2(b.prev_revenue)}</td>
+      <td class="mono">${b.change_pct === null ? '—' : `${b.change_pct > 0 ? '+' : ''}${b.change_pct}%`}
+        ${b.flag === 'down' ? '<span class="pill r">down</span>' : ''}</td></tr>`).join('')
+      || '<tr><td colspan="4" class="muted">one branch, one book</td></tr>';
+  }
+  if (disc) {
+    $('#ins-disc').innerHTML = disc.items.map((d) => `
+      <tr><td>${esc(d.name)}</td><td class="mono">${KES2(d.gross)}</td><td class="mono">${KES2(d.discount)}</td>
+      <td class="mono">${d.discount_pct}%</td></tr>`).join('')
+      || '<tr><td colspan="4" class="muted">no sales yet</td></tr>';
+  }
+}
+
 // ---------- evidence & security (Phase 28) ----------
 async function loadEvidence() {
   const trail = await api('/api/audit/trail').catch(() => null);
@@ -3721,6 +3859,13 @@ async function loadSettings() {
 $('#st-store-save').onclick = saveStoreSettings;
 $('#dev-reload').onclick = loadDevices;
 $('#ev-reload').onclick = loadEvidence;
+$('#ins-reload').onclick = loadInsights;
+$('#ins-send').onclick = async () => {
+  try {
+    const r = await api('/api/intelligence/digest/send', { method: 'POST', body: {} });
+    toast($('#ins-msg'), `digest sent (${r.digest.alerts.length} alert(s))`, true);
+  } catch (e) { toast($('#ins-msg'), e.message, false); }
+};
 $('#ev-save').onclick = async () => {
   try {
     await api('/api/settings/security', {

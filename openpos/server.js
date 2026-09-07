@@ -730,6 +730,49 @@ function createApp(d) {
     next();
   };
 
+  // ================= Phase 29 — owner intelligence ==========================
+  // Every answer here is a query with a threshold and a sentence. No assistant,
+  // no advice that is not a number — and the rows it came from are in the reply.
+
+  const intel = require('./lib/intelligence');
+
+  const intelGuard = (fn) => (req, res) => {
+    try {
+      res.json(fn(d, req.query || {}));
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  };
+
+  app.get('/api/intelligence/cash-tied-up', me, can('reports.view'), intelGuard((d, q) => intel.cashTiedUp(d, { limit: Number(q.limit) || 12 })));
+  app.get('/api/intelligence/branches', me, can('reports.view'), intelGuard((d, q) => intel.branchPerformance(d, { days: Number(q.days) || 7 })));
+  app.get('/api/intelligence/profit', me, can('reports.view'), intelGuard((d, q) => intel.profit(d, { dayOffset: Number(q.day_offset) || 1 })));
+  app.get('/api/intelligence/variance', me, can('reports.view'), intelGuard((d, q) => intel.varianceDrill(d, { branchId: numOrNull(q.branch_id), days: Number(q.days) || 30 })));
+  app.get('/api/intelligence/reorder', me, can('reports.view'), intelGuard((d, q) => intel.reorderNow(d, { limit: Number(q.limit) || 20 })));
+  app.get('/api/intelligence/discounts', me, can('reports.view'), intelGuard((d, q) => intel.discountWatch(d, { days: Number(q.days) || 30, limit: Number(q.limit) || 10 })));
+  app.get('/api/intelligence/dead-stock', me, can('reports.view'), intelGuard((d, q) => intel.deadStock(d, { days: Number(q.days) || 60, limit: Number(q.limit) || 20 })));
+  app.get('/api/intelligence/anomalies', me, can('reports.view'), intelGuard((d, q) => intel.anomalies(d, { days: Number(q.days) || 30 })));
+
+  app.get('/api/intelligence/digest', me, can('reports.view'), intelGuard((d, q) => intel.digest(d, { days: Number(q.days) || 7 })));
+
+  /** The digest by message: the shop's own numbers, in the owner's pocket. */
+  app.post('/api/intelligence/digest/send', me, can('reports.view'), requireCap('comms'), async (req, res) => {
+    try {
+      const cfg = comms.settings(d, dbm);
+      const to = comms.normalisePhone((req.body || {}).to || cfg.owner_phone || cfg.business_phone);
+      if (!to) return res.status(400).json({ error: 'give a number, or set the owner phone in messaging settings' });
+      const dg = intel.digest(d, { days: Number((req.body || {}).days) || 7 });
+      const row = await comms.send(d, dbm, {
+        to, body: dg.text, kind: 'digest', channel: (req.body || {}).channel,
+        meta: { alerts: dg.alerts.length }
+      });
+      dbm.audit(d, { userId: req.user.id, action: 'intelligence/digest', entity: 'message', entityId: String(row.id), detail: { to, alerts: dg.alerts.length } });
+      res.json({ ok: true, message: row, digest: dg });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
   // ================= Phase 28 — security, audit & fraud controls ============
   // Philosophy: anything financially important leaves evidence. These routes
   // are how an owner reads that evidence — and how the shop locks itself.

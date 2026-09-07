@@ -236,6 +236,30 @@ async function waitFor(fn, label, timeout = 8000) {
         /rendered \d+ bytes/.test(mw.document.querySelector('#dev-msg').textContent),
         mw.document.querySelector('#dev-msg').textContent.slice(0, 120));
 
+      // ---------------- Phase 29: the owner's questions, on screen ------------
+      const insTab = [...mw.document.querySelectorAll('#tabs button')].find((b) => /insights/i.test(b.textContent));
+      ck('an Insights tab appears — the questions an owner actually asks', !!insTab,
+        [...mw.document.querySelectorAll('#tabs button')].map((b) => b.textContent.trim()).join(' | '));
+      if (insTab) {
+        click(mw, insTab);
+        await waitFor(() => mw.document.querySelector('#ins-headline') && mw.document.querySelector('#ins-alerts').textContent.trim(),
+          'the insights headline', 15000);
+        ck('the screen opens with what needs the owner today',
+          /need you today|Nothing needs you today/.test(mw.document.querySelector('#ins-headline').textContent),
+          mw.document.querySelector('#ins-headline').textContent);
+        await waitFor(() => mw.document.querySelector('#ins-profit-line').textContent.trim(), 'the profit sentence', 15000);
+        ck('profit is one sentence, not a dashboard',
+          /profit/i.test(mw.document.querySelector('#ins-profit-line').textContent),
+          mw.document.querySelector('#ins-profit-line').textContent.slice(0, 120));
+        await waitFor(() => mw.document.querySelector('#ins-reorder').textContent.trim(), 'the reorder table', 15000);
+        ck('what to reorder is answered on screen',
+          mw.document.querySelector('#ins-reorder').textContent.trim().length > 0,
+          mw.document.querySelector('#ins-reorder').textContent.slice(0, 100));
+        ck('cash on the shelf is valued',
+          /Ksh/.test(mw.document.querySelector('#ins-cash').textContent),
+          mw.document.querySelector('#ins-cash').textContent.slice(0, 120));
+      }
+
       // ---------------- Phase 28: the owner can read the evidence -------------
       const evTab = [...mw.document.querySelectorAll('#tabs button')].find((b) => /evidence/i.test(b.textContent));
       ck('an Evidence tab appears — the trail belongs to the owner', !!evTab,
