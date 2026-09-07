@@ -441,12 +441,26 @@ warranties, repairs, customer ownership) · **Cosmetics** (shades/sizes/brands/b
 · **Footwear** (size/colour/width/style, variant barcodes).
 - **Acceptance:** each module's core flow end-to-end on sample data; **adding the next
   industry costs ≤ 1 day.**
+- **Status (2026-09-07): done.** Eight industries — spirits, pharmacy, boutique, mini_mart,
+  hardware, electronics, cosmetics, footwear — one file each (`openpos/modules/*.js`) plus a
+  browser panel each, over a shared `modules/_kit.js`. The framework gained a ninth hook
+  (`commands`). Acceptance is asserted in `npm test`: a brand-new industry registered from the
+  test file drives fields + hooks + reports with zero core edits. 162 tests green.
 
 ### Phase 24 — Promotions, Loyalty & Marketing · Day 35
 BOGO, bundles, %/fixed discounts, customer-specific offers, coupons, campaigns, loyalty
 points (earn/redeem as tender), VIP/tiers, customer segmentation.
 - **Acceptance:** promos apply correctly through every payment method; loyalty-as-tender
   can't overspend; a segment drives a campaign.
+- **Status (2026-09-07): done.** Offers are data (`promos` + `sale_promos`, engine in
+  `lib/promos.js`): % / money-off / BOGO / bundle / happy hour, with code, window, minimum
+  spend, use limit and scope (basket · product · category · customer · segment). They are
+  applied inside `prepareSaleLines` before tax, so every payment method gets them and no
+  discount permission is needed. Loyalty (`lib/loyalty.js`) earns on a paid sale and spends as
+  a tender that cannot overrun the balance, the shop's cap or the balance still owed. Segments
+  (`lib/segments.js`) are computed, never stored, and a campaign is a promotion pointed at one.
+  Manager Marketing tab; the till shows the offers that fired and the customer's points.
+  Acceptance is asserted in `npm test` (175 tests, 14 UI steps).
 
 ### Phase 25 — WhatsApp & Customer Commerce · Day 36
 Pluggable comms provider (Africa's Talking / Twilio + local-log fallback): WhatsApp/SMS

@@ -140,6 +140,7 @@
     <div class="cust-row">
       <select id="p-cust" style="flex:1"></select>
       <input id="p-promo" placeholder="Promo" style="width:90px" title="Promo code">
+      <span id="p-points" class="pill hidden" title="Loyalty points"></span>
     </div>
     <div id="cart"></div>
     <div class="tots">
@@ -147,6 +148,7 @@
       <div class="r"><span data-i18n="discount">Discount</span><span id="t-disc">Ksh 0</span></div>
       <div class="r"><span data-i18n="vat">VAT</span><span id="t-tax">Ksh 0</span></div>
       <div class="r big"><span data-i18n="total">Total</span><span id="t-total">Ksh 0</span></div>
+      <div id="p-offers" class="muted small" style="margin-top:4px"></div>
     </div>
     <div class="paytabs" id="p-tabs"></div>
     <div id="p-payfields">
@@ -646,8 +648,55 @@ function PROMO() { return $('#p-promo').value.trim(); }
 function drawCust() {
   $('#p-cust').innerHTML = `<option value="">${t('walk_in')}</option>` + CUSTOMERS
     .map((c) => `<option value="${c.id}">${esc(c.name)}${c.phone ? ' · ' + esc(c.phone) : ''}${c.deni_outstanding > 0 ? ` · ${t('deni')} ${fmt(c.deni_outstanding)}` : ''}</option>`).join('');
-  $('#p-cust').onchange = () => { reprice(); drawCart(); };
+  $('#p-cust').onchange = () => { reprice(); drawCart(); drawLoyalty(); };
   $('#p-promo').onchange = () => { reprice(); drawCart(); };
+}
+
+// ---------------- Phase 24: offers & points on the till ----------------------
+// The till never decides a discount: it asks the engine what this basket costs
+// and shows the answer, coupon or not.
+let OFFERS = [];
+let OFFERS_KEY = '';
+
+async function drawOffers() {
+  const el = $('#p-offers');
+  if (!el) return;
+  if (RESUME_SALE || !CART.length) { el.textContent = ''; OFFERS = []; return; }
+  const key = JSON.stringify([CART.map((L) => [L.variant_id, L.qty, L.line_discount || 0]), CUST_ID(), PROMO()]);
+  if (key === OFFERS_KEY) return;
+  OFFERS_KEY = key;
+  try {
+    const r = await api('/api/promos/preview', {
+      method: 'POST',
+      body: {
+        items: CART.map((L) => ({ variant_id: L.variant_id, qty: L.qty, line_discount: L.line_discount || 0 })),
+        customer_id: CUST_ID(), promo_code: PROMO() || null
+      }
+    });
+    OFFERS = r.offers || [];
+    if (!OFFERS.length) { el.textContent = ''; return; }
+    el.innerHTML = OFFERS.map((o) =>
+      `<span class="pill g">${esc(o.name)} −${fmt(o.amount)}</span>`).join(' ');
+  } catch {
+    el.textContent = '';
+  }
+}
+
+/** The customer's points, so the cashier can offer them before paying. */
+async function drawLoyalty() {
+  const el = $('#p-points');
+  if (!el) return;
+  const id = CUST_ID();
+  if (!id) { el.classList.add('hidden'); el.textContent = ''; return; }
+  try {
+    const r = await api(`/api/loyalty/${id}`);
+    if (!r.points) { el.classList.add('hidden'); el.textContent = ''; return; }
+    el.classList.remove('hidden');
+    // eslint-disable-next-line no-undef
+    el.textContent = `${r.points} ${t('points') || 'pts'} · ${fmt(r.value)}`;
+  } catch {
+    el.classList.add('hidden');
+  }
 }
 
 async function reprice() {
@@ -694,7 +743,9 @@ function scan(code) {
   }).finally(() => { $('#scan').value = ''; drawGrid($('#cats .on') ? $('#cats .on').dataset.c : ''); $('#scan').focus(); });
 }
 
-function lineGross(L) { return Math.round(L.unit_price * L.qty) - (L.line_discount || 0); }
+// R-P2: prices are VAT-inclusive — a line total is what the customer pays,
+// and the VAT shown on the receipt is the part of it that belongs to KRA.
+function lineGross(L) { return Math.max(0, Math.round(L.unit_price * L.qty) - (L.line_discount || 0)); }
 function lineTax(L) { return L.tax_type === 'std' ? Math.round(lineGross(L) * VAT_RATE / (100 + VAT_RATE)) : 0; }
 
 function drawCart() {
@@ -722,7 +773,7 @@ function drawCart() {
           <button data-a="inc" data-i="${i}">+</button>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-          <div class="tot">${fmt(lineGross(L) + lineTax(L))}</div>
+          <div class="tot">${fmt(lineGross(L))}</div>
           <div class="row" style="gap:4px">
             <button class="btn small ghost" data-a="disc" data-i="${i}" title="${t('discount')}">${t('discount')}</button>
             <button class="btn small ghost" data-a="note" data-i="${i}" title="${t('note')}">📝</button>
@@ -733,13 +784,14 @@ function drawCart() {
   }
   let sub = 0, disc = 0, tax = 0, gross = 0;
   for (const L of CART) { sub += Math.round(L.unit_price * L.qty); disc += L.line_discount || 0; tax += lineTax(L); }
-  gross = sub - disc + tax;
+  gross = sub - disc;                    // VAT-inclusive total (R-P2)
   if (RESUME_SALE) { sub = RESUME_SALE.gross; disc = 0; tax = 0; gross = RESUME_SALE.gross; }
   $('#t-sub').textContent = fmt(sub);
   $('#t-disc').textContent = disc ? '−' + fmt(disc) : fmt(0);
   $('#t-tax').textContent = fmt(tax);
   $('#t-total').textContent = fmt(gross);
   drawQuick();
+  drawOffers();
 
   el.querySelectorAll('[data-a]').forEach((b) => {
     const i = Number(b.dataset.i);
@@ -783,12 +835,12 @@ function drawQuick() {
 }
 
 function cartTotal() {
-  let s = 0; for (const L of CART) s += lineGross(L) + lineTax(L);
+  let s = 0; for (const L of CART) s += lineGross(L);
   return s;
 }
 
 function promptDiscount(L) {
-  const val = prompt(`${t('discount')} — ${L.name} (${fmt(lineGross(L) + lineTax(L))})`, L.line_discount || '');
+  const val = prompt(`${t('discount')} — ${L.name} (${fmt(lineGross(L))})`, L.line_discount || '');
   if (val === null) return;
   const d = Math.max(0, Math.round(Number(val) || 0));
   L.line_discount = d;
@@ -1216,7 +1268,7 @@ function retDiffPreview() {
     const sel = ln.querySelector('.ret-nvar');
     const price = Number(sel && sel.selectedOptions[0].dataset.price) || 0;
     const q = Number(ln.querySelector('.ret-nqty').value) || 0;
-    newV += Math.round(price * q * (1 + VAT_RATE / 100 / 1.16));
+    newV += Math.round(price * q);   // shelf prices are VAT-inclusive (R-P2)
   });
   const d = newV - retV;
   $('#ret-diffinfo').textContent = d > 0 ? `≈ ${fmt(d)} ${t('to_pay')}` : (d < 0 ? `≈ ${fmt(-d)} ${t('refunded')}` : t('exact_swap'));

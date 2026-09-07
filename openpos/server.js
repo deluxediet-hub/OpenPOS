@@ -13,6 +13,9 @@ const mpesa = require('./lib/mpesa');
 const auth = require('./lib/auth');
 const perms = require('./lib/permissions');
 const caps = require('./lib/capabilities');
+const promos = require('./lib/promos');
+const loyalty = require('./lib/loyalty');
+const segments = require('./lib/segments');
 const { TRADES } = require('./lib/sample');
 const mods = require('./modules/loader');
 
@@ -715,6 +718,204 @@ function createApp(d) {
       return res.send(require('./lib/csv').toCsv(columns, rows));
     }
     res.json({ report: { id: rep.id, module: rep.module, title: rep.title, titleSw: rep.titleSw }, columns, rows, ...extra });
+  });
+
+  // ================= Phase 24 — promotions, loyalty & marketing =================
+  // An offer is DATA: it lives in `promos`, is matched by the engine in
+  // lib/promos.js, and lands on the basket inside prepareSaleLines — so every
+  // payment method, every till and every channel gets the same discount.
+
+  const requireCap = (id) => (req, res, next) => {
+    if (!(caps.getCapabilityMap(d) || {})[id]) {
+      return res.status(403).json({ error: `switch on the ${id} capability first` });
+    }
+    next();
+  };
+  const promoRow = (r) => ({
+    id: r.id, branch_id: r.branch_id, name: r.name, type: r.type, value: r.value,
+    applies_to: r.applies_to, applies_ref: r.applies_ref, code: r.code,
+    start_date: r.start_date, end_date: r.end_date, time_start: r.time_start, time_end: r.time_end,
+    min_spend: r.min_spend, buy_qty: r.buy_qty, get_qty: r.get_qty, tier: r.tier,
+    stackable: !!r.stackable, priority: r.priority,
+    max_uses: r.max_uses, uses: r.uses, active: !!r.active,
+    uses_left: r.max_uses === null || r.max_uses === undefined ? null : Math.max(0, r.max_uses - r.uses),
+    created_at: r.created_at, updated_at: r.updated_at
+  });
+
+  app.get('/api/promos', me, can('promos.manage'), requireCap('promotions'), (req, res) => {
+    const rows = d.prepare('SELECT * FROM promos ORDER BY active DESC, priority DESC, id DESC').all();
+    res.json(rows.map(promoRow));
+  });
+
+  app.post('/api/promos', me, can('promos.manage'), requireCap('promotions'), (req, res) => {
+    try {
+      const row = promos.cleanPromo(req.body || {});
+      if (!row.name) return res.status(400).json({ error: 'give the offer a name' });
+      if (row.code && d.prepare('SELECT id FROM promos WHERE code = ? AND active = 1').get(row.code)) {
+        return res.status(409).json({ error: `code ${row.code} is already in use` });
+      }
+      const id = promos.insertPromo(d, row, { userId: req.user.id, branchId: null });
+      dbm.audit(d, { userId: req.user.id, action: 'promo/create', entity: 'promo', entityId: String(id), detail: { name: row.name, type: row.type, code: row.code } });
+      res.json({ ok: true, promo: promoRow(d.prepare('SELECT * FROM promos WHERE id = ?').get(id)) });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.put('/api/promos/:id', me, can('promos.manage'), requireCap('promotions'), (req, res) => {
+    const id = numOrNull(req.params.id);
+    const existing = d.prepare('SELECT * FROM promos WHERE id = ?').get(id);
+    if (!existing) return res.status(404).json({ error: 'offer not found' });
+    try {
+      const row = promos.cleanPromo(req.body || {}, existing);
+      promos.updatePromo(d, id, row);
+      dbm.audit(d, { userId: req.user.id, action: 'promo/update', entity: 'promo', entityId: String(id), detail: { name: row.name } });
+      res.json({ ok: true, promo: promoRow(d.prepare('SELECT * FROM promos WHERE id = ?').get(id)) });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  // An offer is never deleted — it is retired, so yesterday's receipts still
+  // know what discounted them (R-A: evidence outlives the campaign).
+  app.post('/api/promos/:id/deactivate', me, can('promos.manage'), (req, res) => {
+    const id = numOrNull(req.params.id);
+    const r = d.prepare('UPDATE promos SET active = 0, updated_at = ? WHERE id = ?').run(new Date().toISOString(), id);
+    if (!r.changes) return res.status(404).json({ error: 'offer not found' });
+    dbm.audit(d, { userId: req.user.id, action: 'promo/deactivate', entity: 'promo', entityId: String(id) });
+    res.json({ ok: true });
+  });
+
+  app.post('/api/promos/:id/activate', me, can('promos.manage'), requireCap('promotions'), (req, res) => {
+    const id = numOrNull(req.params.id);
+    const r = d.prepare('UPDATE promos SET active = 1, updated_at = ? WHERE id = ?').run(new Date().toISOString(), id);
+    if (!r.changes) return res.status(404).json({ error: 'offer not found' });
+    dbm.audit(d, { userId: req.user.id, action: 'promo/activate', entity: 'promo', entityId: String(id) });
+    res.json({ ok: true });
+  });
+
+  /** Dry run: "what would this basket cost?" — the till shows it before paying. */
+  app.post('/api/promos/preview', me, (req, res) => {
+    if (!promotionsOn(d)) return res.status(403).json({ error: 'switch on the promotions capability first' });
+    try {
+      const ctx = saleContext(d, req.user);
+      const b = req.body || {};
+      const { lines, offers } = prepareSaleLines(d, {
+        user: req.user, ctx,
+        customerId: numOrNull(b.customer_id),
+        promoCode: b.promo_code ? String(b.promo_code).trim() : (Array.isArray(b.promo_codes) ? b.promo_codes : null),
+        items: b.items, approver: null, allowOversell: false
+      });
+      const totals = saleTotals(lines);
+      res.json({
+        lines: lines.map((L, i) => ({
+          variant_id: L.variant.id, name: L.product.name, qty: L.qty, unit_price: L.unitPrice,
+          line_discount: L.disc, net: L.net, tax: L.tax, gross: L.gross
+        })),
+        totals,
+        offers: (offers && offers.applied) || []
+      });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/reports/promotions', me, can('reports.view'), (req, res) => {
+    const branches = visibleBranches(d, req.user).map((b) => b.id);
+    const out = promos.performance(d, { branches });
+    const { from, to } = parseRange(req);
+    if (String(req.query.format || '').toLowerCase() === 'csv') {
+      const columns = ['name', 'type', 'code', 'sales', 'discount_given', 'revenue', 'uses', 'max_uses', 'active'];
+      res.type('text/csv').attachment('promotions.csv');
+      return res.send(require('./lib/csv').toCsv(columns, out.rows));
+    }
+    res.json({ from, to, ...out });
+  });
+
+  // ---- segmentation: who to talk to, and why ----------------------------------
+  app.get('/api/segments', me, can('customers.view'), (req, res) => {
+    const branches = visibleBranches(d, req.user).map((b) => b.id);
+    const out = segments.summary(d, { branches });
+    res.json({ total: out.total, segments: out.rows });
+  });
+
+  app.get('/api/segments/:id/audience', me, can('customers.view'), (req, res) => {
+    const branches = visibleBranches(d, req.user).map((b) => b.id);
+    const known = segments.SEGMENTS.some((s) => s.id === req.params.id) || req.params.id === 'all';
+    if (!known) return res.status(404).json({ error: 'unknown segment' });
+    res.json(segments.audience(d, req.params.id, { branches, limit: Number(req.query.limit) || 200 }));
+  });
+
+  /** A campaign is a promotion pointed at a segment (Day 35 acceptance). */
+  app.post('/api/campaigns', me, can('campaigns.manage'), requireCap('promotions'), (req, res) => {
+    const b = req.body || {};
+    const segment = String(b.segment || '').trim();
+    if (!segments.SEGMENTS.some((s) => s.id === segment)) return res.status(400).json({ error: 'unknown segment' });
+    try {
+      const body = { ...b, applies_to: 'segment', applies_ref: segment };
+      const row = promos.cleanPromo(body);
+      if (!row.name) return res.status(400).json({ error: 'give the campaign a name' });
+      const id = promos.insertPromo(d, row, { userId: req.user.id });
+      const branches = visibleBranches(d, req.user).map((x) => x.id);
+      const reach = segments.audience(d, segment, { branches, limit: 5 });
+      dbm.audit(d, { userId: req.user.id, action: 'campaign/create', entity: 'promo', entityId: String(id), detail: { segment, audience: reach.count, type: row.type } });
+      res.json({
+        ok: true,
+        campaign: promoRow(d.prepare('SELECT * FROM promos WHERE id = ?').get(id)),
+        segment, audience: reach.count, sample: reach.customers
+      });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  // ---- loyalty: points that behave like money ---------------------------------
+  app.get('/api/loyalty/settings', me, (req, res) => {
+    res.json({ enabled: !!(caps.getCapabilityMap(d) || {}).loyalty, ...loyalty.settings(d, dbm) });
+  });
+
+  app.put('/api/loyalty/settings', me, can('settings.manage'), requireCap('loyalty'), (req, res) => {
+    const cur = dbm.getSetting(d, 'loyalty', {}) || {};
+    const b = req.body || {};
+    const next = {
+      enabled: b.enabled !== undefined ? !!b.enabled : !!cur.enabled,
+      points_per_100: Number(b.points_per_100) > 0 ? Number(b.points_per_100) : (cur.points_per_100 || 1),
+      point_value: Number(b.point_value) > 0 ? Number(b.point_value) : (cur.point_value || 1),
+      min_redeem_points: Math.max(0, Number(b.min_redeem_points) || 0),
+      max_redeem_pct: Math.min(100, Math.max(0, Number(b.max_redeem_pct !== undefined ? b.max_redeem_pct : 50))),
+      // the tender switch: points as money at the till (off = points earned only)
+      tender: b.tender !== undefined ? !!b.tender : (cur.tender !== false)
+    };
+    dbm.setSetting(d, 'loyalty', next);
+    dbm.audit(d, { userId: req.user.id, action: 'loyalty/settings', entity: 'settings', entityId: 'loyalty', detail: next });
+    res.json({ enabled: true, ...next });
+  });
+
+  app.get('/api/loyalty/:customerId', me, can('customers.view'), (req, res) => {
+    const id = numOrNull(req.params.customerId);
+    const customer = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+    if (!customer) return res.status(404).json({ error: 'customer not found' });
+    const s = loyalty.settings(d, dbm);
+    const points = loyalty.balance(d, id);
+    res.json({
+      customer: { id: customer.id, name: customer.name, phone: customer.phone },
+      points, value: Math.floor(points * s.point_value), settings: s,
+      history: loyalty.history(d, id, 50)
+    });
+  });
+
+  app.post('/api/loyalty/:customerId/adjust', me, can('loyalty.manage'), requireCap('loyalty'), (req, res) => {
+    const id = numOrNull(req.params.customerId);
+    const customer = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+    if (!customer) return res.status(404).json({ error: 'customer not found' });
+    const points = Math.round(Number((req.body || {}).points));
+    if (!Number.isFinite(points) || points === 0) return res.status(400).json({ error: 'points must be a non-zero whole number' });
+    if (points < 0 && loyalty.balance(d, id) + points < 0) {
+      return res.status(400).json({ error: `${customer.name} only has ${loyalty.balance(d, id)} points` });
+    }
+    loyalty.log(d, { customerId: id, points, type: 'adjust', userId: req.user.id, now: new Date().toISOString() });
+    dbm.audit(d, { userId: req.user.id, action: 'loyalty/adjust', entity: 'customer', entityId: String(id), detail: { points } });
+    res.json({ ok: true, points: loyalty.balance(d, id) });
   });
 
   // ---- first-run setup v2 (solo-first, R-C1) --------------------------------
@@ -3757,17 +3958,62 @@ function createApp(d) {
         if (disc > res.price * qty) throw httpError(400, `discount ${disc} exceeds the line total`);
       }
       const taxType = eff(product, variant, 'tax_type') || 'std';
+      // R-P2: shelf prices are VAT-INCLUSIVE. The discount comes off the
+      // tax-inclusive line, VAT is then extracted from what is left, and the
+      // customer pays exactly that — never price + VAT on top of it.
       const grossLine = Math.round(res.price * qty);
-      const net = grossLine - disc;
-      const tax = lineTax(net, taxType, vatRate);
+      const grossAfterDisc = Math.max(0, grossLine - disc);
+      const tax = lineTax(grossAfterDisc, taxType, vatRate);
+      const net = grossAfterDisc - tax;
       lines.push({
-        variant, product, qty, unitPrice: res.price, source: res.source, disc, net, tax, gross: net + tax,
+        variant, product, qty, unitPrice: res.price, source: res.source, disc, net, tax, gross: grossAfterDisc,
         taxType, kra: eff(product, variant, 'kra_item_code') || '',
         age: product.age_min ? 1 : 0, batchId: null, note: String(it.line_note || '').trim(),
         moduleData
       });
     }
-    return { lines, customer };
+    // ---- Phase 24: promotions -------------------------------------------------
+    // Offers are the shop's decision, so they need no discount permission. They
+    // land on the priced basket before tax, and a line never goes below zero.
+    const offers = promotionsOn(d)
+      ? promos.evaluate(d, {
+          lines, customer, branchId: ctx.branchId,
+          codes: [].concat(promoCode || []).filter(Boolean),
+          now: new Date(),
+          segmentOf: (customerId, name) => segments.isIn(d, customerId, name)
+        })
+      : { applied: [], lineDiscounts: new Map(), orderDiscount: 0 };
+    for (const [i, amount] of offers.lineDiscounts) {
+      const L = lines[i];
+      if (!L || amount <= 0) continue;
+      const shelf = Math.round(L.unitPrice * L.qty);
+      L.disc = Math.min(L.disc + amount, shelf);
+      // Re-derive from the tax-inclusive total: the offer came off the shelf
+      // price, so VAT is extracted from what is left (R-P2).
+      const after = Math.max(0, shelf - L.disc);
+      L.tax = lineTax(after, L.taxType, vatRate);
+      L.net = after - L.tax;
+      L.gross = after;
+    }
+    return { lines, customer, offers };
+  }
+
+  /** R-C: promotions are a capability, never a code path. */
+  function promotionsOn(d) {
+    return !!(caps.getCapabilityMap(d) || {}).promotions;
+  }
+
+  /** Award points once a sale is actually paid (Phase 24). */
+  function maybeEarnLoyalty(d, saleId) {
+    try {
+      const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
+      if (!sale || sale.status !== 'paid' || !sale.customer_id) return 0;
+      if ((caps.getCapabilityMap(d) || {}).loyalty === false) return 0;
+      // Points are earned on what the customer actually paid (tax-inclusive).
+      return loyalty.earn(d, dbm, { customerId: sale.customer_id, saleId, net: sale.gross, userId: sale.user_id });
+    } catch (_) {
+      return 0;   // loyalty never blocks a sale
+    }
   }
 
   function saleTotals(lines) {
@@ -3802,6 +4048,18 @@ function createApp(d) {
   function applyPayment(d, { user, saleId, sale, payment, discountBy, allowQuote }) {
     if (!payment) throw httpError(400, 'payment required');
     if (discountBy) d.prepare('UPDATE sales SET discount_by = ? WHERE id = ?').run(discountBy, saleId);
+    // Phase 24: points are tender, so they are checked like tender — against
+    // the customer's balance, the shop's cap and what is still owed.
+    let loyaltyPoints = 0;
+    let loyaltyCustomer = null;
+    if (String(payment.method || '').trim() === 'loyalty') {
+      loyaltyCustomer = sale.customer_id ? d.prepare('SELECT * FROM customers WHERE id = ?').get(sale.customer_id) : null;
+      const money = pme.saleMoney(d, saleId);
+      loyaltyPoints = loyalty.checkRedeem(d, dbm, {
+        customer: loyaltyCustomer, sale, amount: payment.amount,
+        paid: money.confirmed + money.pending
+      });
+    }
     const r = pme.addPayment(d, {
       user, sale,
       method: String(payment.method || '').trim(),
@@ -3811,6 +4069,9 @@ function createApp(d) {
     });
     if (payment.method === 'mpesa' && r.payment.status === 'pending') {
       r.mpesa = mpesa.initiate(d, { payment: r.payment, sale: r.sale, phone: String(payment.phone || '').trim(), amount: r.payment.amount });
+    }
+    if (loyaltyPoints > 0) {
+      loyalty.spend(d, dbm, { customer: loyaltyCustomer, saleId, points: loyaltyPoints, userId: user ? user.id : null });
     }
     return r;
   }
@@ -3879,9 +4140,9 @@ function createApp(d) {
       if (!ctx.branchId || !ctx.locationId) {
         return res.status(400).json({ error: 'no selling location for this user — assign a branch or register first' });
       }
-      const { lines, customer } = prepareSaleLines(d, {
+      const { lines, customer, offers } = prepareSaleLines(d, {
         user: req.user, ctx, customerId: numOrNull(b.customer_id),
-        promoCode: b.promo_code ? String(b.promo_code).trim() : null,
+        promoCode: b.promo_code ? String(b.promo_code).trim() : (Array.isArray(b.promo_codes) ? b.promo_codes : null),
         items: b.items, approver, allowOversell: b.oversell === true
       });
       const totals = saleTotals(lines);
@@ -3933,6 +4194,10 @@ function createApp(d) {
             lines, user: req.user, ctx
           });
         }
+        // Phase 24: which offer discounted this sale (campaign evidence).
+        if (offers && offers.applied && offers.applied.length) {
+          promos.record(d, { saleId: id, applied: offers.applied, now: t });
+        }
         // Phase 17 sync log
         try {
           const syncLib = require('./lib/sync');
@@ -3945,6 +4210,7 @@ function createApp(d) {
         return id;
       });
       const id = run();
+      if (!hold) maybeEarnLoyalty(d, id);
       dbm.audit(d, {
         userId: req.user.id, branchId: ctx.branchId, action: hold ? 'sale/hold' : 'sale/create',
         entity: 'sale', entityId: String(id),
@@ -3953,6 +4219,7 @@ function createApp(d) {
           hold, method: b.payment ? b.payment.method : null, pending: payRes ? payRes.payment.status === 'pending' : undefined,
           oversell: b.oversell === true || undefined,
           discountApprover: discountBy ? 'PIN' : undefined, promo: b.promo_code || undefined,
+          offers: offers && offers.applied && offers.applied.length ? offers.applied.map((a) => a.name) : undefined,
           client_id: clientId || undefined, offline_created: offlineCreated || undefined
         }
       });
@@ -5026,27 +5293,19 @@ function createApp(d) {
         resolved.push({ it, variant, product, qty, unitPrice: px.price, lineTotal: Math.round(px.price * qty) });
       }
       if (!resolved.length) return res.status(400).json({ error: 'items required (the replacement lines)' });
-      const ttOf = (L) => eff(L.product, L.variant, 'tax_type') || 'std';
-      const grossOf = (L, disc) => {
-        const tt = ttOf(L);
-        const net = L.lineTotal - disc;
-        return net + lineTax(net, tt, vatRate);
-      };
+      // R-P2: line prices are VAT-inclusive, so a discount of X off a line takes
+      // exactly X off what the customer pays — the credit is shilling-exact.
+      const grossOf = (L, disc) => Math.max(0, L.lineTotal - disc);
       const W_full = resolved.reduce((s2, L) => s2 + grossOf(L, 0), 0);
-      // Pass 1: best-effort pre-tax discount for the tax-inclusive target.
+      // Pass 1: spread the credit across the lines, largest first.
       let creditLeft = returnedTotal;
       for (const L of [...resolved].sort((a, z) => z.lineTotal - a.lineTotal)) {
         if (creditLeft <= 0) { L.disc = 0; continue; }
-        const fullGross = grossOf(L, 0);
-        const take = Math.min(fullGross, creditLeft);
-        L.disc = (take >= fullGross)
-          ? L.lineTotal
-          : (ttOf(L) === 'std' && vatRate ? Math.round((take * (100 + vatRate)) / (100 + 2 * vatRate)) : take);
-        creditLeft -= fullGross - grossOf(L, L.disc);
-        if (creditLeft < 0) creditLeft = 0;
+        L.disc = Math.min(L.lineTotal, creditLeft);
+        creditLeft -= L.disc;
       }
-      // Pass 2: absorb VAT rounding (+/-1-2 per line) on a partial line so the
-      // tax-inclusive credit used equals min(returned, W_full) to the shilling.
+      // Pass 2: absorb rounding on a partial line so the credit used equals
+      // min(returned, W_full) to the shilling.
       const target = Math.min(returnedTotal, W_full);
       const usedCredit = () => resolved.reduce((s2, L) => s2 + (grossOf(L, 0) - grossOf(L, L.disc)), 0);
       let used = usedCredit();
@@ -5109,6 +5368,10 @@ function createApp(d) {
         runModuleCommit(d, {
           d, sale: newSale, lines: prepared.lines, user: req.user, ctx
         });
+        // Phase 24: an exchange is a sale too — its offers are recorded as well.
+        if (prepared.offers && prepared.offers.applied && prepared.offers.applied.length) {
+          promos.record(d, { saleId: newSaleId, applied: prepared.offers.applied, now: t });
+        }
         let payRes = null;
         let refundRows = [];
         if (owed > 0) {

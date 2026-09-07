@@ -1180,6 +1180,102 @@
     <!-- ============ AUDIT ============ -->
     <!-- ============ MODULE PANELS (Phase 18) ============ -->
     <!-- Industry modules mount themselves here. No page edit per industry. -->
+    <section id="tab-marketing" class="hidden">
+      <div class="card" style="margin-bottom:14px">
+        <div class="row" style="margin-bottom:10px">
+          <h3 style="margin:0">Offers</h3>
+          <span class="spacer"></span>
+          <button class="btn small" id="mk-new-btn">New offer</button>
+          <button class="btn ghost small" id="mk-reload">Reload</button>
+        </div>
+        <p class="muted small" style="margin:0 0 10px">An offer is data, not a code path: once it is on, the till applies it through
+          cash, M-Pesa, card or points — and every discounted sale keeps the offer that made it.</p>
+        <div style="overflow:auto">
+          <table>
+            <thead><tr>
+              <th>Offer</th><th>Type</th><th>Applies to</th><th>Code</th>
+              <th>Window</th><th>Min spend</th><th>Uses</th><th>On</th><th></th>
+            </tr></thead>
+            <tbody id="mk-rows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card hidden" id="mk-form" style="margin-bottom:14px;padding:10px;border:1px dashed #cbd5e1;border-radius:8px">
+        <div class="grid cols-3">
+          <label class="f"><span>Name</span><input id="mk-name" placeholder="Tea 10% off"></label>
+          <label class="f"><span>Type</span>
+            <select id="mk-type">
+              <option value="pct">% off</option>
+              <option value="fixed">money off</option>
+              <option value="bogo">buy X get Y</option>
+              <option value="bundle">bundle price</option>
+            </select></label>
+          <label class="f"><span id="mk-value-label">% off</span><input id="mk-value" type="number" min="1" placeholder="10"></label>
+        </div>
+        <div class="grid cols-3" style="margin-top:8px">
+          <label class="f"><span>Applies to</span>
+            <select id="mk-applies">
+              <option value="">the whole basket</option>
+              <option value="product">one product</option>
+              <option value="category">a category</option>
+              <option value="customer">one customer</option>
+              <option value="segment">a segment (campaign)</option>
+            </select></label>
+          <label class="f hidden" id="mk-ref-wrap"><span id="mk-ref-label">Product</span><select id="mk-ref"></select></label>
+          <label class="f"><span>Coupon code (optional)</span><input id="mk-code" placeholder="KARIBU20"></label>
+        </div>
+        <div class="grid cols-4" style="margin-top:8px">
+          <label class="f"><span>Minimum spend (Ksh)</span><input id="mk-min" type="number" min="0" placeholder="0"></label>
+          <label class="f"><span>Max uses (blank = unlimited)</span><input id="mk-max" type="number" min="1"></label>
+          <label class="f hidden" id="mk-buy-wrap"><span>Buy</span><input id="mk-buy" type="number" min="1" value="2"></label>
+          <label class="f hidden" id="mk-get-wrap"><span>Get free</span><input id="mk-get" type="number" min="1" value="1"></label>
+        </div>
+        <div class="grid cols-4" style="margin-top:8px">
+          <label class="f"><span>From</span><input id="mk-from" type="date"></label>
+          <label class="f"><span>To</span><input id="mk-to" type="date"></label>
+          <label class="f"><span>Happy hour from</span><input id="mk-time-start" placeholder="17:00"></label>
+          <label class="f"><span>…to</span><input id="mk-time-end" placeholder="19:00"></label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn" id="mk-save">Save offer</button>
+          <button class="btn ghost" id="mk-cancel">Cancel</button>
+          <div class="msg" id="mk-form-msg" style="margin:0"></div>
+        </div>
+        <p class="muted small" id="mk-bundle-help" style="margin:8px 0 0"></p>
+      </div>
+
+      <div class="grid cols-2" style="margin-bottom:14px">
+        <div class="card">
+          <h3>Customers to talk to</h3>
+          <p class="muted small" style="margin:0 0 8px">Segments are counted, never stored — the list is today's truth.</p>
+          <table><thead><tr><th>Segment</th><th>Who</th><th>Customers</th><th>Spend (12m)</th><th></th></tr></thead>
+            <tbody id="mk-seg-rows"></tbody></table>
+        </div>
+        <div class="card">
+          <h3>What each offer earned</h3>
+          <table><thead><tr><th>Offer</th><th>Sales</th><th>Given away</th><th>Revenue</th></tr></thead>
+            <tbody id="mk-perf-rows"></tbody></table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Loyalty — points that behave like money</h3>
+        <p class="muted small" id="mk-loy-off" style="margin:0 0 8px"></p>
+        <div class="grid cols-4">
+          <label class="f"><span>Points per 100 Ksh spent</span><input id="mk-pts" type="number" min="1"></label>
+          <label class="f"><span>One point is worth (Ksh)</span><input id="mk-ptval" type="number" min="1"></label>
+          <label class="f"><span>Max share of a sale paid with points (%)</span><input id="mk-maxpct" type="number" min="0" max="100"></label>
+          <label class="f"><span>Points as tender at the till</span>
+            <select id="mk-tender"><option value="1">on</option><option value="0">off — earn only</option></select></label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn" id="mk-save-loyalty">Save loyalty</button>
+          <div class="msg" id="mk-loy-msg" style="margin:0"></div>
+        </div>
+      </div>
+    </section>
+
     <div id="module-sections"></div>
 
     <section id="tab-audit" class="hidden">
@@ -1230,6 +1326,7 @@ const TABS = [
   { id: 'purchasing', label: 'purchasing', cap: 'purchasing' },
   { id: 'payments',   label: 'payments',   always: true },
   { id: 'pricing',    label: 'pricing',    always: true },
+  { id: 'marketing',  label: 'marketing',  cap: ['promotions', 'loyalty'] },
   { id: 'finance',    label: 'finance',    always: true },
   { id: 'reports',    label: 'reports',    always: true },
   { id: 'integrations', label: 'kenya', always: true },
@@ -1294,6 +1391,7 @@ function selectTab(name) {
   if (name === 'layout') loadLayout();
   if (name === 'stock') loadStock();
   if (name === 'pricing') loadPricing();
+  if (name === 'marketing') loadMarketing();
   if (name === 'payments') loadPayments();
   if (name === 'shifts') loadShiftsM();
   if (name === 'returns') loadReturnsM();
@@ -1303,6 +1401,200 @@ function selectTab(name) {
   if (name === 'reports') loadReports();
   if (name === 'integrations') loadIntegrations();
   if (name === 'sync') loadSync();
+}
+
+// ---------------- Phase 24: offers, loyalty & campaigns ----------------------
+// The manager screen writes offers as DATA. The till reads them; nothing here
+// decides who gets a discount at the moment of sale.
+let MK = { products: [], categories: [], customers: [], segments: [] };
+
+async function loadMarketing() {
+  const wired = $('#mk-reload').dataset.wired === '1';
+  if (!wired) {
+    $('#mk-reload').dataset.wired = '1';
+    $('#mk-reload').onclick = () => loadMarketing(true);
+    $('#mk-new-btn').onclick = () => mkOpenForm();
+    $('#mk-cancel').onclick = () => $('#mk-form').classList.add('hidden');
+    $('#mk-save').onclick = mkSaveOffer;
+    $('#mk-type').onchange = mkShapeForm;
+    $('#mk-applies').onchange = mkShapeForm;
+    $('#mk-save-loyalty').onclick = mkSaveLoyalty;
+  }
+  await loadMarketingData();
+}
+
+async function loadMarketingData() {
+  const [offers, products, categories, customers, segments, perf, loy] = await Promise.all([
+    api('/api/promos').catch(() => []),
+    api('/api/products').catch(() => []),
+    api('/api/categories').catch(() => []),
+    api('/api/customers').catch(() => []),
+    api('/api/segments').catch(() => ({ segments: [] })),
+    api('/api/reports/promotions').catch(() => ({ rows: [] })),
+    api('/api/loyalty/settings').catch(() => ({}))
+  ]);
+  MK = { products, categories, customers, segments: segments.segments || [], offers };
+  mkDrawOffers(offers, perf.rows || []);
+  $('#mk-perf-rows').innerHTML = (perf.rows || []).map((r) => `
+    <tr>
+      <td>${esc(r.name)}${r.code ? ` <span class="pill">${esc(r.code)}</span>` : ''}</td>
+      <td class="mono">${r.sales}</td>
+      <td class="mono">${fmt(r.discount_given)}</td>
+      <td class="mono">${fmt(r.revenue)}</td>
+    </tr>`).join('') || '<tr><td colspan="4" class="muted">no offer has discounted a sale yet</td></tr>';
+  $('#mk-seg-rows').innerHTML = MK.segments.map((sg) => `
+    <tr>
+      <td>${esc(sg.label)}</td>
+      <td class="small muted">${esc(sg.desc || '')}</td>
+      <td class="mono">${sg.customers}</td>
+      <td class="mono">${fmt(sg.spend)}</td>
+      <td><button class="btn ghost small" data-seg="${esc(sg.id)}">Campaign</button></td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">no customers yet</td></tr>';
+  $('#mk-seg-rows').querySelectorAll('button[data-seg]').forEach((b) => {
+    b.onclick = () => {
+      mkOpenForm();
+      $('#mk-applies').value = 'segment';
+      mkShapeForm();
+      $('#mk-ref').value = b.dataset.seg;
+      $('#mk-name').value = `${b.dataset.seg} offer`;
+    };
+  });
+  mkDrawLoyalty(loy);
+}
+
+function mkDrawOffers(offers, perf) {
+  const byId = Object.fromEntries((perf || []).map((r) => [r.promo_id, r]));
+  $('#mk-rows').innerHTML = offers.map((p) => {
+    const p2 = byId[p.id] || { sales: 0, discount_given: 0, revenue: 0 };
+    const uses = p.max_uses == null ? `${p.uses}` : `${p.uses} / ${p.max_uses}`;
+    const window = [p.start_date || '', p.end_date || ''].filter(Boolean).join(' → ')
+      || [p.time_start, p.time_end].filter(Boolean).join('–') || 'always on';
+    return `
+      <tr>
+        <td>${esc(p.name)}</td>
+        <td class="small">${esc(mkTypeLabel(p))}</td>
+        <td class="small">${esc(p.applies_to ? `${p.applies_to}${p.applies_ref ? ` · ${mkRefLabel(p)}` : ''}` : 'whole basket')}</td>
+        <td class="mono small">${p.code ? esc(p.code) : '<span class="muted">—</span>'}</td>
+        <td class="small">${esc(window)}</td>
+        <td class="mono small">${p.min_spend ? fmt(p.min_spend) : '—'}</td>
+        <td class="mono small" title="${p2.sales} sales, ${fmt(p2.discount_given)} given away">${uses}</td>
+        <td>${p.active ? '<span class="pill g">on</span>' : '<span class="pill">off</span>'}</td>
+        <td><button class="btn ghost small" data-toggle="${p.id}" data-on="${p.active ? 1 : 0}">${p.active ? 'Retire' : 'Switch on'}</button></td>
+      </tr>`;
+  }).join('') || '<tr><td colspan="9" class="muted">no offers yet — the first one takes a minute</td></tr>';
+  $('#mk-rows').querySelectorAll('button[data-toggle]').forEach((b) => {
+    b.onclick = async () => {
+      const on = b.dataset.on === '1';
+      try {
+        await api(`/api/promos/${b.dataset.toggle}/${on ? 'deactivate' : 'activate'}`, { method: 'POST', body: {} });
+        await loadMarketingData();
+      } catch (e) { toast($('#mk-form-msg'), e.message, false); }
+    };
+  });
+}
+
+function mkTypeLabel(p) {
+  if (p.type === 'pct') return `${p.value}% off`;
+  if (p.type === 'fixed') return `${fmt(p.value)} off`;
+  if (p.type === 'bogo') return `buy ${p.buy_qty} get ${p.get_qty}`;
+  if (p.type === 'bundle') return `bundle ${fmt(p.value)}`;
+  return p.type;
+}
+
+function mkRefLabel(p) {
+  const id = Number(p.applies_ref);
+  if (p.applies_to === 'product') return ((MK.products || []).find((x) => x.id === id) || {}).name || p.applies_ref;
+  if (p.applies_to === 'category') return ((MK.categories || []).find((x) => x.id === id) || {}).name || p.applies_ref;
+  if (p.applies_to === 'customer') return ((MK.customers || []).find((x) => x.id === id) || {}).name || p.applies_ref;
+  return p.applies_ref;
+}
+
+function mkOpenForm() {
+  $('#mk-form').classList.remove('hidden');
+  $('#mk-form-msg').textContent = '';
+  mkShapeForm();
+}
+
+/** Show only the fields this kind of offer needs (solo mode: no jargon). */
+function mkShapeForm() {
+  const type = $('#mk-type').value;
+  const applies = $('#mk-applies').value;
+  $('#mk-value-label').textContent = type === 'pct' ? '% off' : (type === 'bundle' ? 'bundle price (Ksh)' : 'money off (Ksh)');
+  $('#mk-value').placeholder = type === 'pct' ? '10' : '200';
+  const bogo = type === 'bogo';
+  $('#mk-buy-wrap').classList.toggle('hidden', !bogo);
+  $('#mk-get-wrap').classList.toggle('hidden', !bogo);
+  $('#mk-value').parentElement.classList.toggle('hidden', bogo);
+  const opts = applies === 'product' ? (MK.products || []).map((x) => ({ id: x.id, name: x.name }))
+    : applies === 'category' ? (MK.categories || []).map((x) => ({ id: x.id, name: x.name }))
+      : applies === 'customer' ? (MK.customers || []).map((x) => ({ id: x.id, name: x.name }))
+        : applies === 'segment' ? (MK.segments || []).map((x) => ({ id: x.id, name: x.label }))
+          : [];
+  $('#mk-ref-wrap').classList.toggle('hidden', !opts.length);
+  $('#mk-ref-label').textContent = applies || 'Ref';
+  $('#mk-ref').innerHTML = opts.map((o) => `<option value="${esc(o.id)}">${esc(o.name)}</option>`).join('');
+  $('#mk-bundle-help').textContent = type === 'bundle'
+    ? 'A bundle is one price for a set of items: pick the products on the till and enter the bundle price. Paste the items as "variantId:qty" separated by commas.'
+    : '';
+}
+
+async function mkSaveOffer() {
+  const type = $('#mk-type').value;
+  const body = {
+    name: $('#mk-name').value.trim(),
+    type,
+    value: type === 'bogo' ? 100 : Number($('#mk-value').value || 0),
+    applies_to: $('#mk-applies').value || null,
+    applies_ref: $('#mk-applies').value ? $('#mk-ref').value : null,
+    code: $('#mk-code').value.trim() || null,
+    min_spend: Number($('#mk-min').value || 0) || null,
+    max_uses: $('#mk-max').value ? Number($('#mk-max').value) : null,
+    buy_qty: type === 'bogo' ? Number($('#mk-buy').value || 2) : null,
+    get_qty: type === 'bogo' ? Number($('#mk-get').value || 1) : null,
+    start_date: $('#mk-from').value || null,
+    end_date: $('#mk-to').value || null,
+    time_start: $('#mk-time-start').value || null,
+    time_end: $('#mk-time-end').value || null
+  };
+  try {
+    const url = body.applies_to === 'segment' ? '/api/campaigns' : '/api/promos';
+    const r = await api(url, { method: 'POST', body });
+    const reach = r.audience != null ? ` — reaches ${r.audience} customers` : '';
+    toast($('#mk-form-msg'), `${r.promo ? r.promo.name : (r.campaign || {}).name} saved${reach}`, true);
+    $('#mk-name').value = ''; $('#mk-code').value = '';
+    await loadMarketingData();
+  } catch (e) {
+    toast($('#mk-form-msg'), e.message, false);
+  }
+}
+
+function mkDrawLoyalty(loy) {
+  const on = loy.enabled !== false;
+  $('#mk-loy-off').textContent = on
+    ? 'Points are earned the moment a sale is paid, and can be spent like money at the till.'
+    : 'Loyalty is switched off — turn it on in Settings → Capabilities.';
+  $('#mk-pts').value = loy.points_per_100 || 1;
+  $('#mk-ptval').value = loy.point_value || 1;
+  $('#mk-maxpct').value = loy.max_redeem_pct != null ? loy.max_redeem_pct : 50;
+  $('#mk-tender').value = loy.tender === false ? '0' : '1';
+}
+
+async function mkSaveLoyalty() {
+  try {
+    await api('/api/loyalty/settings', {
+      method: 'PUT',
+      body: {
+        enabled: true,
+        points_per_100: Number($('#mk-pts').value || 1),
+        point_value: Number($('#mk-ptval').value || 1),
+        max_redeem_pct: Number($('#mk-maxpct').value || 0),
+        tender: $('#mk-tender').value === '1'
+      }
+    });
+    toast($('#mk-loy-msg'), 'loyalty saved', true);
+  } catch (e) {
+    toast($('#mk-loy-msg'), e.message, false);
+  }
 }
 
 // ---------------- transfers & branch comparison (Phase 12 Day 17) ----------------

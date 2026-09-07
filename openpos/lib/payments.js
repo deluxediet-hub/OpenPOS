@@ -30,7 +30,7 @@ const METHODS = {
   credit:       { label: 'Credit (deni)',   sw: 'Deni',            async: false, needsCustomer: true },
   store_credit: { label: 'Store credit',    sw: 'Krediti ya duka', async: false, needsCustomer: true },
   gift_card:    { label: 'Gift card',       sw: 'Kadi ya zawadi',  async: false, ref: true },
-  loyalty:      { label: 'Loyalty',         sw: 'Loyalty',         async: false, ref: true },
+  loyalty:      { label: 'Loyalty points',  sw: 'Pointi',           async: false, needsCustomer: true },
   other:        { label: 'Other',           sw: 'Nyingine',        async: false, ref: true }
 };
 
@@ -57,25 +57,43 @@ function intShillings(v) {
   return Number.isInteger(n) && n >= 0 ? n : null;
 }
 
-/** Merge settings.payments over the defaults (never returns secrets callers didn't ask for). */
-function paymentConfig(d) {
+/** The owner's stored payment settings, defaults filled in, nothing derived. */
+function storedConfig(d) {
   const s = d.prepare('SELECT value FROM settings WHERE key = ?').get('payments');
   const cur = s ? JSON.parse(s.value) : {};
   return {
     methods: { ...DEFAULT_CONFIG.methods, ...(cur.methods || {}) },
-    mpesa: { ...DEFAULT_CONFIG.mpesa, ...(cur.mpesa || {}) }
+    raw: cur
+  };
+}
+
+/** Merge settings.payments over the defaults (never returns secrets callers didn't ask for). */
+function paymentConfig(d) {
+  const { methods, raw } = storedConfig(d);
+  // Phase 24: the loyalty tender follows the loyalty SWITCH, not a stale
+  // payment-methods snapshot — one decision for the owner to make.
+  const loyRow = d.prepare("SELECT value FROM settings WHERE key = 'loyalty'").get();
+  const loy = loyRow ? (JSON.parse(loyRow.value || '{}') || {}) : {};
+  methods.loyalty = !!loy.enabled && loy.tender !== false;
+  return {
+    methods,
+    mpesa: { ...DEFAULT_CONFIG.mpesa, ...(raw.mpesa || {}) }
   };
 }
 
 function setPaymentConfig(d, cfg) {
   const cur = paymentConfig(d);
   const next = {
-    methods: { ...cur.methods },
+    // Start from what the OWNER stored, never from a derived value — otherwise
+    // saving any payment setting would freeze today's loyalty switch forever.
+    methods: { ...storedConfig(d).methods },
     mpesa: { ...cur.mpesa }
   };
   if (cfg.methods) {
     for (const k of Object.keys(next.methods)) if (typeof cfg.methods[k] === 'boolean') next.methods[k] = cfg.methods[k];
   }
+  // loyalty is owned by the loyalty switch (see paymentConfig) — never snapshot it.
+  if (typeof (cfg.methods || {}).loyalty !== 'boolean') delete next.methods.loyalty;
   if (cfg.mpesa) {
     for (const k of ['mode', 'shortcode', 'passkey', 'paybill', 'phone', 'callback_url']) {
       if (typeof cfg.mpesa[k] === 'string') next.mpesa[k] = cfg.mpesa[k].trim();

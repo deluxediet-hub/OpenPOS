@@ -1468,6 +1468,35 @@ function migrate(d) {
   // e.g. a prescription reference captured by the pharmacy module).
   addCol(d, 'sale_items', 'module_data', "TEXT NOT NULL DEFAULT '{}'");
 
+  // ---- Phase 24: promotions, loyalty & marketing ------------------------------
+  // The promos table has been in the schema since the early phases but nothing
+  // drove it. These columns are what a real shop campaign needs: a BOGO rule
+  // (buy 2 get 1), a happy hour (time window), a minimum spend, and whether two
+  // offers may stack. All additive — an older database keeps working.
+  for (const [col, def] of [
+    ['buy_qty', 'INTEGER'], ['get_qty', 'INTEGER'], ['min_spend', 'INTEGER NOT NULL DEFAULT 0'],
+    ['stackable', 'INTEGER NOT NULL DEFAULT 0'], ['priority', 'INTEGER NOT NULL DEFAULT 0'],
+    ['tier', 'TEXT'], ['time_start', 'TEXT'], ['time_end', 'TEXT'],
+    ['updated_at', 'TEXT'], ['created_by', 'INTEGER']
+  ]) addCol(d, 'promos', col, def);
+
+  // Evidence of which offer actually discounted which sale — a campaign is only
+  // worth running if you can see what it earned back.
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS sale_promos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      business_id INTEGER NOT NULL DEFAULT 1,
+      sale_id INTEGER NOT NULL,
+      promo_id INTEGER,
+      name TEXT NOT NULL DEFAULT '',
+      kind TEXT NOT NULL DEFAULT '',
+      amount INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sale_promos_sale ON sale_promos(sale_id);
+    CREATE INDEX IF NOT EXISTS idx_sale_promos_promo ON sale_promos(promo_id);
+  `);
+
   // ---- Phase 18 Day 26-27: industry module framework -------------------------
   // Which industry modules are active for this business. Activation is data,
   // never a deployment (R-C3), so the table lives with the business's own rows.

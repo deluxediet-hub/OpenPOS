@@ -74,7 +74,8 @@ const TRADE_SEEDS = {
   boutique:    ['variants'],
   hardware:    ['open_priced'],
   electronics: ['serials'],
-  mini_mart:   ['open_priced', 'promotions'],
+  // A shop that sells to neighbours on credit tends to want points back too.
+  mini_mart:   ['open_priced', 'promotions', 'loyalty'],
   cosmetics:   ['variants'],
   footwear:    ['variants'],
   restaurant:  []
@@ -200,7 +201,20 @@ function runSeed(d, cap, userId) {
       }
     }
   }
-  // (future capability seeds go here)
+  // Phase 24: switching loyalty on writes the shop's points rule once, so the
+  // first sale after the switch already earns (R-C3: data, not a migration).
+  if (cap === 'loyalty') {
+    const row = d.prepare("SELECT value FROM settings WHERE key = 'loyalty'").get();
+    if (!row) {
+      d.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(
+        'loyalty',
+        JSON.stringify({
+          enabled: true, points_per_100: 1, point_value: 1,
+          min_redeem_points: 0, max_redeem_pct: 50, tender: true
+        })
+      );
+    }
+  }
 }
 
 module.exports = {

@@ -1548,11 +1548,13 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(s.order_no, 1, `order_no: ${s.order_no}`);
     assert.strictEqual(s.invoice_no, 'BR01-000001', s.invoice_no);
     assert.strictEqual(s.subtotal, 400);
-    assert.strictEqual(s.tax, 55, `VAT 16% of 400: ${s.tax}`);
-    assert.strictEqual(s.gross, 455);
+    // R-P2: 400 is VAT-inclusive — 55 of it is VAT, and the customer pays 400.
+    assert.strictEqual(s.tax, 55, `VAT in 400: ${s.tax}`);
+    assert.strictEqual(s.net, 345);
+    assert.strictEqual(s.gross, 400);
     assert.strictEqual(r.body.payments.length, 1);
     const raw = JSON.parse(r.body.payments[0].raw);
-    assert.strictEqual(raw.change, 45, `change: ${raw.change}`);
+    assert.strictEqual(raw.change, 100, `change: ${raw.change}`);
     // stock decremented at the till's location
     assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.A.vid, pos.loc).qty, 58);
     // stock move carries the invoice ref (R-S2 trace)
@@ -1569,7 +1571,7 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(up.status, 200, JSON.stringify(up.body));
     const r = await authJ({ path: `/api/sales/${pos.sale1}` });
     assert.strictEqual(r.body.items[0].unit_price, 200, 'frozen price unchanged');
-    assert.strictEqual(r.body.sale.gross, 455);
+    assert.strictEqual(r.body.sale.gross, 400);
   });
 
   await test('FEFO: sale picks earliest-expiry batches first; line records the lot', async () => {
@@ -1656,7 +1658,7 @@ function section(title) { console.log(`\n${title}`); }
     // the price-freeze test above changed A's price; restore the 200 the amounts below assume
     const back = await authJ({ path: `/api/products/${pos.A.id}`, method: 'PUT', body: { price: 200 } });
     assert.strictEqual(back.status, 200, JSON.stringify(back.body));
-    const started = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 228, phone: '0700111222' } } });
+    const started = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 200, phone: '0700111222' } } });
     assert.strictEqual(started.status, 200, JSON.stringify(started.body));
     assert.strictEqual(started.body.sale.status, 'open', 'money promised, not yet received');
     assert.strictEqual(started.body.payments[0].status, 'pending');
@@ -1680,9 +1682,9 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(hold.status, 200, JSON.stringify(hold.body));
     const sid = hold.body.sale.id;
     const inv = hold.body.sale.invoice_no;
-    const cash = await asA({ path: `/api/sales/${sid}/payments`, method: 'POST', body: { method: 'cash', amount: 155 } });
+    const cash = await asA({ path: `/api/sales/${sid}/payments`, method: 'POST', body: { method: 'cash', amount: 100 } });
     assert.strictEqual(cash.status, 200, JSON.stringify(cash.body));
-    assert.strictEqual(cash.body.sale.status, 'partial', '155 of 455');
+    assert.strictEqual(cash.body.sale.status, 'partial', '100 of 400');
     assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM stock_moves WHERE type = 'sale' AND ref = ?").get(inv).n, 1, 'stock moved on first money in');
     const mpsa = await asA({ path: `/api/sales/${sid}/payments`, method: 'POST', body: { method: 'mpesa', amount: 150, phone: '0700111222' } });
     assert.strictEqual(mpsa.status, 200, JSON.stringify(mpsa.body));
@@ -1700,7 +1702,7 @@ function section(title) { console.log(`\n${title}`); }
     const rec = await asA({ path: `/api/payments/reconcile?date=${today}` });
     assert.strictEqual(rec.status, 200, JSON.stringify(rec.body));
     const by = Object.fromEntries(rec.body.by_method.map((m) => [m.method, m]));
-    assert.ok(by.cash && by.cash.confirmed >= 155, 'cash 155 reconciled');
+    assert.ok(by.cash && by.cash.confirmed >= 100, 'cash 100 reconciled');
     assert.strictEqual(by.card.confirmed >= 150, true, 'card 150 reconciled');
     assert.strictEqual(by.mpesa.confirmed >= 150, true, 'mpesa 150 reconciled');
   });
@@ -1709,7 +1711,7 @@ function section(title) { console.log(`\n${title}`); }
     const asA = (o) => withCookie(pos.cashA)(o);
     const sw = await authJ({ path: '/api/settings/payments', method: 'PUT', body: { mpesa: { mode: 'sandbox' } } });
     assert.strictEqual(sw.status, 200, JSON.stringify(sw.body));
-    const r = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 228, phone: '0700111222' } } });
+    const r = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 200, phone: '0700111222' } } });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
     const mp = r.body.payments[0];
     assert.strictEqual(mp.status, 'pending');
@@ -1735,14 +1737,14 @@ function section(title) { console.log(`\n${title}`); }
   await test('payment engine: provider failure fails the payment, not the sale', async () => {
     const asA = (o) => withCookie(pos.cashA)(o);
     await authJ({ path: '/api/settings/payments', method: 'PUT', body: { mpesa: { mode: 'sandbox' } } });
-    const r = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 228, phone: '0700111222' } } });
+    const r = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 200, phone: '0700111222' } } });
     const mp = r.body.payments[0];
     const fail = await authJ({ path: '/api/webhooks/mpesa', method: 'POST', body: { CheckoutRequestID: r.body.mpesa.checkout_request_id, MpesaReceiptRef: '', ResultCode: 1014, ResultDesc: 'Insufficient balance' } });
     assert.strictEqual(fail.status, 200, JSON.stringify(fail.body));
     assert.strictEqual(fail.body.payment.status, 'failed');
     const fresh = (await asA({ path: `/api/sales/${r.body.sale.id}` })).body;
     assert.strictEqual(fresh.sale.status, 'suspended', 'failed money frees the sale — stock restored');
-    const cash = await asA({ path: `/api/sales/${r.body.sale.id}/payments`, method: 'POST', body: { method: 'cash', amount: 228 } });
+    const cash = await asA({ path: `/api/sales/${r.body.sale.id}/payments`, method: 'POST', body: { method: 'cash', amount: 200 } });
     assert.strictEqual(cash.body.sale.status, 'paid', 'cashier falls back to cash');
     await authJ({ path: '/api/settings/payments', method: 'PUT', body: { mpesa: { mode: 'manual' } } });
   });
@@ -1753,21 +1755,21 @@ function section(title) { console.log(`\n${title}`); }
     const s1 = h1.body.sale.id;
     await asA({ path: `/api/sales/${s1}/payments`, method: 'POST', body: { method: 'cash', amount: 100 } });
     const over = await asA({ path: `/api/sales/${s1}/payments`, method: 'POST', body: { method: 'card', amount: 200, ref: 'BIG1' } });
-    assert.strictEqual(over.status, 400, 'card 200 > remaining 128');
+    assert.strictEqual(over.status, 400, 'card 200 > remaining 100');
     assert.match(over.body.error, /exceeds sale balance/);
-    const c1 = await asA({ path: `/api/sales/${s1}/payments`, method: 'POST', body: { method: 'card', amount: 50, ref: 'DUP1' } });
+    const c1 = await asA({ path: `/api/sales/${s1}/payments`, method: 'POST', body: { method: 'card', amount: 40, ref: 'DUP1' } });
     assert.strictEqual(c1.status, 200, JSON.stringify(c1.body));
-    const c2 = await asA({ path: `/api/sales/${s1}/payments`, method: 'POST', body: { method: 'card', amount: 78, ref: 'DUP1' } });
+    const c2 = await asA({ path: `/api/sales/${s1}/payments`, method: 'POST', body: { method: 'card', amount: 40, ref: 'DUP1' } });
     assert.strictEqual(c2.status, 409, 'same (sale, method, ref) twice is impossible');
-    // cash over-tender completes the sale with change (100 + 50 + 78 = 228)
+    // cash over-tender completes the sale with change (100 + 40 + 60 = 200)
     const finish = await asA({ path: `/api/sales/${s1}/payments`, method: 'POST', body: { method: 'cash', amount: 100 } });
     assert.strictEqual(finish.status, 200, JSON.stringify(finish.body));
     assert.strictEqual(finish.body.sale.status, 'paid');
     const finCash = finish.body.payments.filter((p) => p.method === 'cash').pop();
-    assert.strictEqual(Number(JSON.parse(finCash.raw).change), 22, '78 applied, 22 change');
+    assert.strictEqual(Number(JSON.parse(finCash.raw).change), 40, '60 applied, 40 change');
     const h2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], hold: true } });
     const s2 = h2.body.sale.id;
-    const m2 = await asA({ path: `/api/sales/${s2}/payments`, method: 'POST', body: { method: 'mpesa', amount: 228, phone: '0700111222' } });
+    const m2 = await asA({ path: `/api/sales/${s2}/payments`, method: 'POST', body: { method: 'mpesa', amount: 200, phone: '0700111222' } });
     const cancel = await asA({ path: `/api/payments/${m2.body.payments[0].id}/cancel`, method: 'POST', body: {} });
     assert.strictEqual(cancel.body.sale.status, 'suspended', 'cancelled pending money frees the sale');
     const paid = await asA({ path: `/api/sales/${s2}/payments`, method: 'POST', body: { method: 'cash', amount: 228 } });
@@ -1781,8 +1783,8 @@ function section(title) { console.log(`\n${title}`); }
     // build a paid split sale: cash + card
     const h = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], hold: true } });
     const sid = h.body.sale.id;
-    await asA({ path: `/api/sales/${sid}/payments`, method: 'POST', body: { method: 'cash', amount: 155 } });
-    const card = await asA({ path: `/api/sales/${sid}/payments`, method: 'POST', body: { method: 'card', amount: 300, ref: 'SLIP7' } });
+    await asA({ path: `/api/sales/${sid}/payments`, method: 'POST', body: { method: 'cash', amount: 150 } });
+    const card = await asA({ path: `/api/sales/${sid}/payments`, method: 'POST', body: { method: 'card', amount: 250, ref: 'SLIP7' } });
     assert.strictEqual(card.body.sale.status, 'paid');
     const cardId = card.body.payments.find((p) => p.method === 'card').id;
     const asCashier = await asA({ path: `/api/payments/${cardId}/refund`, method: 'POST', body: {} });
@@ -1795,7 +1797,7 @@ function section(title) { console.log(`\n${title}`); }
     const again = await mgr({ path: `/api/payments/${cardId}/refund`, method: 'POST', body: {} });
     assert.strictEqual(again.status, 409, 'cannot refund twice');
     const h2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], hold: true } });
-    const m = await asA({ path: `/api/sales/${h2.body.sale.id}/payments`, method: 'POST', body: { method: 'mpesa', amount: 228, phone: '0700111222' } });
+    const m = await asA({ path: `/api/sales/${h2.body.sale.id}/payments`, method: 'POST', body: { method: 'mpesa', amount: 200, phone: '0700111222' } });
     const pendRef = await mgr({ path: `/api/payments/${m.body.payments[0].id}/refund`, method: 'POST', body: {} });
     assert.strictEqual(pendRef.status, 409, 'pending payments cannot be refunded');
   });
@@ -1806,20 +1808,20 @@ function section(title) { console.log(`\n${title}`); }
     const mgr = (o) => withCookie(mgrCookie)(o);
     const now = new Date().toISOString();
     const cid = d.prepare(`INSERT INTO customers (business_id, name, phone, credit_limit, created_at) VALUES (1, 'POS Credit Customer', '0711222333', 500, ?)`).run(now).lastInsertRowid;
-    const s1 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: cid, payment: { method: 'credit', amount: 228 } } });
+    const s1 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: cid, payment: { method: 'credit', amount: 200 } } });
     assert.strictEqual(s1.status, 200, JSON.stringify(s1.body));
     assert.strictEqual(s1.body.sale.status, 'paid');
-    const led = d.prepare(`SELECT COUNT(*) AS n FROM customer_ledger WHERE customer_id = ? AND type = 'credit_sale' AND amount = 228`).get(cid).n;
+    const led = d.prepare(`SELECT COUNT(*) AS n FROM customer_ledger WHERE customer_id = ? AND type = 'credit_sale' AND amount = 200`).get(cid).n;
     assert.strictEqual(led, 1, 'credit sale leaves ledger evidence');
-    const s2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: cid, payment: { method: 'credit', amount: 455 } } });
-    assert.strictEqual(s2.status, 403, '228 + 455 > 500 — cashier refused');
+    const s2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: cid, payment: { method: 'credit', amount: 400 } } });
+    assert.strictEqual(s2.status, 403, '200 + 400 > 500 — cashier refused');
     assert.match(s2.body.error, /deni over limit.*manager/i);
     // a manager (deni.approve) may cross the limit — audited
-    const sOver = await mgr({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: cid, payment: { method: 'credit', amount: 455 } } });
+    const sOver = await mgr({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: cid, payment: { method: 'credit', amount: 400 } } });
     assert.strictEqual(sOver.status, 200, JSON.stringify(sOver.body).slice(0, 160), 'manager approves over-limit deni');
     const override = d.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE action = 'deni/override' AND entity_id = ?`).get(String(cid)).n;
     assert.strictEqual(override, 1, 'over-limit deni audited');
-    const overLedger = d.prepare(`SELECT note FROM customer_ledger WHERE customer_id = ? AND type = 'credit_sale' AND amount = 455`).get(cid).note;
+    const overLedger = d.prepare(`SELECT note FROM customer_ledger WHERE customer_id = ? AND type = 'credit_sale' AND amount = 400`).get(cid).note;
     assert.match(overLedger, /OVER LIMIT/, 'ledger marks the override');
     // manager refunds the over-limit sale, then the original — deni back to 0
     const refOver = await mgr({ path: `/api/payments/${sOver.body.payments[0].id}/refund`, method: 'POST', body: {} });
@@ -1827,7 +1829,7 @@ function section(title) { console.log(`\n${title}`); }
     const cardId = s1.body.payments[0].id;
     const ref = await mgr({ path: `/api/payments/${cardId}/refund`, method: 'POST', body: {} });
     assert.strictEqual(ref.status, 200, JSON.stringify(ref.body));
-    const s3 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: cid, payment: { method: 'credit', amount: 455 } } });
+    const s3 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: cid, payment: { method: 'credit', amount: 400 } } });
     assert.strictEqual(s3.status, 200, 'refunded credit frees the limit again');
   });
 
@@ -1838,10 +1840,10 @@ function section(title) { console.log(`\n${title}`); }
     d.prepare('UPDATE customers SET store_credit = 300 WHERE id = ?').run(cid);
     const on = await authJ({ path: '/api/settings/payments', method: 'PUT', body: { methods: { store_credit: true } } });
     assert.strictEqual(on.status, 200);
-    const r = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: cid, payment: { method: 'store_credit', amount: 228 } } });
+    const r = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: cid, payment: { method: 'store_credit', amount: 200 } } });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
-    assert.strictEqual(d.prepare('SELECT store_credit FROM customers WHERE id = ?').get(cid).store_credit, 72, 'balance debited');
-    const again = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: cid, payment: { method: 'store_credit', amount: 228 } } });
+    assert.strictEqual(d.prepare('SELECT store_credit FROM customers WHERE id = ?').get(cid).store_credit, 100, 'balance debited');
+    const again = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: cid, payment: { method: 'store_credit', amount: 200 } } });
     assert.strictEqual(again.status, 400, 'insufficient store credit');
     const off = await authJ({ path: '/api/settings/payments', method: 'PUT', body: { methods: { card: false, store_credit: false } } });
     assert.strictEqual(off.status, 200);
@@ -1849,7 +1851,7 @@ function section(title) { console.log(`\n${title}`); }
     assert.ok(!list.body.methods.some((m) => m.key === 'card'), 'card hidden from the till');
     assert.ok(list.body.methods.some((m) => m.key === 'cash'), 'cash always there');
     const h = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], hold: true } });
-    const blocked = await asA({ path: `/api/sales/${h.body.sale.id}/payments`, method: 'POST', body: { method: 'card', amount: 228, ref: 'OFF1' } });
+    const blocked = await asA({ path: `/api/sales/${h.body.sale.id}/payments`, method: 'POST', body: { method: 'card', amount: 200, ref: 'OFF1' } });
     assert.strictEqual(blocked.status, 400, 'disabled method refused');
     assert.match(blocked.body.error, /not enabled/);
     await authJ({ path: '/api/settings/payments', method: 'PUT', body: { methods: { card: true } } });
@@ -1894,22 +1896,22 @@ function section(title) { console.log(`\n${title}`); }
     const asA = (o) => withCookie(pos.cashA)(o);
     const mgrCookie = await cashierLogin('Mwenyeji M', '2345');
     const mgr = (o) => withCookie(mgrCookie)(o);
-    // A sells 1×A (228) in cash
+    // A sells 1×A (200, VAT-inclusive) in cash
     const s1 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 300 } } });
     assert.strictEqual(s1.status, 200, JSON.stringify(s1.body));
     // A sells 1×A by M-Pesa — never drawer cash
-    const s2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 228, phone: '0700111222' } } });
+    const s2 = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'mpesa', amount: 200, phone: '0700111222' } } });
     assert.strictEqual(s2.status, 200, JSON.stringify(s2.body));
     await asA({ path: `/api/payments/${s2.body.payments[0].id}/confirm`, method: 'POST', body: { code: 'SFA777' } });
     let m = (await asA({ path: '/api/shifts/mine' })).body.shift;
-    assert.strictEqual(m.cash_in, 228, 'cash collected');
-    assert.strictEqual(m.expected_cash, 500 + 228, 'mpesa does not touch the drawer');
+    assert.strictEqual(m.cash_in, 200, 'cash collected');
+    assert.strictEqual(m.expected_cash, 500 + 200, 'mpesa does not touch the drawer');
     // manager refunds the cash payment — money back out of the drawer
     const cashPay = s1.body.payments[0];
     const ref = await mgr({ path: `/api/payments/${cashPay.id}/refund`, method: 'POST', body: {} });
     assert.strictEqual(ref.status, 200, JSON.stringify(ref.body));
     m = (await asA({ path: '/api/shifts/mine' })).body.shift;
-    assert.strictEqual(m.cash_refunded, 228);
+    assert.strictEqual(m.cash_refunded, 200);
     assert.strictEqual(m.expected_cash, 500, 'refund takes the cash back out');
     // payout
     const po = await asA({ path: `/api/shifts/${pos.shiftA.id}/payouts`, method: 'POST', body: { amount: 100, reason: 'small change' } });
@@ -1922,7 +1924,7 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(dep.status, 200, JSON.stringify(dep.body));
     m = (await asA({ path: '/api/shifts/mine' })).body.shift;
     assert.strictEqual(m.deposits, 150);
-    assert.strictEqual(m.expected_cash, 250, '500 + 228 − 228 − 100 − 150');
+    assert.strictEqual(m.expected_cash, 250, '500 + 200 − 200 − 100 − 150');
     // cashiers cannot payout on someone else's shift
     const asB = (o) => withCookie(pos.cashB)(o);
     const cross = await asB({ path: `/api/shifts/${pos.shiftA.id}/payouts`, method: 'POST', body: { amount: 50 } });
@@ -2001,7 +2003,7 @@ function section(title) { console.log(`\n${title}`); }
     const asA = (o) => withCookie(pos.cashA)(o);
     const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.B.vid, qty: 2 }], payment: { method: 'cash', amount: 300 } } });
     assert.strictEqual(s.status, 200, JSON.stringify(s.body));
-    assert.strictEqual(s.body.sale.gross, 228);
+    assert.strictEqual(s.body.sale.gross, 200);
     const line = s.body.items[0];
     const batchId = line.batch_id;
     assert.ok(batchId, 'sale line carries its FEFO batch');
@@ -2012,7 +2014,7 @@ function section(title) { console.log(`\n${title}`); }
     } });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 200));
     assert.strictEqual(r.body.return.return_no, 'RET-000001', 'sequential eTIMS-ready note number');
-    assert.strictEqual(r.body.return.total, 114, 'prorated half of 228');
+    assert.strictEqual(r.body.return.total, 100, 'prorated half of 200');
     assert.strictEqual(r.body.return.items[0].sale_item_batch_id, batchId);
     const mv = d.prepare("SELECT * FROM stock_moves WHERE type = 'return_in' AND ref = 'RET-000001'").get();
     assert.ok(mv, 'return_in move written');
@@ -2021,12 +2023,12 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(d.prepare('SELECT qty FROM batches WHERE id = ?').get(batchId).qty, bBefore + 1, 'batch qty restored');
     // the sale itself was NOT edited: same lines, same totals
     const sale2 = d.prepare('SELECT * FROM sales WHERE id = ?').get(s.body.sale.id);
-    assert.strictEqual(sale2.gross, 228);
+    assert.strictEqual(sale2.gross, 200);
     assert.strictEqual(sale2.status, 'paid');
     assert.strictEqual(d.prepare('SELECT qty FROM sale_items WHERE id = ?').get(line.id).qty, 2, 'sale line untouched');
     // money back: partial refund of the one cash payment
     const p = d.prepare('SELECT * FROM payments WHERE id = ?').get(s.body.payments[0].id);
-    assert.strictEqual(p.refunded, 114);
+    assert.strictEqual(p.refunded, 100);
     assert.strictEqual(p.status, 'confirmed', 'partially refunded payment stays live');
     assert.strictEqual(r.body.refund_rows.length, 1);
     assert.strictEqual(r.body.refund_rows[0].method, 'cash');
@@ -2048,14 +2050,14 @@ function section(title) { console.log(`\n${title}`); }
     } });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 200));
     assert.strictEqual(r.body.return.return_no, 'RET-000002');
-    assert.strictEqual(r.body.return.total, 114);
+    assert.strictEqual(r.body.return.total, 100);
     assert.strictEqual(r.body.return.items[0].restock, 0);
     assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM stock_moves WHERE type = 'return_in' AND ref = 'RET-000002'").get().n, 0, 'damaged goods do not re-enter stock');
     // sale now fully returned → terminal, all money back
     const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(pos.ret1Sale);
     assert.strictEqual(sale.status, 'refunded', 'fully returned sale is terminal');
     const p = d.prepare('SELECT * FROM payments WHERE sale_id = ?').get(pos.ret1Sale);
-    assert.strictEqual(p.refunded, 228);
+    assert.strictEqual(p.refunded, 200);
     assert.strictEqual(p.status, 'refunded');
     const again = await asA({ path: '/api/returns', method: 'POST', body: {
       sale_id: pos.ret1Sale, reason: 'other', lines: [{ sale_item_id: pos.ret1Line, qty: 1 }]
@@ -2069,8 +2071,8 @@ function section(title) { console.log(`\n${title}`); }
     const asA = (o) => withCookie(pos.cashA)(o);
     const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 100 } } });
     assert.strictEqual(s.status, 200, JSON.stringify(s.body));
-    assert.strictEqual(s.body.sale.status, 'partial', '100 of 228');
-    const m = await asA({ path: `/api/sales/${s.body.sale.id}/payments`, method: 'POST', body: { method: 'mpesa', amount: 128, phone: '0700111222' } });
+    assert.strictEqual(s.body.sale.status, 'partial', '100 of 200');
+    const m = await asA({ path: `/api/sales/${s.body.sale.id}/payments`, method: 'POST', body: { method: 'mpesa', amount: 100, phone: '0700111222' } });
     assert.strictEqual(m.status, 200, JSON.stringify(m.body).slice(0, 160));
     const mp = m.body.payments.find((x) => x.method === 'mpesa');
     const cf = await asA({ path: `/api/payments/${mp.id}/confirm`, method: 'POST', body: { code: 'SFA-RET' } });
@@ -2080,23 +2082,23 @@ function section(title) { console.log(`\n${title}`); }
       sale_id: s.body.sale.id, reason: 'defective', lines: [{ sale_item_id: line.id, qty: 1 }]
     } });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 200));
-    assert.strictEqual(r.body.return.total, 228);
-    // newest first: mpesa 128 fully, then cash 100
+    assert.strictEqual(r.body.return.total, 200);
+    // newest first: mpesa 100 fully, then cash 100
     const rows = r.body.refund_rows.map((x) => `${x.method}:${x.amount}`).join(',');
-    assert.strictEqual(rows, 'mpesa:128,cash:100', rows);
+    assert.strictEqual(rows, 'mpesa:100,cash:100', rows);
     const pays = d.prepare('SELECT method, refunded, status FROM payments WHERE sale_id = ? ORDER BY id').all(s.body.sale.id);
     assert.strictEqual(pays[0].method, 'cash');
     assert.strictEqual(pays[0].refunded, 100);
     assert.strictEqual(pays[0].status, 'refunded');
     assert.strictEqual(pays[1].method, 'mpesa');
-    assert.strictEqual(pays[1].refunded, 128);
+    assert.strictEqual(pays[1].refunded, 100);
     assert.strictEqual(pays[1].status, 'refunded');
     assert.strictEqual(d.prepare('SELECT status FROM sales WHERE id = ?').get(s.body.sale.id).status, 'refunded');
   });
 
   await test('returns: cashier limit (business capability) — manager unlimited, settings owner-gated', async () => {
     const asA = (o) => withCookie(pos.cashA)(o);
-    const lim = await authJ({ path: '/api/settings/returns', method: 'PUT', body: { cashier_limit: 200 } });
+    const lim = await authJ({ path: '/api/settings/returns', method: 'PUT', body: { cashier_limit: 100 } });
     assert.strictEqual(lim.status, 200, JSON.stringify(lim.body));
     const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], payment: { method: 'cash', amount: 300 } } });
     const line = (await asA({ path: `/api/sales/${s.body.sale.id}` })).body.items[0];
@@ -2104,7 +2106,7 @@ function section(title) { console.log(`\n${title}`); }
       sale_id: s.body.sale.id, reason: 'other', lines: [{ sale_item_id: line.id, qty: 1 }]
     } });
     assert.strictEqual(den.status, 403, JSON.stringify(den.body));
-    assert.match(den.body.error, /exceeds your limit of 200/);
+    assert.match(den.body.error, /exceeds your limit of 100/);
     const mgrCookie = await cashierLogin('Mwenyeji M', '2345');
     const mgr = (o) => withCookie(mgrCookie)(o);
     const okM = await mgr({ path: '/api/returns', method: 'POST', body: {
@@ -2128,9 +2130,9 @@ function section(title) { console.log(`\n${title}`); }
       lines: [{ sale_item_id: line.id, qty: 1 }]
     } });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 200));
-    assert.strictEqual(r.body.store_credit_added, 228);
-    assert.strictEqual(d.prepare('SELECT store_credit FROM customers WHERE id = ?').get(cid).store_credit, 228, 'credit on the customer');
-    assert.strictEqual(d.prepare(`SELECT COUNT(*) AS n FROM customer_ledger WHERE customer_id = ? AND type = 'adjustment' AND amount = 228`).get(cid).n, 1, 'ledger evidence');
+    assert.strictEqual(r.body.store_credit_added, 200);
+    assert.strictEqual(d.prepare('SELECT store_credit FROM customers WHERE id = ?').get(cid).store_credit, 200, 'credit on the customer');
+    assert.strictEqual(d.prepare(`SELECT COUNT(*) AS n FROM customer_ledger WHERE customer_id = ? AND type = 'adjustment' AND amount = 200`).get(cid).n, 1, 'ledger evidence');
     const p = d.prepare('SELECT * FROM payments WHERE sale_id = ?').get(s.body.sale.id);
     assert.strictEqual(p.refunded, 0, 'no money out the door');
     // no customer → store credit refused
@@ -2148,35 +2150,35 @@ function section(title) { console.log(`\n${title}`); }
     const dBefore = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.D.vid, pos.loc).qty;
     const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], payment: { method: 'cash', amount: 500 } } });
     assert.strictEqual(s.status, 200, JSON.stringify(s.body));
-    assert.strictEqual(s.body.sale.gross, 455);
+    assert.strictEqual(s.body.sale.gross, 400);
     const line = s.body.items[0];
     const ex = await asA({ path: '/api/exchanges', method: 'POST', body: {
       sale_id: s.body.sale.id, reason: 'wrong_item',
       lines: [{ sale_item_id: line.id, qty: 1, restock: true }],
       items: [{ variant_id: pos.D.vid, qty: 1 }],
-      settle: { method: 'cash', amount: 341 },
+      settle: { method: 'cash', amount: 300 },
       override_pin: '2345'
     } });
     assert.strictEqual(ex.status, 200, JSON.stringify(ex.body).slice(0, 220));
-    assert.strictEqual(ex.body.exchange.returned_total, 228);
-    assert.strictEqual(ex.body.exchange.new_total, 569);
-    assert.strictEqual(ex.body.exchange.diff, 341, '569 − 228');
+    assert.strictEqual(ex.body.exchange.returned_total, 200);
+    assert.strictEqual(ex.body.exchange.new_total, 500);
+    assert.strictEqual(ex.body.exchange.diff, 300, '500 − 200');
     assert.strictEqual(ex.body.exchange.settled_by, 'payment');
     const ns = ex.body.sale.sale;
-    assert.strictEqual(ns.gross, 341, 'the sale is exactly what the customer owes after the credit');
+    assert.strictEqual(ns.gross, 300, 'the sale is exactly what the customer owes after the credit');
     assert.strictEqual(ns.discount, 200, 'exchange credit recorded as a discount (VAT-exact)');
     assert.strictEqual(ns.status, 'paid');
     assert.strictEqual(ns.note, `exchange for return ${ex.body.return.return_no}`, 'references its original');
     const pay = ex.body.sale.payments[0];
     assert.strictEqual(pay.method, 'cash');
-    assert.strictEqual(pay.amount, 341, 'paid the actual diff, to the shilling');
+    assert.strictEqual(pay.amount, 300, 'paid the actual diff, to the shilling');
     assert.strictEqual(ex.body.return.exchange_id !== undefined ? ex.body.return.exchange.id : ex.body.exchange.id, ex.body.exchange.id);
     // stock: A back in, D out
     assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.A.vid, pos.loc).qty, aBefore - 1, 'sold 2, returned 1');
     assert.strictEqual(d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(pos.D.vid, pos.loc).qty, dBefore - 1);
     // original sale: untouched lines, returns visible on it
     const orig = (await asA({ path: `/api/sales/${s.body.sale.id}` })).body;
-    assert.strictEqual(orig.returns_total, 228);
+    assert.strictEqual(orig.returns_total, 200);
     assert.strictEqual(orig.returns.length, 1);
     assert.strictEqual(orig.items[0].qty, 2, 'original line never edited');
     assert.strictEqual(d.prepare('SELECT status FROM sales WHERE id = ?').get(s.body.sale.id).status, 'paid', 'partially returned sale stays paid');
@@ -2186,7 +2188,7 @@ function section(title) { console.log(`\n${title}`); }
     const asA = (o) => withCookie(pos.cashA)(o);
     const s = await asA({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.E.vid, qty: 1 }], payment: { method: 'cash', amount: 200 } } });
     assert.strictEqual(s.status, 200, JSON.stringify(s.body));
-    assert.strictEqual(s.body.sale.gross, 171);
+    assert.strictEqual(s.body.sale.gross, 150);
     const line = s.body.items[0];
     const ex = await asA({ path: '/api/exchanges', method: 'POST', body: {
       sale_id: s.body.sale.id, reason: 'customer_changed_mind',
@@ -2195,22 +2197,22 @@ function section(title) { console.log(`\n${title}`); }
       override_pin: '2345'
     } });
     assert.strictEqual(ex.status, 200, JSON.stringify(ex.body).slice(0, 220));
-    assert.strictEqual(ex.body.exchange.returned_total, 171);
-    assert.strictEqual(ex.body.exchange.new_total, 114);
-    assert.strictEqual(ex.body.exchange.diff, -57);
+    assert.strictEqual(ex.body.exchange.returned_total, 150);
+    assert.strictEqual(ex.body.exchange.new_total, 100);
+    assert.strictEqual(ex.body.exchange.diff, -50);
     assert.strictEqual(ex.body.exchange.settled_by, 'refund');
     assert.strictEqual(ex.body.refund_rows.length, 1);
     assert.strictEqual(ex.body.refund_rows[0].method, 'cash');
-    assert.strictEqual(ex.body.refund_rows[0].refunded, 57, 'only the excess, back out of the original sale');
+    assert.strictEqual(ex.body.refund_rows[0].refunded, 50, 'only the excess, back out of the original sale');
     const ns = ex.body.sale.sale;
     assert.strictEqual(ns.gross, 0, 'replacement fully covered by the credit');
     assert.strictEqual(ns.status, 'paid');
     const origPay = d.prepare('SELECT * FROM payments WHERE sale_id = ?').get(s.body.sale.id);
-    assert.strictEqual(origPay.refunded, 57);
-    assert.strictEqual(origPay.status, 'confirmed', 'original payment still live for the remaining 114');
+    assert.strictEqual(origPay.refunded, 50);
+    assert.strictEqual(origPay.status, 'confirmed', 'original payment still live for the remaining 100');
     assert.strictEqual(d.prepare('SELECT status FROM sales WHERE id = ?').get(s.body.sale.id).status, 'paid');
     const orig = (await asA({ path: `/api/sales/${s.body.sale.id}` })).body;
-    assert.strictEqual(orig.returns_total, 171);
+    assert.strictEqual(orig.returns_total, 150);
     // no double exchange on the same return
     const again = await asA({ path: '/api/exchanges', method: 'POST', body: {
       sale_id: s.body.sale.id, reason: 'other',
@@ -2229,14 +2231,14 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(s.status, 200, JSON.stringify(s.body));
     const line = s.body.items[0];
     const mid = (await asA({ path: '/api/shifts/mine' })).body.shift;
-    assert.strictEqual(mid.expected_cash, before.shift.expected_cash + 455, 'cash in');
+    assert.strictEqual(mid.expected_cash, before.shift.expected_cash + 400, 'cash in');
     const r = await asA({ path: '/api/returns', method: 'POST', body: {
       sale_id: s.body.sale.id, reason: 'other', lines: [{ sale_item_id: line.id, qty: 1 }]
     } });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 160));
     const after = (await asA({ path: '/api/shifts/mine' })).body.shift;
-    assert.strictEqual(after.cash_refunded, before.shift.cash_refunded + 228, 'the refunded 228 left the drawer');
-    assert.strictEqual(after.expected_cash, before.shift.expected_cash + 455 - 228, 'partial refund counted out once');
+    assert.strictEqual(after.cash_refunded, before.shift.cash_refunded + 200, 'the refunded 200 left the drawer');
+    assert.strictEqual(after.expected_cash, before.shift.expected_cash + 400 - 200, 'partial refund counted out once');
   });
 
   // ---- Phase 11: customers & deni ---------------------------------------------
@@ -2259,33 +2261,33 @@ function section(title) { console.log(`\n${title}`); }
   });
 
   await test('deni: cash repayment reduces balance, leaves till evidence; overpayment becomes store credit', async () => {
-    const s1 = await withCookie(pos.cashA)({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: pos.custA.id, payment: { method: 'credit', amount: 455 } } });
+    const s1 = await withCookie(pos.cashA)({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 2 }], customer_id: pos.custA.id, payment: { method: 'credit', amount: 400 } } });
     assert.strictEqual(s1.status, 200, JSON.stringify(s1.body).slice(0, 160));
     let c = (await authJ({ path: `/api/customers/${pos.custA.id}` })).body;
-    assert.strictEqual(c.customer.deni_outstanding, 455, 'deni open');
+    assert.strictEqual(c.customer.deni_outstanding, 400, 'deni open');
     assert.strictEqual(c.sales.length, 1, 'purchase history on the profile');
     const r1 = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/repayments`, method: 'POST', body: { amount: 200, method: 'cash' } });
     assert.strictEqual(r1.status, 200, JSON.stringify(r1.body).slice(0, 160));
     assert.strictEqual(r1.body.repayment, 200);
-    assert.strictEqual(r1.body.customer.deni_outstanding, 255);
+    assert.strictEqual(r1.body.customer.deni_outstanding, 200);
     assert.ok(d.prepare(`SELECT COUNT(*) AS n FROM deposits WHERE ref = 'DENI'`).get().n >= 1, 'cash repayment leaves till evidence');
     const r2 = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/repayments`, method: 'POST', body: { amount: 300, method: 'cash' } });
     assert.strictEqual(r2.status, 200, JSON.stringify(r2.body).slice(0, 160));
-    assert.strictEqual(r2.body.repayment, 255, 'only the amount owed');
-    assert.strictEqual(r2.body.store_credit_excess, 45, 'overpayment → store credit');
+    assert.strictEqual(r2.body.repayment, 200, 'only the amount owed');
+    assert.strictEqual(r2.body.store_credit_excess, 100, 'overpayment → store credit');
     assert.strictEqual(r2.body.customer.deni_outstanding, 0);
-    assert.strictEqual(r2.body.customer.store_credit, 45);
+    assert.strictEqual(r2.body.customer.store_credit, 100);
     const r3 = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/repayments`, method: 'POST', body: { amount: 50 } });
     assert.strictEqual(r3.status, 400, JSON.stringify(r3.body));
     assert.match(r3.body.error, /no deni outstanding/);
   });
 
   await test('deni: M-Pesa repayment reduces the balance and reconciles with the ledger', async () => {
-    const s1 = await withCookie(pos.cashA)({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: pos.custA.id, payment: { method: 'credit', amount: 228 } } });
+    const s1 = await withCookie(pos.cashA)({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: pos.A.vid, qty: 1 }], customer_id: pos.custA.id, payment: { method: 'credit', amount: 200 } } });
     assert.strictEqual(s1.status, 200, JSON.stringify(s1.body).slice(0, 160));
     const noPhone = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/repayments`, method: 'POST', body: { amount: 100, method: 'mpesa' } });
     assert.strictEqual(noPhone.status, 400, 'mpesa needs a phone');
-    const r = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/repayments`, method: 'POST', body: { amount: 228, method: 'mpesa', phone: '0722111222' } });
+    const r = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/repayments`, method: 'POST', body: { amount: 200, method: 'mpesa', phone: '0722111222' } });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 160));
     assert.strictEqual(r.body.customer.deni_outstanding, 0, 'balance cleared');
     const direct = d.prepare(
@@ -2321,10 +2323,10 @@ function section(title) { console.log(`\n${title}`); }
   await test('store credit: deposit top-up, negative adjustment, floor at zero; customer price rule resolves', async () => {
     const dep = await authJ({ path: `/api/customers/${pos.custA.id}/deposits`, method: 'POST', body: { amount: 500, method: 'cash', note: 'prep' } });
     assert.strictEqual(dep.status, 200, JSON.stringify(dep.body).slice(0, 160));
-    assert.strictEqual(dep.body.customer.store_credit, 545, '45 + 500');
+    assert.strictEqual(dep.body.customer.store_credit, 600, '100 + 500');
     const adj = await authJ({ path: `/api/customers/${pos.custA.id}/store-credit`, method: 'POST', body: { delta: -100, note: 'partial use' } });
     assert.strictEqual(adj.status, 200, JSON.stringify(adj.body).slice(0, 120));
-    assert.strictEqual(adj.body.balance, 445);
+    assert.strictEqual(adj.body.balance, 500);
     const over = await authJ({ path: `/api/customers/${pos.custA.id}/store-credit`, method: 'POST', body: { delta: -99999 } });
     assert.strictEqual(over.status, 400, 'cannot take credit below zero');
     const cashierAdj = await withCookie(pos.cashA)({ path: `/api/customers/${pos.custA.id}/store-credit`, method: 'POST', body: { delta: 10 } });
@@ -2804,8 +2806,8 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
     // hook: beforeCommit wrote the module's own evidence
     const log = d.prepare('SELECT * FROM spirits_premium_log ORDER BY id DESC LIMIT 1').get();
-    // 2 × 1500 net + 16% VAT = 3414 tax-inclusive, the shilling the customer paid
-    assert.ok(log && log.qty === 2 && log.gross === 3414, JSON.stringify(log));
+    // 2 × 1500 = 3000 tax-inclusive (R-P2) — the shilling the customer paid
+    assert.ok(log && log.qty === 2 && log.gross === 3000, JSON.stringify(log));
     // the permission is real: a cashier granted it may sell premium lines
     const uid = d.prepare("SELECT id FROM users WHERE name = 'P18 Cashier'").get().id;
     const grant = await authJ({ path: `/api/staff/${uid}/permissions`, method: 'POST', body: { permission: 'spirits.premium', allowed: true } });
@@ -3443,6 +3445,291 @@ function section(title) { console.log(`\n${title}`); }
     assert.strictEqual(out.products, 14, 'the module starter shelf, nothing else');
     assert.strictEqual(out.serialTracked, 5, 'phones, tablets and TVs arrive IMEI-tracked');
     assert.strictEqual(out.fields, 4, 'the module product fields are live from the first minute');
+  });
+
+
+  // ================= Phase 24 — promotions, loyalty & marketing =================
+  // Acceptance: promos apply correctly through every payment method; loyalty as
+  // tender cannot overspend; a segment drives a campaign.
+  section('Phase 24 — promotions, loyalty & marketing: offers that survive the till');
+
+  const p24 = {};
+  const cap = async (id, enabled) =>
+    authJ({ path: '/api/capabilities', method: 'POST', body: { capability: id, enabled } });
+  const offer = (body) => authJ({ path: '/api/promos', method: 'POST', body });
+  const preview = (items, extra = {}) =>
+    authJ({ path: '/api/promos/preview', method: 'POST', body: { items, ...extra } });
+
+  await test('fixtures: promotions + loyalty switched on, a product and a customer', async () => {
+    for (const c of ['promotions', 'loyalty']) {
+      const r = await cap(c, true);
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    }
+    p24.tea = await mkP({ name: 'P24 Tea 250g', barcode: '78001', cost: 150, price: 250 }, 40);
+    p24.bread = await mkP({ name: 'P24 Bread', barcode: '78002', cost: 50, price: 80 }, 40);
+    p24.soda = await mkP({ name: 'P24 Soda 500ml', barcode: '78003', cost: 60, price: 100 }, 40);
+    const c = await authJ({ path: '/api/customers', method: 'POST', body: { name: 'P24 Amina', phone: '0700000024' } });
+    assert.strictEqual(c.status, 200, JSON.stringify(c.body));
+    p24.cust = c.body.customer.id;
+    p24.cashier = p18.cashier;
+  });
+
+  await test('an offer is data: created, listed, retired but never deleted', async () => {
+    const bad = await offer({ name: 'Nonsense', type: 'free-everything', value: 10 });
+    assert.strictEqual(bad.status, 400, JSON.stringify(bad.body));
+    const over = await offer({ name: 'Over the top', type: 'pct', value: 150 });
+    assert.strictEqual(over.status, 400, JSON.stringify(over.body));
+    const r = await offer({ name: 'Tea 10% off', type: 'pct', value: 10, applies_to: 'product', applies_ref: String(p24.tea.id) });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    p24.pct = r.body.promo.id;
+    // an empty field is stored as no field — never as the string "null"
+    assert.strictEqual(r.body.promo.code, null, JSON.stringify(r.body.promo));
+    assert.strictEqual(r.body.promo.time_start, null, JSON.stringify(r.body.promo));
+    const list = await authJ('/api/promos');
+    assert.strictEqual(list.status, 200);
+    assert.ok(list.body.some((x) => x.id === p24.pct), 'the offer is listed');
+    assert.strictEqual((await withCookie(p24.cashier)({ path: '/api/promos' })).status, 403, 'a cashier does not manage offers');
+    const off = await authJ({ path: `/api/promos/${p24.pct}/deactivate`, method: 'POST', body: {} });
+    assert.strictEqual(off.status, 200);
+    assert.strictEqual(d.prepare('SELECT active FROM promos WHERE id = ?').get(p24.pct).active, 0);
+    assert.strictEqual(d.prepare('SELECT COUNT(*) AS n FROM promos').get().n >= 1, true, 'retired, not deleted');
+    await authJ({ path: `/api/promos/${p24.pct}/activate`, method: 'POST', body: {} });
+  });
+
+  await test('a % offer discounts the line, and no discount permission is needed', async () => {
+    const full = await preview([{ variant_id: p24.tea.vid, qty: 2 }]);
+    assert.strictEqual(full.status, 200, JSON.stringify(full.body));
+    assert.strictEqual(full.body.totals.subtotal, 500, JSON.stringify(full.body.totals));
+    assert.strictEqual(full.body.totals.discount, 50, '10% of 500');
+    assert.strictEqual(full.body.lines[0].line_discount, 50);
+    // R-P2 + R-PR: 500 tax-inclusive, 50 off → 450 payable = 388 net + 62 VAT
+    assert.strictEqual(full.body.totals.gross, 450);
+    assert.strictEqual(full.body.totals.net, 388);
+    assert.strictEqual(full.body.totals.tax, 62);
+    // a cashier gets the same price — an offer is the shop's decision
+    const asCashier = withCookie(p24.cashier);
+    const till = await asCashier({ path: '/api/promos/preview', method: 'POST', body: { items: [{ variant_id: p24.tea.vid, qty: 2 }] } });
+    assert.strictEqual(till.status, 200, JSON.stringify(till.body));
+    assert.strictEqual(till.body.totals.discount, 50);
+    // and it survives the real sale, on cash
+    const sale = await asCashier({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p24.tea.vid, qty: 2 }], payment: { method: 'cash', amount: 450 } } });
+    assert.strictEqual(sale.status, 200, JSON.stringify(sale.body));
+    assert.strictEqual(sale.body.sale.gross, 450, JSON.stringify(sale.body.sale));
+    assert.strictEqual(sale.body.sale.discount, 50);
+    const used = d.prepare('SELECT * FROM sale_promos WHERE sale_id = ?').all(sale.body.sale.id);
+    assert.ok(used.length === 1 && used[0].promo_id === p24.pct && used[0].amount === 50, JSON.stringify(used));
+    assert.strictEqual(d.prepare('SELECT uses FROM promos WHERE id = ?').get(p24.pct).uses >= 1, true);
+    // an unrelated product is untouched
+    const other = await preview([{ variant_id: p24.soda.vid, qty: 1 }]);
+    assert.strictEqual(other.body.totals.discount, 0);
+  });
+
+  await test('the same offer applies through M-Pesa, card and split tenders', async () => {
+    for (const method of ['mpesa', 'card']) {
+      const r = await authJ({ path: '/api/sales', method: 'POST', body: {
+        items: [{ variant_id: p24.tea.vid, qty: 1 }],
+        payment: { method, amount: 225, ref: `${method}-${Date.now()}`, phone: '0712345678' }
+      } });
+      assert.strictEqual(r.status, 200, `${method}: ${JSON.stringify(r.body)}`);
+      assert.strictEqual(r.body.sale.discount, 25, `${method} gets the same 10%`);
+      assert.strictEqual(r.body.sale.gross, 225);
+    }
+    // split: cash + card, offer still taken off first
+    const split = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p24.tea.vid, qty: 4 }],
+      payment: { method: 'cash', amount: 450, tendered: 500 }
+    } });
+    assert.strictEqual(split.status, 200, JSON.stringify(split.body));
+    assert.strictEqual(split.body.sale.discount, 100, '10% of 1000');
+    assert.strictEqual(split.body.sale.gross, 900);
+    // the cash tender was over-tendered (500 for a 450 share) — the sale keeps
+    // the change arithmetic and the card settles exactly what is left
+    const more = await authJ({ path: `/api/sales/${split.body.sale.id}/payments`, method: 'POST', body: { method: 'card', amount: 400, ref: `split-${Date.now()}` } });
+    assert.strictEqual(more.status, 200, JSON.stringify(more.body));
+    const done = d.prepare('SELECT * FROM sales WHERE id = ?').get(split.body.sale.id);
+    assert.strictEqual(done.status, 'paid', 'split tender closes the sale');
+    assert.strictEqual(done.discount, 100, 'the offer is not lost when the sale is split');
+  });
+
+  await test('BOGO: buy 2 get 1 free — the free unit is the cheapest', async () => {
+    const r = await offer({ name: 'Soda 3 for 2', type: 'bogo', buy_qty: 2, get_qty: 1, applies_to: 'product', applies_ref: String(p24.soda.id) });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    p24.bogo = r.body.promo.id;
+    const two = await preview([{ variant_id: p24.soda.vid, qty: 2 }]);
+    assert.strictEqual(two.body.totals.discount, 0, 'two sodas are just two sodas');
+    const three = await preview([{ variant_id: p24.soda.vid, qty: 3 }]);
+    assert.strictEqual(three.body.totals.discount, 100, 'the third one is free');
+    const six = await preview([{ variant_id: p24.soda.vid, qty: 6 }]);
+    assert.strictEqual(six.body.totals.discount, 200, 'six for the price of four');
+    const seven = await preview([{ variant_id: p24.soda.vid, qty: 7 }]);
+    assert.strictEqual(seven.body.totals.discount, 200, 'the seventh is paid');
+    await authJ({ path: `/api/promos/${p24.bogo}/deactivate`, method: 'POST', body: {} });
+  });
+
+  await test('a bundle is one price for a set of items', async () => {
+    await authJ({ path: `/api/promos/${p24.pct}/deactivate`, method: 'POST', body: {} });
+    const r = await offer({ name: 'Tea + bread 280', type: 'bundle', value: 280, applies_to: 'bundle', applies_ref: `${p24.tea.vid}:1,${p24.bread.vid}:1` });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    p24.bundle = r.body.promo.id;
+    const half = await preview([{ variant_id: p24.tea.vid, qty: 1 }]);
+    assert.strictEqual(half.body.totals.discount, 0, 'tea alone is not the bundle');
+    const both = await preview([{ variant_id: p24.tea.vid, qty: 1 }, { variant_id: p24.bread.vid, qty: 1 }]);
+    // 250 + 80 = 330 → 280 (the tea offer is bigger, so it wins)
+    assert.strictEqual(both.body.totals.gross, 280, JSON.stringify(both.body));
+    assert.strictEqual(both.body.offers.length, 1, 'offers do not stack unless they say so');
+    assert.strictEqual(both.body.offers[0].type, 'bundle');
+    await authJ({ path: `/api/promos/${p24.bundle}/deactivate`, method: 'POST', body: {} });
+  });
+
+  await test('a coupon only fires when the code is keyed, and only while stocks last', async () => {
+    const r = await offer({ name: 'Weekend coupon', type: 'pct', value: 20, code: 'KARIBU20', max_uses: 2 });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    p24.coupon = r.body.promo.id;
+    const dupe = await offer({ name: 'Same code', type: 'pct', value: 5, code: 'KARIBU20' });
+    assert.strictEqual(dupe.status, 409, 'a code belongs to one offer');
+    const without = await preview([{ variant_id: p24.soda.vid, qty: 1 }]);
+    assert.strictEqual(without.body.totals.discount, 0, 'no code, no discount');
+    const withCode = await preview([{ variant_id: p24.soda.vid, qty: 1 }], { promo_code: 'karibu20' });
+    assert.strictEqual(withCode.body.totals.discount, 20, 'codes are not case-sensitive');
+    for (let i = 0; i < 2; i++) {
+      const sale = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p24.soda.vid, qty: 1 }], payment: { method: 'cash', amount: 80 }, promo_code: 'KARIBU20' } });
+      assert.strictEqual(sale.status, 200, JSON.stringify(sale.body));
+      assert.strictEqual(sale.body.sale.discount, 20);
+    }
+    const spent = await preview([{ variant_id: p24.soda.vid, qty: 1 }], { promo_code: 'KARIBU20' });
+    assert.strictEqual(spent.body.totals.discount, 0, 'the coupon ran out after 2 uses');
+    await authJ({ path: `/api/promos/${p24.coupon}/deactivate`, method: 'POST', body: {} });
+  });
+
+  await test('a happy hour runs on the clock, and a minimum spend is respected', async () => {
+    const past = new Date(Date.now() - 86400000).toISOString();
+    const r = await offer({ name: 'Yesterday only', type: 'pct', value: 30, start_date: past.slice(0, 10), end_date: past.slice(0, 10) });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const dead = await preview([{ variant_id: p24.soda.vid, qty: 1 }]);
+    assert.strictEqual(dead.body.totals.discount, 0, 'an offer that ended is not applied');
+    await authJ({ path: `/api/promos/${r.body.promo.id}/deactivate`, method: 'POST', body: {} });
+
+    const min = await offer({ name: '200 off over 1000', type: 'fixed', value: 200, min_spend: 1000 });
+    assert.strictEqual(min.status, 200, JSON.stringify(min.body));
+    p24.fixed = min.body.promo.id;
+    const small = await preview([{ variant_id: p24.soda.vid, qty: 2 }]);
+    assert.strictEqual(small.body.totals.discount, 0, '200 spend is under the 1000 minimum');
+    const big = await preview([{ variant_id: p24.tea.vid, qty: 6 }]);
+    assert.strictEqual(big.body.totals.discount, 200, '1500 spend clears the minimum');
+    assert.strictEqual(big.body.lines.reduce((t, l) => t + l.line_discount, 0), 200, 'spread across the lines');
+    await authJ({ path: `/api/promos/${p24.fixed}/deactivate`, method: 'POST', body: {} });
+  });
+
+  await test('loyalty: points are earned on a paid sale and spent like money', async () => {
+    const set = await authJ({ path: '/api/loyalty/settings', method: 'PUT', body: { enabled: true, points_per_100: 1, point_value: 1, max_redeem_pct: 50 } });
+    assert.strictEqual(set.status, 200, JSON.stringify(set.body));
+    assert.strictEqual(set.body.points_per_100, 1);
+    // 1000 KES @ 1 point per 100 = 10 points
+    const sale = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p24.soda.vid, qty: 10 }], payment: { method: 'cash', amount: 1000 }, customer_id: p24.cust } });
+    assert.strictEqual(sale.status, 200, JSON.stringify(sale.body));
+    const bal = await authJ(`/api/loyalty/${p24.cust}`);
+    assert.strictEqual(bal.status, 200, JSON.stringify(bal.body));
+    assert.strictEqual(bal.body.points, 10, JSON.stringify(bal.body));
+    assert.strictEqual(bal.body.value, 10, '10 points = 10 shillings');
+    assert.ok(bal.body.history.some((h) => h.type === 'earn' && h.points === 10));
+    // grant points by hand too (a promotion, an apology, a good customer)
+    const grant = await authJ({ path: `/api/loyalty/${p24.cust}/adjust`, method: 'POST', body: { points: 90 } });
+    assert.strictEqual(grant.status, 200, JSON.stringify(grant.body));
+    assert.strictEqual(grant.body.points, 100);
+  });
+
+  await test('loyalty as tender cannot overspend the balance, the cap or the sale', async () => {
+    // 3 teas = 750 shelf: the 50% cap allows 375; the customer holds 100 points
+    const overBalance = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p24.tea.vid, qty: 3 }], customer_id: p24.cust,
+      payment: { method: 'loyalty', amount: 400 }
+    } });
+    assert.strictEqual(overBalance.status, 400, JSON.stringify(overBalance.body));
+    assert.ok(/has 100 points \(100 KES\)/.test(overBalance.body.error), overBalance.body.error);
+    const noCustomer = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p24.tea.vid, qty: 1 }], payment: { method: 'loyalty', amount: 50 }
+    } });
+    assert.strictEqual(noCustomer.status, 400, JSON.stringify(noCustomer.body));
+    assert.ok(/customer on the sale/.test(noCustomer.body.error), noCustomer.body.error);
+    // 100 points is exactly what they have — allowed, and the rest is cash
+    const ok = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p24.tea.vid, qty: 1 }], customer_id: p24.cust,
+      payment: { method: 'loyalty', amount: 100 }
+    } });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const after = await authJ(`/api/loyalty/${p24.cust}`);
+    assert.strictEqual(after.body.points, 0, JSON.stringify(after.body));
+    assert.ok(after.body.history.some((h) => h.type === 'redeem' && h.points === -100));
+    const pay = d.prepare("SELECT * FROM payments WHERE sale_id = ? AND method = 'loyalty'").get(ok.body.sale.id);
+    assert.ok(pay && pay.amount === 100, JSON.stringify(pay));
+    // the rest of that sale is still owed, and cash closes it
+    const rest = await authJ({ path: `/api/sales/${ok.body.sale.id}/payments`, method: 'POST', body: { method: 'cash', amount: 150 } });
+    assert.strictEqual(rest.status, 200, JSON.stringify(rest.body));
+    assert.strictEqual(d.prepare('SELECT status FROM sales WHERE id = ?').get(ok.body.sale.id).status, 'paid');
+    // a 50% cap: 100 points cannot pay for a 1000 sale
+    await authJ({ path: `/api/loyalty/${p24.cust}/adjust`, method: 'POST', body: { points: 500 } });
+    // 2 teas = 500 shelf: 50% cap = 250, so 300 is refused even though the
+    // customer holds 500 points worth
+    const overCap = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p24.tea.vid, qty: 2 }], customer_id: p24.cust,
+      payment: { method: 'loyalty', amount: 300 }
+    } });
+    assert.strictEqual(overCap.status, 400, JSON.stringify(overCap.body));
+    assert.ok(/at most 50%/.test(overCap.body.error), overCap.body.error);
+  });
+
+  await test('segments: the shop can see who to talk to', async () => {
+    const r = await authJ('/api/segments');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.total >= 1, JSON.stringify(r.body));
+    const ids = r.body.segments.map((s) => s.id);
+    for (const id of ['vip', 'active', 'lapsed', 'new', 'deni']) assert.ok(ids.includes(id), id);
+    const lapsed = r.body.segments.find((s) => s.id === 'lapsed');
+    assert.ok(typeof lapsed.customers === 'number', JSON.stringify(lapsed));
+    const aud = await authJ(`/api/segments/lapsed/audience?limit=5`);
+    assert.strictEqual(aud.status, 200, JSON.stringify(aud.body));
+    assert.strictEqual(aud.body.customers.length, aud.body.count > 5 ? 5 : aud.body.count);
+    assert.strictEqual((await authJ('/api/segments/nonsense/audience')).status, 404);
+  });
+
+  await test('a campaign is a promotion pointed at a segment', async () => {
+    // an old sale for a second customer makes them "lapsed" while P24 Amina is not
+    const other = await authJ({ path: '/api/customers', method: 'POST', body: { name: 'P24 Lapsed', phone: '0700000099' } });
+    const otherId = other.body.customer.id;
+    d.prepare("INSERT INTO sales (branch_id, location_id, order_no, invoice_no, customer_id, user_id, cashier_id, status, subtotal, discount, net, tax, gross, tender, kind, created_at, version) VALUES (1,?,900,'OLD-1',?,1,1,'paid',500,0,431,69,500,'[]','sale',?,1)")
+      .run(p18.loc, otherId, new Date(Date.now() - 120 * 86400000).toISOString());
+    const r = await authJ({ path: '/api/campaigns', method: 'POST', body: { segment: 'lapsed', name: 'Come back, 15% off', type: 'pct', value: 15 } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.campaign.applies_to, 'segment');
+    assert.strictEqual(r.body.campaign.applies_ref, 'lapsed');
+    assert.ok(r.body.audience >= 1, JSON.stringify(r.body));
+    assert.ok(r.body.sample.some((c) => c.id === otherId), JSON.stringify(r.body.sample));
+    // the campaign reaches the lapsed customer…
+    const hit = await preview([{ variant_id: p24.soda.vid, qty: 1 }], { customer_id: otherId });
+    assert.strictEqual(hit.body.totals.discount, 15, JSON.stringify(hit.body));
+    // …and not the customer who was in yesterday
+    const miss = await preview([{ variant_id: p24.soda.vid, qty: 1 }], { customer_id: p24.cust });
+    assert.strictEqual(miss.body.totals.discount, 0, JSON.stringify(miss.body));
+    const audited = d.prepare("SELECT * FROM audit_log WHERE action = 'campaign/create' ORDER BY id DESC LIMIT 1").get();
+    assert.ok(audited && JSON.parse(audited.detail).segment === 'lapsed', 'campaigns are audited');
+    await authJ({ path: `/api/promos/${r.body.campaign.id}/deactivate`, method: 'POST', body: {} });
+  });
+
+  await test('campaign performance: what each offer cost and earned', async () => {
+    const r = await authJ('/api/reports/promotions');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const tea = r.body.rows.find((x) => x.promo_id === p24.pct);
+    assert.ok(tea, JSON.stringify(r.body.rows));
+    assert.ok(tea.sales >= 3, JSON.stringify(tea));
+    assert.ok(tea.discount_given >= 100, JSON.stringify(tea));
+    assert.ok(tea.revenue >= 900, JSON.stringify(tea));
+    assert.strictEqual(tea.uses_left, null, 'an unlimited offer has no remaining uses');
+    const coupon = r.body.rows.find((x) => x.promo_id === p24.coupon);
+    assert.strictEqual(coupon.uses, 2, 'a limited coupon counts its uses');
+    assert.strictEqual(coupon.uses_left, 0);
+    const csv = await fetch(`${BASE}/api/reports/promotions?format=csv`, { headers: { cookie } });
+    assert.strictEqual(csv.status, 200);
+    assert.ok((await csv.text()).includes('discount_given'));
   });
 
   server.close();

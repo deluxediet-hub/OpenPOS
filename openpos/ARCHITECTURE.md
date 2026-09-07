@@ -366,6 +366,9 @@ reaches every module through one door and never names one.
 | `permissions` | collect | permissions the owner can grant (`spirits.premium`, `pharmacy.dispense`) |
 | `ui` | collect | browser panels + their own EN/SW strings, mounted by `mount` name |
 | `template` | collect | starter catalogue rows for onboarding |
+| `commands` | collect | the industry's own workflows (markdown, repack, bind a serial, insurance claim) — declared on the module, run through one generic door: `POST /api/modules/:id/commands/:commandId` |
+
+**Nine hook points** (the Phase-18 eight plus `commands`, added in Phase 19–23).
 
 **Safety semantics.** Gate hooks fail **closed** — a module that throws blocks
 the operation, is reported in the module's own words, and an unexpected failure
@@ -412,7 +415,9 @@ reprint, and the core never looks inside it.
 | Returns & exchanges | ✅ **Phase 10 done (Day 14):** nothing is ever edited in place. A **return** is its own document (`RET-` sequential, eTIMS-ready) whose lines point at the exact `sale_items` it undoes, with per-line restock flag and the **FEFO batch the goods land back in** (batch-tracked items return to the same batch — verified). Money goes back through the payment engine as **partial refunds to the original method, newest payment first** (a payment tracks `refunded` and flips to `refunded` only when fully back; a fully-returned sale goes terminal `refunded`), or into the customer's **store credit** (ledger-evidenced). **Exchanges** = return + a replacement sale carrying the returned value as an exchange-credit discount (VAT-exact: the tax-inclusive credit is matched to the shilling); the **price diff settles exactly** — customer pays the new sale's actual balance, or the excess is refunded to the *original* sale (never double-refunded). Approval rule = a business capability: cashiers up to `settings.returns.cashier_limit` (default 5 000), managers/owners unlimited, exchanges need `sales.discount` or a supervisor PIN. The shift drawer counts partial refunds out via the `refunded` column; sale payloads expose derived `returns`/`returns_total` (computed, never written back). POS return/exchange modal (invoice → lines → reason/restock → money or credit → exchange-for + diff settlement), manager Returns/Exchanges tab. 119 tests green (was 111) + 29-step UI smoke. |
 | Customers & deni (credit) | ✅ **Phase 11 done (Day 15):** phone-first profiles (same number = same customer, never duplicated), lifetime purchase total, last purchase. Deni accounts live off the payment engine: credit sales from checkout, **over-limit deni is a manager act** (`deni.approve`, audited `deni/override`, ledger marked "OVER LIMIT") — a cashier gets 403. Repayments (cash/M-Pesa/…) are ledger rows that reduce the balance, leave a till **deposit** when the money is cash, turn overpayments into store credit, and reconcile: `Σ credit_sale − Σ repayment = balance` to the shilling. Deposits top up store credit (the customer pays in advance and spends it at the till — the P8 store-credit payment method). The **statement is the ledger itself** with opening balance and a running balance — `statement.html` prints it, so it can never drift from the books. Customer-specific pricing already resolved through the Phase-6 chain (customer price rules show on the profile). Manager Customers tab (search, profile, ledger, recent sales, repay/deposit/adjust actions, statement link); POS customer options show phone + outstanding deni. 124 tests green (was 119) + 22-step UI smoke. |
 | Multi-branch operating system | ✅ **Phase 12 done (Day 16):** the visibility hierarchy is enforced server-side on **every** route — an audit closed six leaks (customers, stock moves, stock balances, price rules, batches, batch write-off, plus owner stock adjustments were tagged with the wrong branch). **Transfers** (inter-branch & inter-location): `POST /api/transfers` (request, stock + batch validated) → approve (receiving branch's manager/owner) → ship (`transfer_out` moves, source stock deducted, R-S8 enforced) → receive with per-line `received_qty` (`transfer_in`, destination stock = received qty; discrepancy = sent − received on the line; multiple lines, one or several receives) → cancel pre-ship; history `GET /api/transfers[?status]` scoped by visible branches; batch-tracked lines carry the batch, which changes location on receive. **Branch comparison** `GET /api/reports/branches[?from&to]` ranks visible branches by sales with margin (gross − cost×qty) and shrinkage (damage / expiry write-off / negative adjustments × unit cost) — manager reports are scoped to their own branch. Manager UI: Transfers tab (capability-gated `multi_branch`) with new-transfer builder (source/destination locations, per-line batch picker, approve/ship/receive/cancel actions, line-level discrepancy view) and a Branch Comparison card in Layout (rank medals, date window). `GET /api/products?branch_id=` lets the owner (and a manager, their branch only) read another branch's catalogue/stock. 131 tests green (was 124) — including the acceptance trio: 3-location chain with one discrepancy fully traceable through `stock_moves` + audit, branch manager's API cannot read branch 2 across customers/sales/stock/pricing/branches/transfers, comparison ranks by sales/margin/shrinkage — plus a 37-step smoke. Health + banner report Phase 12. |
-| Industry module framework | ✅ **Phase 18 done (Days 26–27):** `modules/loader.js` + 8 hook points; **spirits** and **pharmacy** modules ship as the proof. The prescription/controlled-drug gates were lifted out of `prepareSaleLines` into `modules/pharmacy.js`, so the checkout path contains no industry words (asserted in tests). New industry = new file: the acceptance test registers one from the test file and drives all seven hooks with zero core edits. 145 tests green (was 131) + 9-step UI smoke |
+| Eight industries | ✅ **Phase 19–23 done (Days 28–34):** one file per industry, zero core edits beyond the framework. `modules/{spirits,pharmacy,boutique,mini_mart,hardware,electronics,cosmetics,footwear}.js` — each declares its own fields, permissions, checkout/stock hooks, reports, commands and a starter catalogue; each ships a browser panel (`modules/ui/*.js`) the shell mounts without knowing what it is. A shared `modules/_kit.js` keeps a new industry at ≈ one build-day (R-M3, asserted): the acceptance test registers a brand-new industry from the test file and drives fields + hooks + reports with no edit to `server.js`. **31 report ids, 0 duplicates.** The framework gained a ninth hook (`commands`, collect-type) and a generic `POST /api/modules/:id/commands/:commandId` door, so an industry workflow (markdown, repack, IMEI binding, insurance claim…) is data on the module, not a route in the core. 162 tests green (was 145) + 9 UI |
+| Promotions, loyalty & marketing | ✅ **Phase 24 done (Day 35):** an offer is **data**, not a code path. `promos` carries % / money-off / BOGO / bundle / happy-hour offers with a code, a window, a minimum spend, a use limit and a scope (basket · product · category · customer · segment); `lib/promos.js` matches them and lands the discount on the line **before tax**; `sale_promos` records which offer discounted which sale, so `GET /api/reports/promotions` can say what each offer cost and earned. Offers apply through **every** payment method (cash, M-Pesa, card, split — asserted) and need no discount permission, because the discount is the shop's decision, not the cashier's. **Loyalty**: points are earned the moment a sale is paid and are **tender** — `lib/loyalty.js` refuses to overspend the balance, the shop's cap (`max_redeem_pct`) or the amount still owed. **Segments** (`lib/segments.js`) are *counted, never stored* (all / best / regular / lapsed / new / owes money / wholesale / birthday) and a **campaign** is a promotion pointed at a segment. Manager **Marketing** tab (offers, campaigns, performance, loyalty); the till shows which offers fired and the customer's points. `lib/payments.js` no longer snapshots the loyalty tender into `settings.payments` — it follows the loyalty switch. **R-P2 bug fixed:** a sale line's discount now comes off the VAT-inclusive shelf price and VAT is extracted from what is left (the till was adding VAT back on top, overcharging by ~13.8%); the exchange engine and the till's own total were corrected with it, and 42 test expectations that had frozen the wrong arithmetic were re-derived. 175 tests green (was 162) + 14 UI |
+| Industry module framework | ✅ **Phase 18 done (Days 26–27):** `modules/loader.js` + **9** hook points; **spirits** and **pharmacy** modules ship as the proof. The prescription/controlled-drug gates were lifted out of `prepareSaleLines` into `modules/pharmacy.js`, so the checkout path contains no industry words (asserted in tests). New industry = new file: the acceptance test registers one from the test file and drives all seven hooks with zero core edits. 145 tests green (was 131) + 9-step UI smoke |
 | Audit hash chain + verify | ✓ R-A1/R-A4 done at core level |
 | Sales/payments schema | ✅ **Phase 8 done (Day 12):** the payment **engine** — checkout never knows what a payment is. Adapters: cash · M-Pesa · card · bank · credit (deni) · store credit · gift card · loyalty · other (enable/disable per business). State machine `pending → confirmed \| cancelled \| failed`, `confirmed → refunded`; idempotency is structural — `UNIQUE(sale_id, method, ref)` so a duplicate provider callback is a guaranteed no-op (proven in tests: 3 callbacks, 1 confirm). Split/partial payments via `POST /api/sales/:id/payments`; cash over-tender = change; non-cash can't exceed the balance; duplicate (sale, method, ref) refused. **M-Pesa lives only in `lib/mpesa.js`** (the only file that knows Daraja): manual mode (record the SMS code — works day one), sandbox (simulated STK + `simulate-callback` test hook replaying the real callback path), live (real OAuth + STK push, Phase 16 credentials). Refunds go to the original method (deni refunds release the credit limit; store credit is restored; M-Pesa leaves a reversal row). Cancelled/failed money **unwinds the stock step** (same lots, audited) so a declined prompt never leaks stock. Per-method reconcile (`/api/payments/reconcile`) + deposits (`/api/deposits`, manager act, audited) + payment settings (owner). Manager gets a Payments tab; the till gets method tabs, an awaiting-payment panel and add-a-second-payment |
 | EN/SW core strings, dashboard, manager UI | ✓ foundation; polished in Phase 34 |
@@ -467,6 +472,51 @@ reprint, and the core never looks inside it.
   deni/override, ledger marked), else 403. POS customer options show
   phone + deni; manager Customers tab. 124 tests green (was 119) +
   22-step UI smoke. Health + banner report Phase 11.
+- **2026-09-07 (v11)** — **Phase 24 complete (Day 35): promotions, loyalty &
+  marketing.** New `promos` columns (`buy_qty`, `get_qty`, `min_spend`,
+  `stackable`, `priority`, `tier`, `time_start`, `time_end`, `updated_at`,
+  `created_by`) + a new `sale_promos` table (which offer discounted which
+  sale), all additive. Three new libraries — `lib/promos.js` (match & price
+  an offer: % / money-off / BOGO / bundle / happy hour, with code, window,
+  minimum spend, use limit and scope; non-stackable offers compete and the
+  bigger win is taken), `lib/loyalty.js` (earn on a paid sale, spend as
+  tender, refused when it would overrun the balance, the cap or the amount
+  still owed) and `lib/segments.js` (segments are computed, never stored).
+  Routes: `/api/promos` (CRUD + retire/activate — an offer is never deleted,
+  so yesterday's receipt still knows what discounted it),
+  `/api/promos/preview`, `/api/campaigns` (a promotion pointed at a segment),
+  `/api/loyalty/*` (settings, balance, manual adjust), `/api/segments[/:id/audience]`,
+  `/api/reports/promotions`. New permissions `loyalty.manage`,
+  `campaigns.manage`; the `loyalty` payment method became a customer-backed
+  tender that follows the loyalty switch; `mini_mart` now seeds loyalty too.
+  **Manager Marketing tab** and a till that shows the offers that fired plus
+  the customer's points. **Money bug fixed (R-P2):** prices are VAT-inclusive,
+  but a discounted line was having VAT *added back on top* — a Ksh 500 basket
+  with Ksh 50 off was charged Ksh 512. Line totals, the exchange engine and
+  the till's own arithmetic now take the discount off the tax-inclusive price
+  and extract VAT from what remains; the 42 test expectations that had frozen
+  the wrong numbers were re-derived (a Ksh 400 shelf price is now charged as
+  Ksh 400). **175 tests green** (was 162) + 14 UI steps (was 9).
+- **2026-09-07 (v11)** — **Phases 19–23 complete (Days 28–34): the eight
+  industries, one file each.** `modules/_kit.js` (shared meta/axes/stock/
+  sales/expiry/margin helpers) + six new modules (**boutique**, **mini_mart**,
+  **hardware**, **electronics**, **cosmetics**, **footwear**) joining spirits
+  and pharmacy, each one file: product fields, permissions, checkout & stock
+  hooks, reports, commands and a starter catalogue (`template:`) that seeds a
+  brand-new shop of that trade. Each ships its own browser panel, so the shell
+  never knows what an industry is. The framework gained a **ninth** hook,
+  `commands` (collect), plus `Registry.commands()`/`command(id)` and a generic
+  `POST /api/modules/:id/commands/:commandId` door; `_`-prefixed files are
+  skipped by discovery. Core edits stayed inside the framework: `tradeList()`
+  merges module trades so setup accepts an industry the core has never heard
+  of, module report payloads keep their extra keys, and setup normalises every
+  template row before insert. Fixed along the way: a placeholder too many in
+  setup's products INSERT, module template rows missing core columns, the
+  footwear `barcode_gaps` report querying a column variants do not have.
+  **162 tests green** (was 145): every industry activates and lands its
+  fields/reports/commands, no industry word appears anywhere in `server.js`,
+  and a child-process onboarding proves a new industry's catalogue seeds from
+  its module alone.
 - **2026-09-02 (v11)** — **Phase 10 complete (Day 14):** returns & exchanges.
   `payments.refunded` (partial refunds; terminal `refunded` sale state);
   `returns`/`return_items` (RET-# eTIMS-ready, batch-aware restock, reason
@@ -481,7 +531,8 @@ reprint, and the core never looks inside it.
   modal, manager Returns tab, EN/SW. 119 tests green (was 111) +
   29-step UI smoke. Health + banner report Phase 10.
 - **2026-09-07 (v11)** — **Phase 18 complete (Days 26–27): the industry module
-  framework (`modules/loader.js`, ARCHITECTURE §4).** Eight hook points
+  framework (`modules/loader.js`, ARCHITECTURE §4).** Eight hook points (a
+  ninth, `commands`, was added in Phases 19–23)
   (`productFields`, `checkout.validateLine`, `checkout.beforeCommit`,
   `stock.rule`, `reports`, `permissions`, `ui`, `template`); gate hooks fail
   closed and are audited (`module/failure`), collect hooks fail open. Two

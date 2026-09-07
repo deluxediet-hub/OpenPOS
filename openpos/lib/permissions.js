@@ -20,7 +20,7 @@ const PERMISSIONS = [
   'expenses.manage',
   'reports.view', 'reports.sensitive',
   'audit.view',
-  'promos.manage',
+  'promos.manage', 'loyalty.manage', 'campaigns.manage',
   'capabilities.manage'
 ];
 

@@ -57,6 +57,17 @@ async function waitFor(fn, label, timeout = 8000) {
   });
   const cookie = (setup.headers.get('set-cookie') || '').split(';')[0];
 
+  // Phase 24: the shop switches promotions + loyalty on, so the Marketing tab
+  // appears the way it would for a shop that asked for it.
+  for (const capability of ['promotions', 'loyalty']) {
+    const r = await fetch(BASE + '/api/capabilities', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({ capability, enabled: true })
+    });
+    if (!r.ok) console.log(`  (could not enable ${capability}: ${r.status})`);
+  }
+
   // ---------------- boot a page ----------------
   async function bootPage(file) {
     const raw = fs.readFileSync(path.join(PUB, file), 'utf8');
@@ -126,6 +137,10 @@ async function waitFor(fn, label, timeout = 8000) {
 
   console.log('\nUI smoke — the shell mounts what the modules declare (Phase 18)');
 
+  // ---------------- till page (booted first: the manager checks reference it) ----
+  const pos0 = await bootPage('pos.html');
+  await waitFor(() => pos0.w.document.querySelector('#p-main') && !pos0.w.document.querySelector('#p-main').classList.contains('hidden'), 'till booted');
+
   // ---------------- manager page ----------------
   const mgr = await bootPage('manager.html');
   const mw = mgr.w;
@@ -155,13 +170,38 @@ async function waitFor(fn, label, timeout = 8000) {
       mf && !/Bottle size/i.test(mf.textContent), mf ? mf.textContent.slice(0, 80) : '');
 
     // The panel's report call reached the server (no 404/403 in the console).
+    // ---------------- Phase 24: offers, campaigns & loyalty ------------------
+    const mktTab = [...mw.document.querySelectorAll('#tabs button')].find((b) => /Marketing/i.test(b.textContent));
+    ck('the Marketing tab appears when the promotions capability is on', !!mktTab,
+      [...mw.document.querySelectorAll('#tabs button')].map((b) => b.textContent.trim()).join(' | '));
+    if (mktTab) {
+      click(mw, mktTab);
+      await waitFor(() => mw.document.querySelector('#mk-rows') && mw.document.querySelector('#mk-rows').textContent.trim(), 'offers table');
+      ck('the offers screen explains itself before there is anything in it',
+        /no offers yet/.test(mw.document.querySelector('#mk-rows').textContent));
+      // create one offer the way a shopkeeper would
+      click(mw, mw.document.querySelector('#mk-new-btn'));
+      mw.document.querySelector('#mk-name').value = 'UI Offer 10%';
+      mw.document.querySelector('#mk-type').value = 'pct';
+      mw.document.querySelector('#mk-value').value = '10';
+      click(mw, mw.document.querySelector('#mk-save'));
+      await waitFor(() => /UI Offer 10%/.test(mw.document.querySelector('#mk-rows').textContent), 'the new offer row', 15000);
+      ck('an offer created on the screen shows up in the list', true);
+      ck('segments are counted on the screen',
+        /Every customer/.test(mw.document.querySelector('#mk-seg-rows').textContent),
+        mw.document.querySelector('#mk-seg-rows').textContent.slice(0, 80));
+      // the till shows the offer and the customer's points
+      ck('the till has a place for offers and points',
+        !!pos0.w.document.querySelector('#p-offers') && !!pos0.w.document.querySelector('#p-points'));
+    }
+
     ck('manager page booted without script errors', mgr.errs.length === 0, mgr.errs.join(' | '));
   } catch (e) {
     ck('manager page smoke', false, e.message + ' :: ' + mgr.errs.join(' | '));
   }
 
   // ---------------- till page ----------------
-  const pos = await bootPage('pos.html');
+  const pos = pos0;
   try {
     await waitFor(() => pos.w.document.querySelector('#p-main') && !pos.w.document.querySelector('#p-main').classList.contains('hidden'), 'till booted');
     ck('till boots with the module framework loaded', true);
@@ -173,6 +213,7 @@ async function waitFor(fn, label, timeout = 8000) {
 
   // jsdom's visual timers keep the loop alive — shut the pages down explicitly.
   for (const page of [mgr, pos]) { try { page.dom.window.close(); } catch {} }
+
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 
