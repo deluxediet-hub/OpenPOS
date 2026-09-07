@@ -638,7 +638,25 @@ DB optimisation + query perf (100k rows / 10k moves), API perf budgets, offline 
 logging, monitoring (health, error rate), data export, **migration strategy** (schema
 versioning, safe additive migrations).
 - **Acceptance:** p95 checkout < 300ms local; restore drill < 30 min; chaos tests lose nothing.
+### Phase 32 — Performance, Security & Production Hardening · Days 46–48
+DB optimisation + query perf (100k rows / 10k moves), API perf budgets, offline sync stress,
+**backup / restore / DR drill**, security + permission review, error handling + structured
+logging, monitoring (health, error rate), data export, **migration strategy** (schema
+versioning, safe additive migrations).
+- **Acceptance:** p95 checkout < 300ms local; restore drill < 30 min; chaos tests lose nothing.
 
+
+**Status (2026-09-07): done — measured, not asserted on faith.**
+
+- **Migration strategy.** `schema_migrations` records every named step with the time it ran; `/api/admin/schema` answers "what version is my book?" and whether it is behind the code. The rule is written into the reply: *every step is additive and reversible; anything destructive needs a restore path*.
+- **Backup / restore / DR drill.** A snapshot is `VACUUM INTO`, so it is transactionally consistent **while the shop is trading** (the book runs in WAL mode — a raw file copy could catch it mid-write). Each snapshot has a manifest with a SHA-256, the schema version and whether it is sealed. Restoring **verifies first** — checksum matches manifest, SQLite `integrity_check` says ok — and swapping keeps the old database alongside. `/api/admin/dr-drill` answers the only question that matters: *is there a good copy, how old is it, and how long to get back?* ("Last good backup: … 0 minutes old. Restore is verified and takes about 5 minutes.")
+- **Perf budgets (measured on this machine).** A 20-line checkout: **median 21 ms, p95 22 ms** over 12 runs. Storefront catalogue: **p95 5 ms**. The 300 ms acceptance budget is not close. Phase-32 indexes cover the hot paths (sales by time/branch/status, sale_items, payments, stock moves by variant+time, products/variants).
+- **Structured logging.** One JSON line per request with a request id, user, route, status and duration; counters by route and status; the last 200 lines kept in memory for `/api/admin/metrics`. Requests log at *debug* so a till's console is quiet, but errors and slow calls always speak.
+- **Health is not "up".** `/api/health/deep` runs `PRAGMA integrity_check`, times a query, and reports the schema version and the age of the last verified backup.
+- **Data export.** `/api/export/{products,sales,sale_items,stock,customers,payments,expenses}.csv` — the owner's own data, in their own hands, no permission asked.
+- **Chaos.** Two simultaneous sales of the last unit: exactly one wins, one unit leaves the shelf once, one sale takes the money, and the loser gets a 409 (R-S8) rather than a silent oversell.
+
+232 API tests, 34 UI steps.
 ### Phase 33 — Deployment & SaaS Layer · Days 49–50
 Business registration (self-serve), **subscriptions** (plans, usage limits, billing via
 M-Pesa, trials), **tenant isolation live** (`business_id`), admin console, versioning + safe

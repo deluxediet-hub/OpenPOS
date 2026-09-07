@@ -95,6 +95,11 @@ const commsLib = require('../lib/comms');
   const cookieOf = (r) => (r.headers.get('set-cookie') || '').split(';')[0];
 
   let cookie = '';
+  const JCOOKIE = async (p) => {
+    const r = await fetch(BASE + p, { headers: { cookie }, redirect: 'manual' });
+    return { status: r.status, headers: r.headers, text: await r.text() };
+  };
+
   const authJ = (a, b, c) => {
     const o = typeof a === 'string' ? { path: a, method: b, body: c } : a;
     return J({ ...o, headers: { cookie } });
@@ -4588,6 +4593,133 @@ const commsLib = require('../lib/comms');
     assert.strictEqual(again.status, 200, JSON.stringify(again.body));
     assert.strictEqual(d.prepare('SELECT * FROM sale_items WHERE sale_id = ?').get(again.body.sale.id).unit_price, 400,
       'and the new price applies from now on');
+  });
+
+
+  // ================= Phase 32 — hardening ===================================
+  // Acceptance: the book is versioned, the backup restores, and the till is
+  // fast enough that nobody waits.
+  section('Phase 32 — hardening: versioned, restorable, fast enough');
+
+  await test('the schema is versioned, and the ledger says what has run', async () => {
+    const r = await authJ('/api/admin/schema');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.version && r.body.code_version, JSON.stringify(r.body));
+    assert.strictEqual(r.body.pending.length, 0, 'the book is not behind the code');
+    assert.strictEqual(r.body.up_to_date, true);
+    assert.ok(r.body.applied.some((m) => /perf_indexes/.test(m.id)), JSON.stringify(r.body.applied));
+    assert.match(r.body.rule, /additive/);
+    // the ledger lives in the database itself
+    const rows = d.prepare('SELECT * FROM schema_migrations ORDER BY id').all();
+    assert.ok(rows.length >= 1);
+    assert.ok(rows.every((x) => x.applied_at));
+  });
+
+  await test('a backup is a real, consistent, verifiable copy — not a belief', async () => {
+    const r = await authJ({ path: '/api/admin/backup', method: 'POST', body: { note: 'phase 32 test' } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.file && r.body.bytes > 0, JSON.stringify(r.body));
+    assert.ok(r.body.sha256 && r.body.sha256.length === 64);
+    assert.strictEqual(r.body.method, 'vacuum into', 'a WAL book must not be copied mid-write');
+    const list = await authJ('/api/admin/backups');
+    assert.strictEqual(list.status, 200);
+    assert.ok(list.body.some((b) => b.file === r.body.file));
+    const check = await authJ({ path: '/api/admin/restore', method: 'POST', body: { file: r.body.file, apply: false } });
+    assert.strictEqual(check.status, 200, JSON.stringify(check.body));
+    assert.strictEqual(check.body.checked, true);
+    assert.strictEqual(check.body.restart_required, false, 'checking must not disturb the shop');
+  });
+
+  await test('the DR drill answers: is there a good copy, and how old is it?', async () => {
+    const r = await authJ('/api/admin/dr-drill');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.backups >= 1, JSON.stringify(r.body));
+    assert.strictEqual(r.body.verified_good, true, JSON.stringify(r.body.checks));
+    assert.ok(r.body.last_backup_age_minutes !== null);
+    assert.ok(r.body.rto_estimate_minutes, 'it says how long getting back takes');
+    assert.match(r.body.sentence, /Last good backup/, r.body.sentence);
+    const deep = await J('/api/health/deep');
+    assert.strictEqual(deep.status, 200, JSON.stringify(deep.body));
+    assert.strictEqual(deep.body.checks.sqlite_integrity, 'ok');
+    assert.ok(deep.body.checks.last_backup_age_minutes !== null);
+    assert.strictEqual(deep.body.checks.schema_up_to_date, true);
+    assert.strictEqual(deep.body.ok, true, JSON.stringify(deep.body));
+  });
+
+  await test('the server keeps a structured log with a request id and counters', async () => {
+    const m = await authJ('/api/admin/metrics');
+    assert.strictEqual(m.status, 200, JSON.stringify(m.body));
+    assert.ok(m.body.uptime_s >= 0);
+    assert.ok(m.body.log_lines > 10, 'requests have been logged');
+    assert.ok(m.body.routes.length > 0, JSON.stringify(m.body.routes));
+    const route = m.body.routes.find((r) => /\/api\/metrics|\/api\/products/.test(r.route));
+    assert.ok(route && route.avg_ms >= 0 && route.n > 0, JSON.stringify(m.body.routes.slice(0, 3)));
+    assert.ok(m.body.recent.length > 0);
+    const line = m.body.recent.find((l) => l.msg === 'request');
+    assert.ok(line && line.rid, 'every request carries one id');
+    assert.ok(line && line.status && line.ms !== undefined, JSON.stringify(line));
+    assert.ok(m.body.db && m.body.db.sales >= 0, 'and the metrics know the size of the book');
+  });
+
+  await test('the owner can take their own data out as CSV', async () => {
+    const kinds = await authJ('/api/export');
+    assert.strictEqual(kinds.status, 200, JSON.stringify(kinds.body));
+    assert.ok(kinds.body.some((k) => k.entity === 'sales'));
+    assert.ok(kinds.body.some((k) => k.entity === 'products'));
+    const csv = await JCOOKIE('/api/export/products.csv');
+    assert.strictEqual(csv.status, 200);
+    assert.match(csv.headers.get('content-type'), /csv/);
+    assert.match(csv.text, /sku|name/);
+    const sales = await JCOOKIE('/api/export/sales.csv');
+    assert.strictEqual(sales.status, 200);
+    assert.ok(sales.text.split('\n').length > 1, 'there are rows in it');
+    const nope = await authJ('/api/export/nonsense.csv');
+    assert.strictEqual(nope.status, 404);
+  });
+
+  await test('perf budget: a 20-line checkout is fast enough to stand behind the counter', async () => {
+    const p = await mkP({ name: 'P32 Fast', sku: 'P32F', cost: 50, price: 100 }, 500);
+    const times = [];
+    for (let i = 0; i < 12; i++) {
+      const t0 = Date.now();
+      const r = await authJ({ path: '/api/sales', method: 'POST', body: {
+        items: Array.from({ length: 20 }, () => ({ variant_id: p.vid, qty: 1 })),
+        payment: { method: 'cash', amount: 2000 }
+      } });
+      times.push(Date.now() - t0);
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+    }
+    times.sort((a, b) => a - b);
+    const p95 = times[Math.floor(times.length * 0.95) - 1] || times[times.length - 1];
+    const median = times[Math.floor(times.length / 2)];
+    console.log(`    (checkout: median ${median}ms, p95 ${p95}ms over ${times.length} runs of 20 lines)`);
+    assert.ok(p95 < 1500, `p95 checkout ${p95}ms is over the 1500ms budget (median ${median}ms)`);
+    // and the shopfront can price a basket without thinking about it
+    const cat = [];
+    for (let i = 0; i < 8; i++) {
+      const t0 = Date.now();
+      await authJ('/api/store/catalogue?limit=200');
+      cat.push(Date.now() - t0);
+    }
+    const catP95 = cat.sort((a, b) => a - b)[Math.floor(cat.length * 0.95) - 1];
+    console.log(`    (storefront catalogue: p95 ${catP95}ms)`);
+    assert.ok(catP95 < 1500, `catalogue p95 ${catP95}ms`);
+  });
+
+  await test('chaos: two sales fight over the last unit — one wins, neither lies', async () => {
+    const p = await mkP({ name: 'P32 Last', sku: 'P32L', cost: 100, price: 300 }, 1);
+    const both = await Promise.all([
+      authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p.vid, qty: 1 }], payment: { method: 'cash', amount: 300 } } }),
+      authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p.vid, qty: 1 }], payment: { method: 'cash', amount: 300 } } })
+    ]);
+    const ok = both.filter((r) => r.status === 200).length;
+    assert.strictEqual(ok, 1, `exactly one sale wins: ${JSON.stringify(both.map((b) => [b.status, (b.body || {}).error]))}`);
+    const qty = d.prepare('SELECT COALESCE(SUM(qty), 0) AS q FROM stock WHERE variant_id = ?').get(p.vid).q;
+    assert.strictEqual(qty, 0, 'the shelf is empty, and says so');
+    const moves = d.prepare("SELECT COUNT(*) AS n FROM stock_moves WHERE type = 'sale' AND variant_id = ?").get(p.vid).n;
+    assert.strictEqual(moves, 1, 'one unit left the shelf once');
+    const paid = d.prepare("SELECT COUNT(*) AS n FROM sales WHERE status = 'paid' AND id IN (SELECT sale_id FROM sale_items WHERE variant_id = ?)").get(p.vid).n;
+    assert.strictEqual(paid, 1, 'and one sale took the money');
   });
 
   server.close();

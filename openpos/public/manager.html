@@ -1329,6 +1329,20 @@
       </div>
 
       <div class="card" style="margin-top:14px">
+        <h3>System &amp; backups</h3>
+        <p class="muted small" style="margin:0 0 10px">A backup nobody has restored is a belief. Take one, and the drill will tell you
+          whether it is real and how old it is.</p>
+        <div class="row">
+          <button class="btn" id="sys-backup">Take a backup now</button>
+          <button class="btn ghost" id="sys-drill">Run the restore drill</button>
+          <span class="pill" id="sys-version">schema —</span>
+          <span class="spacer"></span>
+          <a class="btn ghost small" href="/api/health/deep" target="_blank" rel="noopener">Deep health</a>
+        </div>
+        <div id="sys-out" class="small" style="margin-top:8px"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
         <h3>Security settings</h3>
         <div class="grid cols-3">
           <label class="f"><span>Lock after (wrong PINs)</span><input id="ev-max-fails" type="number" min="2" max="20"></label>
@@ -3737,6 +3751,13 @@ async function loadEvidence() {
     };
   });
 
+  const sys = await Promise.all([
+    api('/api/admin/schema').catch(() => null),
+    api('/api/admin/dr-drill').catch(() => null)
+  ]);
+  if (sys[0]) $('#sys-version').textContent = `schema ${sys[0].version}${sys[0].up_to_date ? '' : ' (behind)'}`;
+  if (sys[1]) $('#sys-out').textContent = sys[1].sentence;
+
   const cfg = await api('/api/settings/security').catch(() => ({}));
   $('#ev-max-fails').value = (cfg.lockout || {}).max_fails || 5;
   $('#ev-lock-mins').value = (cfg.lockout || {}).lock_minutes || 5;
@@ -3865,6 +3886,21 @@ $('#ins-send').onclick = async () => {
     const r = await api('/api/intelligence/digest/send', { method: 'POST', body: {} });
     toast($('#ins-msg'), `digest sent (${r.digest.alerts.length} alert(s))`, true);
   } catch (e) { toast($('#ins-msg'), e.message, false); }
+};
+$('#sys-backup').onclick = async () => {
+  try {
+    const r = await api('/api/admin/backup', { method: 'POST', body: { note: 'taken from the back office' } });
+    toast($('#ev-msg'), `backup saved: ${r.file} (${Math.round(r.bytes / 1024)} KB)`, true);
+    const drill = await api('/api/admin/dr-drill');
+    $('#sys-out').textContent = drill.sentence;
+  } catch (e) { toast($('#ev-msg'), e.message, false); }
+};
+$('#sys-drill').onclick = async () => {
+  try {
+    const drill = await api('/api/admin/dr-drill');
+    $('#sys-out').textContent = drill.sentence;
+    toast($('#ev-msg'), drill.pass ? 'restore drill passed' : 'the drill found a problem', drill.pass);
+  } catch (e) { toast($('#ev-msg'), e.message, false); }
 };
 $('#ev-save').onclick = async () => {
   try {

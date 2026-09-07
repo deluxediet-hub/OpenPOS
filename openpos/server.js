@@ -5,6 +5,7 @@
 // capabilities (R-C), fine-grained permissions, solo-first onboarding.
 // ---------------------------------------------------------------------------
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const express = require('express');
 const dbm = require('./db');
@@ -549,6 +550,8 @@ function createApp(d) {
   const me = auth.sessionPath(d);
   const can = (perm) => perms.requirePerm(d, perm);
   app.disable('x-powered-by');
+  // Phase 32: one id per request, one line per request, errors counted.
+  require('./lib/log').requestLogger(app);
   app.use(express.json({ limit: '1mb' }));
   app.use(express.static(path.join(__dirname, 'public')));
   // Phase 18: industry modules ship their own browser panels here. Only the
@@ -729,6 +732,136 @@ function createApp(d) {
     }
     next();
   };
+
+  // ================= Phase 32 — hardening: logs, schema, backups, perf ======
+  // A shop has no ops team. These routes are the whole of it: what the server
+  // has been doing, what version the book is, whether the backup is real, and
+  // how fast the till is.
+
+  const { logger } = require('./lib/log');
+  const backup = require('./lib/backup');
+
+  app.get('/api/admin/schema', me, can('settings.manage'), (req, res) => {
+    const info = dbm.schemaInfo(d);
+    res.json({
+      ...info,
+      migrations_available: dbm.MIGRATIONS.map((m) => ({ id: m.id, name: m.name })),
+      rule: 'every step is additive and reversible; anything destructive needs a restore path'
+    });
+  });
+
+  app.post('/api/admin/migrate', me, can('settings.manage'), (req, res) => {
+    try {
+      dbm.applyMigrations(d);
+      const info = dbm.schemaInfo(d);
+      dbm.audit(d, { userId: req.user.id, action: 'admin/migrate', entity: 'schema', entityId: info.version });
+      res.json({ ok: true, ...info });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/admin/metrics', me, can('settings.manage'), (req, res) => {
+    res.json({
+      ...logger.metrics(),
+      recent: logger.recent(30),
+      db: {
+        path: dbm.DB_PATH,
+        size_bytes: fs.existsSync(dbm.DB_PATH) ? fs.statSync(dbm.DB_PATH).size : 0,
+        sales: d.prepare('SELECT COUNT(*) AS n FROM sales').get().n,
+        products: d.prepare('SELECT COUNT(*) AS n FROM products').get().n,
+        stock_moves: d.prepare('SELECT COUNT(*) AS n FROM stock_moves').get().n
+      }
+    });
+  });
+
+  /** Deep health: not "up", but "would I trust this till with today's money?". */
+  app.get('/api/health/deep', (req, res) => {
+    const t0 = Date.now();
+    const out = { ok: true, checks: {} };
+    try {
+      const integrity = d.prepare('PRAGMA integrity_check').get();
+      out.checks.sqlite_integrity = integrity && integrity.integrity_check === 'ok' ? 'ok' : String((integrity || {}).integrity_check || 'unknown');
+      if (out.checks.sqlite_integrity !== 'ok') out.ok = false;
+    } catch (e) { out.checks.sqlite_integrity = e.message; out.ok = false; }
+    try {
+      const t = Date.now();
+      d.prepare('SELECT COUNT(*) AS n FROM sales').get();
+      out.checks.query_ms = Date.now() - t;
+      if (out.checks.query_ms > 500) out.ok = false;
+    } catch (e) { out.checks.query_ms = -1; out.ok = false; }
+    const drill = backup.drill(d, dbm);
+    out.checks.last_backup_age_minutes = drill.last_backup_age_minutes;
+    out.checks.backup_verified = drill.verified_good;
+    out.schema = dbm.schemaInfo(d).version;
+    out.checks.schema_up_to_date = dbm.schemaInfo(d).up_to_date;
+    out.ms = Date.now() - t0;
+    res.json(out);
+  });
+
+  app.post('/api/admin/backup', me, can('settings.manage'), (req, res) => {
+    try {
+      const m = backup.snapshot(d, dbm, { note: (req.body || {}).note });
+      dbm.audit(d, { userId: req.user.id, action: 'admin/backup', entity: 'backup', entityId: m.file, detail: { bytes: m.bytes, encrypted: m.encrypted } });
+      res.json({ ok: true, ...m });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/admin/backups', me, can('settings.manage'), (req, res) => {
+    res.json(backup.list(dbm));
+  });
+
+  /** `{"apply": false}` proves the file first. `true` swaps it in (restart). */
+  app.post('/api/admin/restore', me, can('settings.manage'), (req, res) => {
+    try {
+      const b = req.body || {};
+      if (!b.file) return res.status(400).json({ error: 'name the backup file to restore' });
+      const out = backup.restore(dbm, b.file, { apply: !!b.apply, passphrase: b.passphrase || dbm.getSetting(d, 'backup_passphrase', null) });
+      dbm.audit(d, {
+        userId: req.user.id, action: 'admin/restore', entity: 'backup', entityId: String(b.file),
+        detail: { applied: !!b.apply, bytes: out.bytes }
+      });
+      res.json(out);
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /** The drill: is there a good copy, how old is it, how long to get back? */
+  app.get('/api/admin/dr-drill', me, can('settings.manage'), (req, res) => {
+    res.json(backup.drill(d, dbm));
+  });
+
+  /** Data export: the owner's own data, in their own hands, as CSV. */
+  const EXPORTABLE = {
+    products: 'SELECT p.* FROM products p ORDER BY p.id',
+    sales: "SELECT * FROM sales WHERE status <> 'voided' ORDER BY id",
+    sale_items: 'SELECT si.* FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.status <> \'voided\' ORDER BY si.id',
+    stock: 'SELECT s.variant_id, s.location_id, s.qty, p.name, p.sku FROM stock s JOIN variants v ON v.id = s.variant_id JOIN products p ON p.id = v.product_id ORDER BY p.name',
+    customers: 'SELECT * FROM customers ORDER BY id',
+    payments: 'SELECT * FROM payments ORDER BY id',
+    expenses: 'SELECT * FROM expenses ORDER BY id'
+  };
+
+  app.get('/api/export/:entity.csv', me, can('reports.view'), (req, res) => {
+    const sql = EXPORTABLE[req.params.entity];
+    if (!sql) return res.status(404).json({ error: `nothing exportable called ${req.params.entity}` });
+    try {
+      const rows = d.prepare(sql).all();
+      const columns = rows.length ? Object.keys(rows[0]) : [];
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${req.params.entity}-${new Date().toISOString().slice(0, 10)}.csv"`);
+      res.send(require('./lib/csv').toCsv(columns, rows));
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/export', me, can('reports.view'), (req, res) => {
+    res.json(Object.keys(EXPORTABLE).map((k) => ({ entity: k, url: `/api/export/${k}.csv` })));
+  });
 
   // ================= Phase 29 — owner intelligence ==========================
   // Every answer here is a query with a threshold and a sentence. No assistant,

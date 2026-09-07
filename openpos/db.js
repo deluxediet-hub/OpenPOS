@@ -40,6 +40,59 @@ function addCol(d, table, col, def) {
   }
 }
 
+// ---- Phase 32: schema versioning -------------------------------------------
+// `migrate()` is idempotent and additive, so it can run on any database from
+// any day. The ledger below records which NAMED steps have actually run, so a
+// future step that is NOT purely additive can be gated on it — and so the shop
+// can answer "what version is my book?" without guessing from columns.
+//
+// Rule for anything added here: additive and reversible, or it needs a restore
+// path in lib/backup.js and a note in ARCHITECTURE.md.
+const MIGRATIONS = [
+  { id: '0032_perf_indexes', name: 'Phase 32: indexes for the hot paths', apply: (d) => {
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_sales_created ON sales(created_at);`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_sales_branch_created ON sales(branch_id, created_at);`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(status);`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_sale_items_product ON sale_items(product_id);`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_payments_sale ON payments(sale_id);`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_payments_created ON payments(created_at);`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_moves_variant_time ON stock_moves(variant_id, created_at);`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_moves_created ON stock_moves(created_at);`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_products_active ON products(active);`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_variants_product ON variants(product_id, active);`);
+  } }
+];
+
+function applyMigrations(d) {
+  d.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    applied_at TEXT NOT NULL
+  )`);
+  for (const m of MIGRATIONS) {
+    const done = d.prepare('SELECT id FROM schema_migrations WHERE id = ?').get(m.id);
+    if (done) continue;
+    m.apply(d);
+    d.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)')
+      .run(m.id, m.name, new Date().toISOString());
+  }
+}
+
+/** What version is this book, and is it behind the code? */
+function schemaInfo(d) {
+  const applied = d.prepare('SELECT * FROM schema_migrations ORDER BY id').all();
+  const ids = applied.map((r) => r.id);
+  const pending = MIGRATIONS.filter((m) => !ids.includes(m.id)).map((m) => m.id);
+  return {
+    version: pending.length ? (ids[ids.length - 1] || 'none') : (MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length - 1].id : 'none'),
+    code_version: MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length - 1].id : 'none',
+    applied,
+    pending,
+    up_to_date: pending.length === 0
+  };
+}
+
 function migrate(d) {
   d.exec(`
   CREATE TABLE IF NOT EXISTS settings (
@@ -1608,6 +1661,8 @@ function migrate(d) {
       UNIQUE(business_id, module_id)
     );
   `);
+  // Phase 32: recorded, named, versioned steps (see MIGRATIONS above).
+  applyMigrations(d);
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------
@@ -1686,7 +1741,7 @@ function verifyAuditChain(d) {
 }
 
 module.exports = {
-  open, DB_PATH,
+  open, DB_PATH, schemaInfo, applyMigrations, MIGRATIONS,
   setSetting, getSetting, getSettings, isInitialized,
   nextCounter,
   audit, auditRows, verifyAuditChain, AUDIT_GENESIS
