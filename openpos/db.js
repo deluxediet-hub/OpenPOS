@@ -1497,6 +1497,42 @@ function migrate(d) {
     CREATE INDEX IF NOT EXISTS idx_sale_promos_promo ON sale_promos(promo_id);
   `);
 
+  // ---- Phase 25: WhatsApp & customer commerce --------------------------------
+  // Every sale knows the door it came in by (R-CH): the till, an offline queue,
+  // a WhatsApp order or the web store. Same engine, one inventory, one book.
+  addCol(d, 'sales', 'channel', "TEXT NOT NULL DEFAULT 'pos'");
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_sales_channel ON sales(channel);`);
+
+  // Messages are EVIDENCE, not a chat app: what was sent, to whom, about which
+  // sale, and whether the provider took it. The local-log provider never lets a
+  // shop lose a receipt just because there is no airtime or no internet.
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      business_id INTEGER NOT NULL DEFAULT 1,
+      customer_id INTEGER,
+      sale_id INTEGER,
+      channel TEXT NOT NULL DEFAULT 'whatsapp',
+      direction TEXT NOT NULL DEFAULT 'out',
+      kind TEXT NOT NULL DEFAULT 'note',
+      to_number TEXT NOT NULL DEFAULT '',
+      from_number TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '',
+      provider TEXT NOT NULL DEFAULT 'log',
+      provider_ref TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      error TEXT,
+      meta TEXT,
+      created_at TEXT NOT NULL,
+      sent_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_biz ON messages(business_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_messages_sale ON messages(sale_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_cust ON messages(customer_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_messages_ref ON messages(provider, provider_ref)
+      WHERE provider_ref IS NOT NULL;
+  `);
+
   // ---- Phase 18 Day 26-27: industry module framework -------------------------
   // Which industry modules are active for this business. Activation is data,
   // never a deployment (R-C3), so the table lives with the business's own rows.

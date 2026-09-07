@@ -79,6 +79,7 @@ function section(title) { console.log(`\n${title}`); }
   const dbm = require('../db');
   const d = dbm.open();
   const { createApp } = require('../server');
+const commsLib = require('../lib/comms');
   const app = createApp(d);
   const server = app.listen(0);
   await new Promise((r) => server.once('listening', r));
@@ -3730,6 +3731,177 @@ function section(title) { console.log(`\n${title}`); }
     const csv = await fetch(`${BASE}/api/reports/promotions?format=csv`, { headers: { cookie } });
     assert.strictEqual(csv.status, 200);
     assert.ok((await csv.text()).includes('discount_given'));
+  });
+
+
+  // ================= Phase 25 — WhatsApp & customer commerce =================
+  // Acceptance: a WhatsApp order becomes a real sale decrementing the same
+  // stock; the receipt arrives the moment the money lands.
+  section('Phase 25 — WhatsApp & customer commerce: one inventory, every door');
+
+  const p25 = {};
+  const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+
+  await test('fixtures: messaging switched on, a product with a name people text', async () => {
+    const on = await cap('comms', true);
+    assert.strictEqual(on.status, 200, JSON.stringify(on.body));
+    const cfg = await authJ({ path: '/api/settings/comms', method: 'PUT', body: {
+      enabled: true, provider: 'log', default_channel: 'whatsapp',
+      business_phone: '0700000001', owner_phone: '0700000002',
+      order_enabled: true, low_stock_alerts: true, paybill: '123456', account_prefix: 'INV-'
+    } });
+    assert.strictEqual(cfg.status, 200, JSON.stringify(cfg.body));
+    assert.strictEqual(cfg.body.provider, 'log');
+    assert.ok(cfg.body.providers.some((p) => p.id === 'log'), 'the shop can see its provider choices');
+    p25.tea = await mkP({ name: 'P25 Chai', sku: 'CHAI', barcode: '79001', cost: 100, price: 150 }, 10);
+    p25.soda = await mkP({ name: 'P25 Soda', sku: 'SODA', barcode: '79002', cost: 60, price: 100 }, 10);
+    const c = await authJ({ path: '/api/customers', method: 'POST', body: { name: 'P25 Wanjiru', phone: '0700111222' } });
+    p25.cust = c.body.customer.id;
+  });
+
+  await test('a message is evidence: stored before it is sent, logged when there is no provider', async () => {
+    const bad = await authJ({ path: '/api/messages/send', method: 'POST', body: { body: 'no number' } });
+    assert.strictEqual(bad.status, 400, 'a message needs a number');
+    const row = await authJ({ path: '/api/messages/send', method: 'POST', body: { to: '0700111222', body: 'Karibu P25', customer_id: p25.cust } });
+    assert.strictEqual(row.status, 200, JSON.stringify(row.body));
+    assert.strictEqual(row.body.status, 'logged', 'the local provider keeps the message in the shop');
+    assert.strictEqual(row.body.customer_id, p25.cust);
+    assert.strictEqual(row.body.kind, 'note');
+    const list = await authJ('/api/messages');
+    assert.ok(list.body.some((m) => m.id === row.body.id), 'the outbox is readable');
+    // numbers travel as 07…, +254… and 254… and land as one shape
+    const alt = await authJ({ path: '/api/messages/send', method: 'POST', body: { to: '+254700111222', body: 'same person' } });
+    assert.strictEqual(alt.body.to_number, row.body.to_number, 'one phone, one book');
+  });
+
+  await test('a receipt is sent for a sale, and again on demand', async () => {
+    const sale = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p25.tea.vid, qty: 2 }], customer_id: p25.cust,
+      payment: { method: 'cash', amount: 300 }
+    } });
+    assert.strictEqual(sale.status, 200, JSON.stringify(sale.body));
+    await tick();
+    const auto = await authJ(`/api/messages?sale_id=${sale.body.sale.id}&kind=receipt`);
+    assert.strictEqual(auto.body.length, 1, 'a paid sale owes a receipt without anyone asking');
+    assert.ok(/P25 Chai/.test(auto.body[0].body) && /300/.test(auto.body[0].body), auto.body[0].body);
+    assert.strictEqual(auto.body[0].status, 'logged');
+    // the same customer can be sent it again by hand
+    const again = await authJ({ path: `/api/sales/${sale.body.sale.id}/send-receipt`, method: 'POST', body: {} });
+    assert.strictEqual(again.status, 200, JSON.stringify(again.body));
+    assert.strictEqual(again.body.kind, 'receipt');
+    // a sale with nobody to text is refused, not lost
+    const nobody = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p25.soda.vid, qty: 1 }], payment: { method: 'cash', amount: 100 } } });
+    const refused = await authJ({ path: `/api/sales/${nobody.body.sale.id}/send-receipt`, method: 'POST', body: {} });
+    assert.strictEqual(refused.status, 400, JSON.stringify(refused.body));
+  });
+
+  await test('a statement and a mini catalogue go out as text', async () => {
+    const st = await authJ({ path: `/api/customers/${p25.cust}/send-statement`, method: 'POST', body: {} });
+    assert.strictEqual(st.status, 200, JSON.stringify(st.body));
+    assert.strictEqual(st.body.kind, 'statement');
+    assert.ok(/statement for P25 Wanjiru/.test(st.body.body), st.body.body);
+    const cat = await authJ({ path: '/api/comms/catalogue', method: 'POST', body: { customer_id: p25.cust, search: 'P25', dry_run: true } });
+    assert.strictEqual(cat.status, 200, JSON.stringify(cat.body));
+    assert.ok(cat.body.items.some((i) => i.sku === 'CHAI'), JSON.stringify(cat.body.items));
+    assert.ok(/CHAI/.test(cat.body.body), cat.body.body);
+  });
+
+  await test('an inbound message becomes a real order — held until the money lands', async () => {
+    p25.loc = d.prepare('SELECT location_id FROM stock WHERE variant_id = ? ORDER BY qty DESC LIMIT 1').get(p25.tea.vid).location_id;
+    const before = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(p25.tea.vid, p25.loc).qty;
+    const r = await J({ path: '/api/webhooks/comms', method: 'POST', body: { provider: 'africas_talking', from: '0700111222', text: '2 CHAI, 1 SODA', id: 'AT-1' } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.kind, 'order');
+    assert.strictEqual(r.body.sale.status, 'suspended', 'an unpaid order holds no stock');
+    assert.strictEqual(r.body.sale.channel, 'whatsapp', 'the book knows where the order came from');
+    assert.strictEqual(r.body.payment_reference, `INV-${r.body.sale.invoice_no}`);
+    assert.strictEqual(r.body.items.length, 2);
+    assert.strictEqual(r.body.unmatched.length, 0);
+    // stock has NOT moved yet — the customer has not paid
+    const held = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(p25.tea.vid, p25.loc).qty;
+    assert.strictEqual(held, before, 'no stock leaves the shelf before the money');
+    // the shop answered with how to pay
+    const pr = await authJ(`/api/messages?sale_id=${r.body.sale.id}&kind=payment_request`);
+    assert.strictEqual(pr.body.length, 1, JSON.stringify(pr.body));
+    assert.ok(/Paybill 123456/.test(pr.body[0].body), pr.body[0].body);
+    p25.orderSale = r.body.sale.id;
+    p25.stockBefore = before;
+  });
+
+  await test('the same webhook twice is one order, not two (idempotent inbound)', async () => {
+    const dup = await J({ path: '/api/webhooks/comms', method: 'POST', body: { provider: 'africas_talking', from: '0700111222', text: '2 CHAI, 1 SODA', id: 'AT-1' } });
+    assert.strictEqual(dup.status, 200, JSON.stringify(dup.body));
+    assert.strictEqual(dup.body.kind, 'order');
+    assert.strictEqual(dup.body.sale.id, p25.orderSale, 'a provider replay does not re-order');
+    assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM sales WHERE channel = 'whatsapp'").get().n, 1);
+  });
+
+  await test('paying the order moves the stock once and the receipt goes out', async () => {
+    const pay = await authJ({ path: `/api/sales/${p25.orderSale}/pay`, method: 'POST', body: { payment: { method: 'mpesa', amount: 400, phone: '0700111222' } } });
+    assert.strictEqual(pay.status, 200, JSON.stringify(pay.body));
+    const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(p25.orderSale);
+    assert.strictEqual(sale.status, 'open', 'M-Pesa is confirmed, not assumed');
+    const confirm = await authJ({ path: `/api/payments/${pay.body.payments[0].id}/confirm`, method: 'POST', body: { code: 'MPX-P25' } });
+    assert.strictEqual(confirm.status, 200, JSON.stringify(confirm.body));
+    const after = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(p25.tea.vid, p25.loc).qty;
+    assert.strictEqual(after, p25.stockBefore - 2, 'the WhatsApp order took the same stock as a till sale');
+    const soda = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(p25.soda.vid, p25.loc).qty;
+    assert.strictEqual(soda, 10 - 2, 'soda: one at the till, one by message');
+    const moves = d.prepare("SELECT COUNT(*) AS n FROM stock_moves WHERE type = 'sale' AND ref = ?").get(sale.invoice_no).n;
+    assert.strictEqual(moves, 2, 'two lines, two moves — never doubled');
+    await tick();
+    const receipt = await authJ(`/api/messages?sale_id=${p25.orderSale}&kind=receipt`);
+    assert.strictEqual(receipt.body.length, 1, 'the receipt follows the payment');
+    assert.strictEqual(receipt.body[0].status, 'logged');
+  });
+
+  await test('the reader is forgiving: "2 chai" and "2x CHAI" are the same order', async () => {
+    const a = await commsLib.parseOrder(d, '2 chai');
+    assert.strictEqual(a.items.length, 1);
+    assert.strictEqual(a.items[0].variant_id, p25.tea.vid, JSON.stringify(a));
+    assert.strictEqual(a.items[0].qty, 2);
+    const b = await commsLib.parseOrder(d, '2x CHAI, 1 soda');
+    assert.strictEqual(b.items.length, 2, JSON.stringify(b));
+    assert.strictEqual(b.items[1].variant_id, p25.soda.vid);
+    const barcode = await commsLib.parseOrder(d, '1 79003');
+    assert.ok(barcode.items.length <= 1);
+  });
+
+  await test('a message we cannot read gets the catalogue, never silence', async () => {
+    const menu = await J({ path: '/api/webhooks/comms', method: 'POST', body: { from: '0700111222', text: 'menu' } });
+    assert.strictEqual(menu.status, 200, JSON.stringify(menu.body));
+    assert.strictEqual(menu.body.kind, 'catalogue');
+    const nonsense = await J({ path: '/api/webhooks/comms', method: 'POST', body: { from: '0700111222', text: 'bring me a cow' } });
+    assert.strictEqual(nonsense.status, 200, JSON.stringify(nonsense.body));
+    assert.strictEqual(nonsense.body.kind, 'unread');
+    const partial = await J({ path: '/api/webhooks/comms', method: 'POST', body: { from: '0700111222', text: '2 CHAI, 3 flying cars' } });
+    assert.strictEqual(partial.body.kind, 'order');
+    assert.strictEqual(partial.body.items.length, 1, 'what we can read is ordered');
+    assert.strictEqual(partial.body.unmatched.length, 1, 'what we cannot is named back');
+  });
+
+  await test('a broadcast reaches a segment (Phase 24 → 25)', async () => {
+    const r = await authJ({ path: '/api/comms/broadcast', method: 'POST', body: { segment: 'all', body: 'Weekend offer — 10% off everything' } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.audience >= 1, JSON.stringify(r.body));
+    assert.strictEqual(r.body.sent, r.body.audience, 'everyone with a phone was messaged');
+    const unknown = await authJ({ path: '/api/comms/broadcast', method: 'POST', body: { segment: 'nonsense', body: 'x' } });
+    assert.strictEqual(unknown.status, 400);
+  });
+
+  await test('low stock nudges the owner once a day, not once a sale', async () => {
+    const low = await mkP({ name: 'P25 Low', sku: 'LOW', barcode: '79003', cost: 50, price: 80 }, 3);
+    await authJ({ path: `/api/products/${low.id}`, method: 'PUT', body: { reorder_level: 5 } });
+    const a = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: low.vid, qty: 1 }], payment: { method: 'cash', amount: 80 } } });
+    assert.strictEqual(a.status, 200, JSON.stringify(a.body));
+    await tick();
+    const b = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: low.vid, qty: 1 }], payment: { method: 'cash', amount: 80 } } });
+    assert.strictEqual(b.status, 200, JSON.stringify(b.body));
+    await tick();
+    const alerts = await authJ('/api/messages?kind=low_stock');
+    assert.strictEqual(alerts.body.length, 1, JSON.stringify(alerts.body.map((m) => m.body)));
+    assert.ok(/P25 Low is down to/.test(alerts.body[0].body), alerts.body[0].body);
+    assert.strictEqual(d.prepare('SELECT * FROM messages WHERE kind = ?').get('low_stock').to_number, '+254700000002');
   });
 
   server.close();

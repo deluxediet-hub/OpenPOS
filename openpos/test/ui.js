@@ -59,7 +59,7 @@ async function waitFor(fn, label, timeout = 8000) {
 
   // Phase 24: the shop switches promotions + loyalty on, so the Marketing tab
   // appears the way it would for a shop that asked for it.
-  for (const capability of ['promotions', 'loyalty']) {
+  for (const capability of ['promotions', 'loyalty', 'comms']) {
     const r = await fetch(BASE + '/api/capabilities', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', cookie },
@@ -193,6 +193,21 @@ async function waitFor(fn, label, timeout = 8000) {
       // the till shows the offer and the customer's points
       ck('the till has a place for offers and points',
         !!pos0.w.document.querySelector('#p-offers') && !!pos0.w.document.querySelector('#p-points'));
+
+      // ---------------- Phase 25: messages from the same screen ----------------
+      await waitFor(() => mw.document.querySelector('#mk-msg-rows'), 'the messages table');
+      ck('the messages table explains itself before anything is sent',
+        /no messages yet/.test(mw.document.querySelector('#mk-msg-rows').textContent),
+        mw.document.querySelector('#mk-msg-rows').textContent.slice(0, 60));
+      mw.document.querySelector('#mk-msg-to').value = '0712 345 678';
+      mw.document.querySelector('#mk-msg-body').value = 'UI message';
+      click(mw, mw.document.querySelector('#mk-msg-send'));
+      await waitFor(() => /UI message/.test(mw.document.querySelector('#mk-msg-rows').textContent),
+        'the sent message in the list :: ' + mw.document.querySelector('#mk-msg-note').textContent, 15000);
+      ck('a message sent from the screen appears in the shop outbox', true);
+      ck('the outbox shows who it went to',
+        /\+254712345678/.test(mw.document.querySelector('#mk-msg-rows').textContent),
+        mw.document.querySelector('#mk-msg-rows').textContent.slice(0, 120));
     }
 
     ck('manager page booted without script errors', mgr.errs.length === 0, mgr.errs.join(' | '));

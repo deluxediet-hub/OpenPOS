@@ -304,8 +304,10 @@ window.OP = (() => {
       }
       return data;
     } catch (e) {
-      // offline fallback for GETs
-      if (isGet) {
+      // OFFLINE fallback for GETs — only when the browser really is offline.
+      // While online, a stale cache is worse than an honest error: a shop must
+      // never make a decision on a list it cannot refresh.
+      if (isGet && navigator.onLine === false) {
         try {
           if (path.includes('/api/products')) {
             const c = localStorage.getItem('op_cache_products');

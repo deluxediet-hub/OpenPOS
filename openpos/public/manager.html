@@ -1259,6 +1259,25 @@
         </div>
       </div>
 
+      <div class="card" style="margin-bottom:14px">
+        <h3>WhatsApp &amp; SMS</h3>
+        <p class="muted small" style="margin:0 0 8px">Ordering by message uses the same stock and the same book as the till.
+          An unpaid order holds nothing; the money moves it.</p>
+        <div class="grid cols-3">
+          <label class="f"><span>To</span><input id="mk-msg-to" placeholder="0712 345 678"></label>
+          <label class="f"><span>Message</span><input id="mk-msg-body" placeholder="Karibu — your order is ready"></label>
+          <label class="f"><span>&nbsp;</span><button class="btn" id="mk-msg-send" type="button">Send</button></label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn ghost small" id="mk-catalogue" type="button">Share the catalogue</button>
+          <div class="msg" id="mk-msg-note" style="margin:0"></div>
+        </div>
+        <table style="margin-top:10px">
+          <thead><tr><th>When</th><th>To</th><th>What</th><th>Body</th><th>Status</th></tr></thead>
+          <tbody id="mk-msg-rows"></tbody>
+        </table>
+      </div>
+
       <div class="card">
         <h3>Loyalty — points that behave like money</h3>
         <p class="muted small" id="mk-loy-off" style="margin:0 0 8px"></p>
@@ -1419,11 +1438,47 @@ async function loadMarketing() {
     $('#mk-type').onchange = mkShapeForm;
     $('#mk-applies').onchange = mkShapeForm;
     $('#mk-save-loyalty').onclick = mkSaveLoyalty;
+    $('#mk-msg-send').onclick = mkSendMessage;
+    $('#mk-catalogue').onclick = mkShareCatalogue;
   }
   await loadMarketingData();
+  await mkDrawMessages();
 }
 
+async function mkSendMessage() {
+  try {
+    await api('/api/messages/send', {
+      method: 'POST',
+      body: { to: $('#mk-msg-to').value.trim(), body: $('#mk-msg-body').value.trim() }
+    });
+    $('#mk-msg-body').value = '';
+    toast($('#mk-msg-note'), 'message sent', true);
+    await mkDrawMessages();
+  } catch (e) {
+    toast($('#mk-msg-note'), e.message, false);
+  }
+}
+
+async function mkShareCatalogue() {
+  try {
+    const r = await api('/api/comms/catalogue', {
+      method: 'POST',
+      body: { to: $('#mk-msg-to').value.trim(), limit: 20 }
+    });
+    toast($('#mk-msg-note'), `catalogue sent (${r.status})`, true);
+    await mkDrawMessages();
+  } catch (e) {
+    toast($('#mk-msg-note'), e.message, false);
+  }
+}
+
+// Two refreshes can be in flight at once (the tab opens one, a save starts
+// another). Only the newest one is allowed to paint — otherwise a slow, older
+// reply overwrites the screen the shopkeeper is looking at with stale rows.
+let mkGen = 0;
+
 async function loadMarketingData() {
+  const gen = ++mkGen;
   const [offers, products, categories, customers, segments, perf, loy] = await Promise.all([
     api('/api/promos').catch(() => []),
     api('/api/products').catch(() => []),
@@ -1433,6 +1488,7 @@ async function loadMarketingData() {
     api('/api/reports/promotions').catch(() => ({ rows: [] })),
     api('/api/loyalty/settings').catch(() => ({}))
   ]);
+  if (gen !== mkGen) return null;
   MK = { products, categories, customers, segments: segments.segments || [], offers };
   mkDrawOffers(offers, perf.rows || []);
   $('#mk-perf-rows').innerHTML = (perf.rows || []).map((r) => `
@@ -1577,6 +1633,21 @@ function mkDrawLoyalty(loy) {
   $('#mk-ptval').value = loy.point_value || 1;
   $('#mk-maxpct').value = loy.max_redeem_pct != null ? loy.max_redeem_pct : 50;
   $('#mk-tender').value = loy.tender === false ? '0' : '1';
+}
+
+async function mkDrawMessages() {
+  const rows = await api('/api/messages?limit=25').catch(() => []);
+  const pill = (st) => (st === 'sent' || st === 'logged'
+    ? `<span class="pill g">${esc(st)}</span>`
+    : (st === 'failed' ? `<span class="pill r">failed</span>` : `<span class="pill">${esc(st)}</span>`));
+  $('#mk-msg-rows').innerHTML = rows.map((m) => `
+    <tr>
+      <td class="small muted">${new Date(m.created_at).toLocaleString()}</td>
+      <td class="small mono">${esc(m.to_number || m.from_number || '')}</td>
+      <td class="small">${esc(m.kind)}${m.direction === 'in' ? ' <span class="pill">in</span>' : ''}</td>
+      <td class="small">${esc(String(m.body || '').slice(0, 70))}</td>
+      <td>${pill(m.status)}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">no messages yet</td></tr>';
 }
 
 async function mkSaveLoyalty() {

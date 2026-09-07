@@ -16,6 +16,7 @@ const caps = require('./lib/capabilities');
 const promos = require('./lib/promos');
 const loyalty = require('./lib/loyalty');
 const segments = require('./lib/segments');
+const comms = require('./lib/comms');
 const { TRADES } = require('./lib/sample');
 const mods = require('./modules/loader');
 
@@ -720,17 +721,316 @@ function createApp(d) {
     res.json({ report: { id: rep.id, module: rep.module, title: rep.title, titleSw: rep.titleSw }, columns, rows, ...extra });
   });
 
-  // ================= Phase 24 — promotions, loyalty & marketing =================
-  // An offer is DATA: it lives in `promos`, is matched by the engine in
-  // lib/promos.js, and lands on the basket inside prepareSaleLines — so every
-  // payment method, every till and every channel gets the same discount.
-
+  // A capability gate for whole route groups (R-C): a switched-off feature has
+  // no routes to call, not routes that refuse.
   const requireCap = (id) => (req, res, next) => {
     if (!(caps.getCapabilityMap(d) || {})[id]) {
       return res.status(403).json({ error: `switch on the ${id} capability first` });
     }
     next();
   };
+
+  // ================= Phase 25 — WhatsApp & customer commerce =================
+  // One inventory, one book: an order that arrives by message becomes the same
+  // sale the till would have made (R-CH). The provider is replaceable; the
+  // message is evidence either way.
+
+  /** Channel orders are made by the business, not by whoever is on shift. */
+  function shopUser() {
+    const u = d.prepare("SELECT * FROM users WHERE role = 'owner' AND active = 1 ORDER BY id LIMIT 1").get();
+    if (u) return u;
+    return d.prepare('SELECT * FROM users WHERE active = 1 ORDER BY id LIMIT 1').get();
+  }
+
+  function phoneFor(customerId, fallback) {
+    if (!customerId) return comms.normalisePhone(fallback);
+    const c = d.prepare('SELECT phone FROM customers WHERE id = ?').get(customerId);
+    return comms.normalisePhone((c && c.phone) || fallback);
+  }
+
+  /** The receipt a paid sale owes its customer — queued the moment it is paid. */
+  function queueReceipt(d, saleId) {
+    try {
+      if (!(caps.getCapabilityMap(d) || {}).comms) return null;
+      const cfg = comms.settings(d, dbm);
+      if (!cfg.enabled) return null;
+      const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
+      if (!sale) return null;
+      if (d.prepare("SELECT id FROM messages WHERE sale_id = ? AND kind = 'receipt' LIMIT 1").get(sale.id)) return null;
+      const to = phoneFor(sale.customer_id, null);
+      if (!to) return null;
+      const payload = buildSalePayload(d, sale.id);
+      const biz = dbm.getSetting(d, 'business', {}) || {};
+      const body = comms.receiptText(biz, payload.sale, payload.items.map((i) => ({ qty: i.qty, name: i.name, gross: i.gross })));
+      return comms.enqueueAndDispatch(d, dbm, {
+        to, body, kind: 'receipt', customerId: sale.customer_id, saleId: sale.id,
+        channel: cfg.default_channel
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** Low stock after a sale: one nudge a day, to the owner, not the customer. */
+  function maybeLowStockAlerts(d, lines) {
+    try {
+      if (!(caps.getCapabilityMap(d) || {}).comms) return 0;
+      const cfg = comms.settings(d, dbm);
+      if (!cfg.enabled || !cfg.low_stock_alerts) return 0;
+      const to = comms.normalisePhone(cfg.owner_phone || cfg.business_phone);
+      if (!to) return 0;
+      const today = new Date().toISOString().slice(0, 10);
+      let sent = 0;
+      for (const L of lines || []) {
+        const p = d.prepare('SELECT * FROM products WHERE id = ?').get(L.product.id);
+        if (!p || !p.reorder_level) continue;
+        const qty = d.prepare('SELECT COALESCE(SUM(qty), 0) AS q FROM stock WHERE variant_id = ?').get(L.variant.id).q;
+        if (qty > Number(p.reorder_level)) continue;
+        const already = d
+          .prepare("SELECT id FROM messages WHERE kind = 'low_stock' AND created_at >= ? AND meta LIKE ?")
+          .get(`${today}T00:00:00.000Z`, `%"product_id":${p.id}%`);
+        if (already) continue;
+        comms.enqueueAndDispatch(d, dbm, {
+          to, kind: 'low_stock', meta: { product_id: p.id, qty, reorder_level: Number(p.reorder_level) },
+          body: `${p.name} is down to ${qty} (reorder at ${p.reorder_level}).`
+        });
+        sent++;
+      }
+      return sent;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  // ---- messages -------------------------------------------------------------
+  app.get('/api/messages', me, can('comms.send'), (req, res) => {
+    const q = req.query || {};
+    res.json(comms.list(d, {
+      limit: Number(q.limit) || 100,
+      customerId: numOrNull(q.customer_id),
+      saleId: numOrNull(q.sale_id),
+      direction: q.direction || null,
+      kind: q.kind || null
+    }));
+  });
+
+  app.post('/api/messages/send', me, can('comms.send'), requireCap('comms'), async (req, res) => {
+    try {
+      const b = req.body || {};
+      const row = await comms.send(d, dbm, {
+        to: b.to, body: b.body, channel: b.channel,
+        kind: String(b.kind || 'note'),
+        customerId: numOrNull(b.customer_id), saleId: numOrNull(b.sale_id)
+      });
+      dbm.audit(d, { userId: req.user.id, action: 'message/send', entity: 'message', entityId: String(row.id), detail: { to: row.to_number, kind: row.kind } });
+      res.json(row);
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/sales/:id/send-receipt', me, can('comms.send'), requireCap('comms'), async (req, res) => {
+    try {
+      const id = numOrNull(req.params.id);
+      const payload = buildSalePayload(d, id);
+      const to = phoneFor(payload.sale.customer_id, (req.body || {}).to);
+      if (!to) return res.status(400).json({ error: 'this sale has no customer with a phone number' });
+      const biz = dbm.getSetting(d, 'business', {}) || {};
+      const body = comms.receiptText(biz, payload.sale, payload.items.map((i) => ({ qty: i.qty, name: i.name, gross: i.gross })));
+      const row = await comms.send(d, dbm, {
+        to, body, kind: 'receipt', customerId: payload.sale.customer_id, saleId: id,
+        channel: (req.body || {}).channel
+      });
+      res.json(row);
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/customers/:id/send-statement', me, can('comms.send'), requireCap('comms'), async (req, res) => {
+    try {
+      const cid = numOrNull(req.params.id);
+      const customer = d.prepare('SELECT * FROM customers WHERE id = ?').get(cid);
+      if (!customer) return res.status(404).json({ error: 'customer not found' });
+      const to = phoneFor(cid, (req.body || {}).to);
+      if (!to) return res.status(400).json({ error: 'this customer has no phone number' });
+      const rows = d.prepare('SELECT * FROM customer_ledger WHERE customer_id = ? ORDER BY id').all(cid);
+      let bal = 0;
+      const withBal = rows.map((r) => {
+        bal += r.type === 'credit_sale' ? Number(r.amount) : -Number(r.amount);
+        return { ...r, balance: bal };
+      });
+      const biz = dbm.getSetting(d, 'business', {}) || {};
+      const body = comms.statementText(biz, { ...customer, deni_outstanding: bal }, withBal);
+      const row = await comms.send(d, dbm, { to, body, kind: 'statement', customerId: cid, channel: (req.body || {}).channel });
+      res.json(row);
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /** The mini catalogue: share it, or read it back as JSON. */
+  app.post('/api/comms/catalogue', me, can('comms.send'), requireCap('comms'), async (req, res) => {
+    try {
+      const b = req.body || {};
+      const items = comms.catalogue(d, { limit: Number(b.limit) || 30, search: b.search || '' });
+      const biz = dbm.getSetting(d, 'business', {}) || {};
+      const body = comms.catalogueText(biz, items);
+      if (b.dry_run) return res.json({ items, body });
+      const to = phoneFor(numOrNull(b.customer_id), b.to);
+      if (!to) return res.status(400).json({ error: 'a customer or a phone number is needed' });
+      const row = await comms.send(d, dbm, { to, body, kind: 'catalogue', customerId: numOrNull(b.customer_id), channel: b.channel });
+      res.json(row);
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /** A campaign by message: one segment, one message (Phase 24 segments). */
+  app.post('/api/comms/broadcast', me, can('campaigns.manage'), requireCap('comms'), async (req, res) => {
+    try {
+      const b = req.body || {};
+      const segment = String(b.segment || '');
+      if (!segments.SEGMENTS.some((s) => s.id === segment)) return res.status(400).json({ error: 'unknown segment' });
+      const branches = visibleBranches(d, req.user).map((x) => x.id);
+      const aud = segments.audience(d, segment, { branches, limit: 1000 });
+      const out = [];
+      for (const c of aud.customers) {
+        const to = comms.normalisePhone(c.phone);
+        if (!to) continue;
+        out.push(await comms.send(d, dbm, { to, body: String(b.body || ''), kind: 'broadcast', customerId: c.id, channel: b.channel, meta: { segment } }));
+      }
+      dbm.audit(d, { userId: req.user.id, action: 'comms/broadcast', entity: 'segment', entityId: segment, detail: { audience: aud.count, sent: out.length } });
+      res.json({ ok: true, segment, audience: aud.count, sent: out.length, messages: out.slice(0, 5) });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  // ---- inbound: a message becomes an order ----------------------------------
+  // Provider payloads differ; this door normalises them. A message we cannot
+  // read is answered with the catalogue, never with silence.
+  app.post('/api/webhooks/comms', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const cfg = comms.settings(d, dbm);
+      if (cfg.secret && String(b.secret || req.headers['x-openpos-secret'] || '') !== cfg.secret) {
+        return res.status(401).json({ error: 'bad secret' });
+      }
+      const provider = String(b.provider || 'manual');
+      const from = b.from || b.From || b.msisdn || b.phone || '';
+      const text = String(b.text || b.body || b.Body || b.message || '').trim();
+      const ref = b.provider_ref || b.MessageSid || b.id || null;
+      const channel = String(b.channel || 'whatsapp');
+      if (!from || !text) return res.status(400).json({ error: 'from and text are required' });
+      const inbound = comms.receive(d, { provider, providerRef: ref ? String(ref) : null, from, body: text, channel });
+      // A provider replaying a webhook must never double an order (R-PAY).
+      if (inbound.duplicate && inbound.message.sale_id) {
+        const payload = buildSalePayload(d, inbound.message.sale_id);
+        return res.json({
+          ok: true, kind: 'order', duplicate: true, sale: payload.sale,
+          payment_reference: `${cfg.account_prefix || ''}${payload.sale.invoice_no}`,
+          message: await comms.send(d, dbm, {
+            to: inbound.message.from_number, kind: 'payment_request', saleId: inbound.message.sale_id,
+            body: comms.paymentRequestText(dbm.getSetting(d, 'business', {}) || {}, payload.sale, cfg), channel
+          })
+        });
+      }
+      res.json(await handleInboundMessage(d, inbound, text, { channel }));
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  async function handleInboundMessage(d, inbound, text, { channel }) {
+    const cfg = comms.settings(d, dbm);
+    const biz = dbm.getSetting(d, 'business', {}) || {};
+    const from = inbound.message.from_number;
+    const customer = d.prepare('SELECT * FROM customers WHERE phone = ? OR phone = ? ORDER BY id LIMIT 1')
+      .get(from, String(from).replace(/^\+254/, '0'));
+    const { items, unmatched } = comms.parseOrder(d, text);
+    const greet = /^(hi|hello|habari|sasa|menu|catalogue|catalog|bei|prices?)\b/i.test(text) && !items.length;
+    if ((!items.length && !unmatched.length) || greet) {
+      const body = comms.catalogueText(biz, comms.catalogue(d, { limit: 20 }));
+      return {
+        ok: true, kind: 'catalogue',
+        message: await comms.send(d, dbm, { to: from, body, kind: 'catalogue', customerId: customer ? customer.id : null, channel })
+      };
+    }
+    if (!items.length) {
+      const body = `Sikuelewa ("${text.slice(0, 60)}"). Jaribu: "2 Tea, 1 Soda". Tuma "menu" kuona bidhaa.`;
+      return {
+        ok: false, kind: 'unread', unmatched,
+        message: await comms.send(d, dbm, { to: from, body, kind: 'reply', customerId: customer ? customer.id : null, channel })
+      };
+    }
+    if (!cfg.order_enabled) {
+      const body = 'Pole — ordering by message is switched off right now. Please visit the shop.';
+      return {
+        ok: false, kind: 'orders_off',
+        message: await comms.send(d, dbm, { to: from, body, kind: 'reply', customerId: customer ? customer.id : null, channel })
+      };
+    }
+    // The order is a real sale: held until the money lands, so stock moves
+    // exactly once, at payment — the same as a held sale at the till.
+    const user = shopUser();
+    if (!user) throw httpError(400, 'no user to book this order against');
+    const r = createSaleNow(d, {
+      user, channel: 'whatsapp',
+      body: { items, customer_id: customer ? customer.id : null, hold: true, note: `whatsapp order from ${from}` }
+    });
+    if (inbound.message && inbound.message.id) {
+      d.prepare('UPDATE messages SET sale_id = ? WHERE id = ?').run(r.id, inbound.message.id);
+    }
+    const payload = buildSalePayload(d, r.id);
+    const request = comms.paymentRequestText(biz, payload.sale, cfg);
+    const msg = await comms.send(d, dbm, {
+      to: from, body: request, kind: 'payment_request',
+      customerId: customer ? customer.id : null, saleId: r.id, channel,
+      meta: { unmatched }
+    });
+    dbm.audit(d, {
+      userId: user.id, branchId: payload.sale.branch_id, action: 'order/inbound',
+      entity: 'sale', entityId: String(r.id),
+      detail: { channel, from, invoice: r.invoice_no, items: items.length, unmatched }
+    });
+    return {
+      ok: true, kind: 'order', sale: payload.sale, items, unmatched, message: msg,
+      payment_reference: `${cfg.account_prefix || ''}${payload.sale.invoice_no}`
+    };
+  }
+
+  app.get('/api/settings/comms', me, can('settings.manage'), (req, res) => {
+    res.json({ ...comms.settings(d, dbm), providers: Object.values(comms.PROVIDERS) });
+  });
+
+  app.put('/api/settings/comms', me, can('settings.manage'), (req, res) => {
+    const b = req.body || {};
+    const next = comms.saveSettings(d, dbm, {
+      enabled: b.enabled !== undefined ? !!b.enabled : undefined,
+      provider: ['log', 'africas_talking', 'twilio'].includes(b.provider) ? b.provider : undefined,
+      default_channel: comms.CHANNELS.includes(b.default_channel) ? b.default_channel : undefined,
+      business_phone: b.business_phone !== undefined ? String(b.business_phone).trim() : undefined,
+      owner_phone: b.owner_phone !== undefined ? String(b.owner_phone).trim() : undefined,
+      order_enabled: b.order_enabled !== undefined ? !!b.order_enabled : undefined,
+      low_stock_alerts: b.low_stock_alerts !== undefined ? !!b.low_stock_alerts : undefined,
+      paybill: b.paybill !== undefined ? String(b.paybill).trim() : undefined,
+      account_prefix: b.account_prefix !== undefined ? String(b.account_prefix).trim() : undefined,
+      africas_talking: b.africas_talking || undefined,
+      twilio: b.twilio || undefined
+    });
+    dbm.audit(d, {
+      userId: req.user.id, action: 'settings/comms', entity: 'setting', entityId: 'comms',
+      detail: { enabled: next.enabled, provider: next.provider, orders: next.order_enabled }
+    });
+    res.json({ ...next, providers: Object.values(comms.PROVIDERS) });
+  });
+
+  // ================= Phase 24 — promotions, loyalty & marketing =================
+  // An offer is DATA: it lives in `promos`, is matched by the engine in
+  // lib/promos.js, and lands on the basket inside prepareSaleLines — so every
+  // payment method, every till and every channel gets the same discount.
+
   const promoRow = (r) => ({
     id: r.id, branch_id: r.branch_id, name: r.name, type: r.type, value: r.value,
     applies_to: r.applies_to, applies_ref: r.applies_ref, code: r.code,
@@ -4039,6 +4339,9 @@ function createApp(d) {
         L.batchId = first ? first.batch_id : null;
       }
     }
+    // Phase 25: now that the stock has actually left, anything that fell to its
+    // reorder level tells the owner once (not once per line, once per day).
+    maybeLowStockAlerts(d, lines);
   }
 
   // Phase 8: payments go through the engine (lib/payments.js) — method
@@ -4073,6 +4376,13 @@ function createApp(d) {
     if (loyaltyPoints > 0) {
       loyalty.spend(d, dbm, { customer: loyaltyCustomer, saleId, points: loyaltyPoints, userId: user ? user.id : null });
     }
+    // Phase 25: a paid sale owes its customer a receipt, whichever door paid
+    // it. Scheduled, not immediate: the lines are written after this call, and
+    // a receipt with no items on it is worse than one a second later.
+    try {
+      const fresh = d.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
+      if (fresh && fresh.status === 'paid') setImmediate(() => queueReceipt(d, saleId));
+    } catch (_) {}
     return r;
   }
 
@@ -4114,34 +4424,37 @@ function createApp(d) {
 
   // One call = scan-to-receipt: validate → freeze prices → (stock + pay) or hold.
   // Phase 17: supports client_id idempotency, offline_created, sync_status
-  app.post('/api/sales', me, (req, res) => {
+  function createSaleNow(d, { user, body, channel = 'pos' }) {
     try {
-      requireOpenShift(d, req.user);
-      const b = req.body || {};
+      // A shift gates a human at a till; a channel order arrives on its own
+      // clock (a customer messages at midnight) and settles against the same
+      // stock and money all the same.
+      if (channel === 'pos') requireOpenShift(d, user);
+      const b = body || {};
       // Phase 17 idempotency: client_id dedup
       const clientId = b.client_id ? String(b.client_id).trim() : null;
       if (clientId) {
         const existing = d.prepare('SELECT * FROM sales WHERE client_id = ?').get(clientId);
         if (existing) {
           // idempotent return — zero duplicate money/stock
-          return res.json({ ok: true, duplicate: true, client_id: clientId, ...buildSalePayload(d, existing.id) });
+          return { duplicate: true, id: existing.id, clientId };
         }
       }
       const kind = b.kind === 'quote' ? 'quote' : 'sale';
       if (kind === 'quote' && b.payment) {
-        return res.status(400).json({ error: 'quotes are held, not paid — convert the quote when the customer is ready' });
+        throw httpError(400, 'quotes are held, not paid — convert the quote when the customer is ready');
       }
       const hold = b.hold === true || kind === 'quote';
       const approver = b.override_pin ? supervisorFromPin(b.override_pin) : null;
-      if (b.oversell && !['owner', 'manager'].includes(req.user.role)) {
-        return res.status(403).json({ error: 'overselling stock is a manager/owner act (R-S8)' });
+      if (b.oversell && !['owner', 'manager'].includes(user.role)) {
+        throw httpError(403, 'overselling stock is a manager/owner act (R-S8)');
       }
-      const ctx = saleContext(d, req.user);
+      const ctx = saleContext(d, user);
       if (!ctx.branchId || !ctx.locationId) {
-        return res.status(400).json({ error: 'no selling location for this user — assign a branch or register first' });
+        throw httpError(400, 'no selling location for this user — assign a branch or register first');
       }
       const { lines, customer, offers } = prepareSaleLines(d, {
-        user: req.user, ctx, customerId: numOrNull(b.customer_id),
+        user: user, ctx, customerId: numOrNull(b.customer_id),
         promoCode: b.promo_code ? String(b.promo_code).trim() : (Array.isArray(b.promo_codes) ? b.promo_codes : null),
         items: b.items, approver, allowOversell: b.oversell === true
       });
@@ -4163,19 +4476,19 @@ function createApp(d) {
         const id = d
           .prepare(
             `INSERT INTO sales (branch_id, location_id, register_id, terminal, order_no, invoice_no, customer_id, user_id, cashier_id, status,
-               subtotal, discount, net, tax, gross, tender, note, etims_status, discount_by, kind, created_at, client_id, sync_status, version, offline_created)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, 1, ?)`
+               subtotal, discount, net, tax, gross, tender, note, etims_status, discount_by, kind, created_at, client_id, sync_status, version, offline_created, channel)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
           )
           .run(ctx.branchId, ctx.locationId, ctx.register ? ctx.register.id : null, ctx.register ? ctx.register.name : '',
-            orderNo, invoiceNo, customer ? customer.id : null, req.user.id, req.user.id, hold ? 'suspended' : 'open',
+            orderNo, invoiceNo, customer ? customer.id : null, user.id, user.id, hold ? 'suspended' : 'open',
             totals.subtotal, totals.discount, totals.net, totals.tax, totals.gross,
             String(b.note || '').trim(), biz.kraPin ? 'pending' : 'exempt', discountBy, kind, t,
-            clientId, syncStatus, offlineCreated)
+            clientId, syncStatus, offlineCreated, channel)
           .lastInsertRowid;
         if (!hold) {
-          moveStockForSale(d, { user: req.user, ctx, lines, ref: invoiceNo, allowOversell: b.oversell === true, client_id: clientId });
+          moveStockForSale(d, { user: user, ctx, lines, ref: invoiceNo, allowOversell: b.oversell === true, client_id: clientId });
           const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(id);
-          payRes = applyPayment(d, { user: req.user, saleId: id, sale, payment: b.payment, discountBy });
+          payRes = applyPayment(d, { user: user, saleId: id, sale, payment: b.payment, discountBy });
         }
         const ins = d.prepare(
           `INSERT INTO sale_items (sale_id, product_id, variant_id, name, qty, unit, line_discount, net, tax, gross, tax_type, kra_item_code, batch_id, line_note, age_verified, unit_price, module_data)
@@ -4191,7 +4504,7 @@ function createApp(d) {
         if (!hold) {
           runModuleCommit(d, {
             d, sale: d.prepare('SELECT * FROM sales WHERE id = ?').get(id),
-            lines, user: req.user, ctx
+            lines, user: user, ctx
           });
         }
         // Phase 24: which offer discounted this sale (campaign evidence).
@@ -4211,14 +4524,34 @@ function createApp(d) {
       });
       const id = run();
       if (!hold) maybeEarnLoyalty(d, id);
+
+      return {
+        id, clientId, payRes, invoiceNo, totals, offers, hold,
+        discountBy, offlineCreated, syncStatus, kind, ctx
+      };
+    } catch (e) {
+      throw e;
+    }
+  }
+
+  app.post('/api/sales', me, (req, res) => {
+    try {
+      requireOpenShift(d, req.user);
+      const r = createSaleNow(d, { user: req.user, body: req.body, channel: 'pos' });
+      if (r.duplicate) {
+        return res.json({ ok: true, duplicate: true, client_id: r.clientId, ...buildSalePayload(d, r.id) });
+      }
+      const { id, ctx, invoiceNo, totals, offers, hold, payRes, discountBy, clientId, offlineCreated } = r;
+      if (!hold) maybeEarnLoyalty(d, id);
       dbm.audit(d, {
         userId: req.user.id, branchId: ctx.branchId, action: hold ? 'sale/hold' : 'sale/create',
         entity: 'sale', entityId: String(id),
         detail: {
-          invoice: invoiceNo, items: lines.length, gross: totals.gross, discount: totals.discount,
-          hold, method: b.payment ? b.payment.method : null, pending: payRes ? payRes.payment.status === 'pending' : undefined,
-          oversell: b.oversell === true || undefined,
-          discountApprover: discountBy ? 'PIN' : undefined, promo: b.promo_code || undefined,
+          invoice: invoiceNo, items: r.totals ? undefined : undefined, gross: totals.gross, discount: totals.discount,
+          hold, method: req.body && req.body.payment ? req.body.payment.method : null,
+          pending: payRes ? payRes.payment.status === 'pending' : undefined,
+          oversell: req.body && req.body.oversell === true || undefined,
+          discountApprover: discountBy ? 'PIN' : undefined, promo: req.body && req.body.promo_code || undefined,
           offers: offers && offers.applied && offers.applied.length ? offers.applied.map((a) => a.name) : undefined,
           client_id: clientId || undefined, offline_created: offlineCreated || undefined
         }
@@ -4229,7 +4562,6 @@ function createApp(d) {
         if (saleRow && (saleRow.status === 'paid' || saleRow.status === 'partial')) {
           const etims = require('./lib/etims');
           etims.enqueueSale(d, saleRow, 'invoice');
-          // Try immediate transmit in background (non-blocking)
           setImmediate(() => {
             try {
               const q = d.prepare(`SELECT id FROM etims_queue WHERE sale_id = ? ORDER BY id DESC LIMIT 1`).get(id);
@@ -4326,7 +4658,10 @@ function createApp(d) {
   // Resume a held sale (kind 'sale'): stock moves exactly once, here.
   app.post('/api/sales/:id/pay', me, (req, res) => {
     try {
-      requireOpenShift(d, req.user);
+      const sale0 = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(req.params.id));
+      // A held sale from the till needs an open shift; a WhatsApp or web order
+      // is paid when the customer pays, wherever the cashier is (R-CH).
+      if (sale0 && (sale0.channel || 'pos') === 'pos') requireOpenShift(d, req.user);
       const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(numOrNull(req.params.id));
       if (!sale) return res.status(404).json({ error: 'not found' });
       if (sale.status !== 'suspended') return res.status(400).json({ error: `sale is ${sale.status}, not held` });
@@ -4572,6 +4907,12 @@ function createApp(d) {
           detail: { invoice: sale.invoice_no, method: p.method, amount: p.amount, code: b.code ? 'entered' : undefined, via: b.via || 'manual' }
         });
       }
+      // Phase 25: M-Pesa landing on a pending payment is the moment the sale is
+      // really paid — that is when its receipt goes out.
+      try {
+        const fresh = d.prepare('SELECT status FROM sales WHERE id = ?').get(p.sale_id);
+        if (fresh && fresh.status === 'paid') setImmediate(() => queueReceipt(d, p.sale_id));
+      } catch (_) {}
       res.json({ ok: true, already: !!r.already, ...buildSalePayload(d, p.sale_id), ...(r.mpesa ? { mpesa: r.mpesa } : {}) });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message });

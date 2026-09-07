@@ -21,6 +21,7 @@ const PERMISSIONS = [
   'reports.view', 'reports.sensitive',
   'audit.view',
   'promos.manage', 'loyalty.manage', 'campaigns.manage',
+  'comms.send', 'comms.manage',
   'capabilities.manage'
 ];
 
@@ -29,7 +30,7 @@ const ALL = PERMISSIONS;
 const ROLE_MAP = {
   owner: ALL,
   manager: ALL.filter((p) => p !== 'capabilities.manage' && p !== 'staff.permissions'),
-  cashier: ['products.view', 'stock.view', 'customers.view', 'reports.view'],
+  cashier: ['products.view', 'stock.view', 'customers.view', 'reports.view', 'comms.send'],
   staff: ['products.view', 'stock.view', 'customers.view']
 };
 

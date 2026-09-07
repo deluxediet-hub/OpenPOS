@@ -469,7 +469,22 @@ catalogue, **order-through-WhatsApp → the same sales engine**, notifications, 
 workflows. **Physical POS stock + online/social selling = one inventory.**
 - **Acceptance:** a WhatsApp order becomes a real sale decrementing the same stock; receipt
   arrives < 10s after payment.
+### Phase 25 — WhatsApp & Customer Commerce · Day 36
+Pluggable comms provider (Africa's Talking / Twilio + local-log fallback): WhatsApp/SMS
+receipts, payment requests (STK deep link), customer statements, product sharing, mini
+catalogue, **order-through-WhatsApp → the same sales engine**, notifications, low-stock/order
+workflows. **Physical POS stock + online/social selling = one inventory.**
+- **Acceptance:** a WhatsApp order becomes a real sale decrementing the same stock; receipt
+  arrives < 10s after payment.
 
+
+**Status (2026-09-07): done.** A message is evidence before it is anything else: every one is stored in `messages` (customer, sale, direction, provider, provider ref, status, error) *before* it is sent, so a shop with no airtime still has its own copy of every receipt it owes. `lib/comms.js` is the only file that knows a provider — `log` (the default: nothing leaves the shop, works with no internet), `africas_talking`, `twilio` — chosen in `settings.comms`.
+
+Ordering by message is not a new kind of sale. `POST /api/webhooks/comms` normalises any provider payload, `parseOrder` reads "2 chai, 1 soda" (SKU · name · barcode · #id, ranked so *chai* finds Chai before Chain Test), and the order becomes a **held** sale through the same `createSaleNow` the till uses, tagged `channel='whatsapp'`. Stock moves once, at payment, through the same engine (R-CH). A provider replaying a webhook cannot double it: inbound messages carry a unique `(provider, provider_ref)` and hold the sale they created.
+
+Built: send · send-receipt · send-statement · catalogue · broadcast-to-segment · comms settings · low-stock alerts to the owner (once a day) · a receipt the moment a sale is paid, whichever door paid it, including M-Pesa landing later. Cashiers may message customers (`comms.send`); only the owner configures the gateway.
+
+Acceptance (asserted in `npm test`): a WhatsApp order becomes a real sale decrementing the same stock, the receipt is queued the moment the payment lands, an unreadable message gets the catalogue rather than silence, and a replayed webhook produces one order, not two. Manager **Marketing** tab carries the outbox. 186 API tests, 17 UI steps.
 ### Phase 26 — Online Store / Omni-Channel · Days 37–38 (architecture-first, optional)
 One catalogue, one inventory, one customer; orders from POS / website / WhatsApp / manual /
 future marketplaces → **same sales & inventory engine**; simple PWA storefront; stock
