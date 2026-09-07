@@ -941,6 +941,99 @@
       </div>
     </section>
 
+    <!-- ============ REPORTS (Day 20) ============ -->
+    <section id="tab-reports" class="hidden">
+      <div class="card">
+        <div class="row" style="margin-bottom:10px;flex-wrap:wrap;gap:8px">
+          <h3 style="margin:0">Business Intelligence</h3>
+          <span class="spacer"></span>
+          <input type="date" id="rep-from" />
+          <input type="date" id="rep-to" />
+          <select id="rep-branch"><option value="">All branches</option></select>
+          <button class="btn small" id="rep-reload">Reload all</button>
+          <div class="msg" id="rep-msg" style="margin:0"></div>
+        </div>
+        <div class="grid cols-2" style="gap:14px">
+          <div>
+            <h4 style="margin:0 0 8px">Dashboards</h4>
+            <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:10px">
+              <button class="btn small" data-dash="owner">Owner</button>
+              <button class="btn small" data-dash="branch-manager">Branch Mgr</button>
+              <button class="btn small" data-dash="stock-manager">Stock Mgr</button>
+              <button class="btn small" data-dash="cashier">Cashier</button>
+            </div>
+            <div id="dash-owner" class="card" style="margin-bottom:10px"></div>
+            <div id="dash-bm" class="card" style="margin-bottom:10px"></div>
+            <div id="dash-sm" class="card" style="margin-bottom:10px"></div>
+            <div id="dash-cash" class="card" style="margin-bottom:10px"></div>
+          </div>
+          <div>
+            <h4 style="margin:0 0 8px">Quick questions</h4>
+            <div class="grid cols-2" id="rep-quick"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:14px">
+        <div class="card">
+          <div class="row" style="margin-bottom:8px">
+            <h4 style="margin:0">What sold? (drill down)</h4>
+            <span class="spacer"></span>
+            <select id="sales-group"><option value="product">Product</option><option value="variant">Variant</option><option value="category">Category</option><option value="branch">Branch</option><option value="cashier">Cashier</option><option value="day">Day</option></select>
+            <button class="btn small" id="sales-reload">Run</button>
+            <button class="btn small ghost" id="sales-csv">CSV</button>
+          </div>
+          <div style="overflow:auto;max-height:360px"><table><thead><tr><th>Item</th><th>Qty</th><th>Orders</th><th>Gross</th><th>Margin</th><th>Action</th></tr></thead><tbody id="sales-rows"></tbody></table></div>
+        </div>
+        <div class="card">
+          <div class="row" style="margin-bottom:8px">
+            <h4 style="margin:0">What made money? / Losing margin</h4>
+            <span class="spacer"></span>
+            <label class="check"><input type="checkbox" id="margin-losing"> Losing only</label>
+            <button class="btn small" id="margin-reload">Run</button>
+            <button class="btn small ghost" id="margin-csv">CSV</button>
+          </div>
+          <div style="overflow:auto;max-height:360px"><table><thead><tr><th>Product</th><th>Qty</th><th>Gross</th><th>COGS</th><th>Margin</th><th>%</th></tr></thead><tbody id="margin-rows"></tbody></table></div>
+        </div>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:14px">
+        <div class="card">
+          <h4 style="margin:0 0 8px">What isn't selling? (slow-moving)</h4>
+          <div class="row" style="gap:6px;margin-bottom:8px"><input id="slow-days" type="number" value="30" style="width:80px" /> days <button class="btn small" id="slow-reload">Run</button></div>
+          <div style="overflow:auto;max-height:260px"><table><thead><tr><th>Product</th><th>Stock</th><th>Value tied</th><th>Last sale</th></tr></thead><tbody id="slow-rows"></tbody></table></div>
+        </div>
+        <div class="card">
+          <h4 style="margin:0 0 8px">What's tied up? Dead stock + stock value</h4>
+          <div class="row" style="gap:6px;margin-bottom:8px"><input id="dead-days" type="number" value="60" style="width:80px" /> days <button class="btn small" id="dead-reload">Run</button></div>
+          <div style="overflow:auto;max-height:260px"><table><thead><tr><th>Product</th><th>Stock</th><th>Value</th><th>Last consumption</th></tr></thead><tbody id="dead-rows"></tbody></table></div>
+          <div id="stock-value-total" style="margin-top:8px" class="muted small"></div>
+        </div>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:14px">
+        <div class="card">
+          <h4 style="margin:0 0 8px">Best / worst cashier</h4>
+          <div style="overflow:auto;max-height:260px"><table><thead><tr><th>Cashier</th><th>Orders</th><th>Gross</th><th>Discount %</th><th>Voids</th><th>Returns</th></tr></thead><tbody id="cashier-rows"></tbody></table></div>
+        </div>
+        <div class="card">
+          <h4 style="margin:0 0 8px">Where discounts / refunds / cash shortages high?</h4>
+          <div class="row" style="gap:6px;margin-bottom:8px">
+            <button class="btn small" id="disc-reload">Discounts</button>
+            <button class="btn small" id="refund-reload">Refunds/Voids</button>
+            <button class="btn small" id="short-reload">Cash shortages</button>
+          </div>
+          <div id="disc-area"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h4 style="margin:0 0 8px">What to reorder?</h4>
+        <div class="row" style="gap:6px;margin-bottom:8px"><input id="reorder-cover" type="number" value="14" style="width:80px" /> days cover <button class="btn small" id="reorder-reload">Run</button></div>
+        <div style="overflow:auto"><table><thead><tr><th>Product</th><th>Stock</th><th>Velocity/d</th><th>Days cover</th><th>Suggested</th><th>Supplier</th></tr></thead><tbody id="reorder-rows"></tbody></table></div>
+      </div>
+    </section>
+
     <!-- ============ SETTINGS ============ -->
     <section id="tab-settings" class="hidden">
       <div class="card">
@@ -1018,6 +1111,7 @@ const TABS = [
   { id: 'payments',   label: 'payments',   always: true },
   { id: 'pricing',    label: 'pricing',    always: true },
   { id: 'finance',    label: 'finance',    always: true },
+  { id: 'reports',    label: 'reports',    always: true },
   { id: 'staff',      label: 'staff',     cap: 'staff_roles' },
   { id: 'layout',     label: 'layout',    cap: ['multi_location', 'multi_branch'] },
   { id: 'settings',   label: 'settings',  always: true },
@@ -1057,6 +1151,7 @@ function selectTab(name) {
   if (name === 'customers') loadCustomersM();
   if (name === 'transfers') loadTransfers();
   if (name === 'finance') loadFinance();
+  if (name === 'reports') loadReports();
 }
 
 // ---------------- transfers & branch comparison (Phase 12 Day 17) ----------------
@@ -2935,6 +3030,252 @@ $('#exp-add').onclick = async () => {
     await Promise.all([loadExpensesList(), loadDailyFinance(), loadPnL()]);
   } catch (e) { alert(e.message); }
 };
+
+// ================= REPORTS Day 20 =================
+function repFillBranches() {
+  const opts = `<option value="">All branches</option>` + (BOOT.branches||[]).map((b)=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  $('#rep-branch').innerHTML = opts;
+}
+
+async function loadReports() {
+  if (!$('#rep-from').value) { const d=new Date(); d.setDate(d.getDate()-30); $('#rep-from').value=d.toISOString().slice(0,10); }
+  if (!$('#rep-to').value) $('#rep-to').value=new Date().toISOString().slice(0,10);
+  repFillBranches();
+  await Promise.all([loadOwnerDash(), loadBranchDash(), loadStockDash(), loadCashierDash(), loadSalesReport(), loadMarginReport(), loadSlow(), loadDead(), loadStockValue(), loadCashierReport(), loadReorder()]);
+  renderQuick();
+}
+
+function repRangeQS() {
+  const from = $('#rep-from').value;
+  const to = $('#rep-to').value;
+  const branch = $('#rep-branch').value;
+  return `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${branch?`&branch_id=${branch}`:''}`;
+}
+
+function renderQuick() {
+  const qs = [
+    { q: 'What sold?', a: 'Top products by gross — see What sold table', link: 'sales' },
+    { q: 'What made money?', a: 'Margin report sorted by margin', link: 'margin' },
+    { q: 'What isn\'t selling?', a: 'Slow-moving >30d with stock value tied', link: 'slow' },
+    { q: 'What\'s losing margin?', a: 'Margin report → losing only', link: 'margin-losing' },
+    { q: 'Best/worst cashier', a: 'Cashier performance by gross, discount %', link: 'cashier' },
+    { q: 'Best/worst branch', a: 'Owner dashboard branch ranking', link: 'owner' },
+    { q: 'What\'s disappearing?', a: 'Shrinkage report + stock manager dashboard', link: 'shrink' },
+    { q: 'What\'s tied up?', a: 'Dead stock + stock value total', link: 'dead' },
+    { q: 'What to reorder?', a: 'Reorder report with suggested qty', link: 'reorder' },
+    { q: 'Discounts high?', a: 'Discounts report grouped by cashier', link: 'discounts' },
+  ];
+  $('#rep-quick').innerHTML = qs.map((x)=>`<div class="kpi"><div class="kpi-label">${esc(x.q)}</div><div class="muted small">${esc(x.a)}</div></div>`).join('');
+}
+
+async function loadOwnerDash() {
+  try {
+    const r = await api('/api/dashboard/owner' + repRangeQS());
+    const k = r.kpis;
+    $('#dash-owner').innerHTML = `
+      <h4 style="margin:0 0 6px">Owner — consolidated</h4>
+      <div class="grid cols-3">
+        <div class="kpi"><div class="kpi-label">Net sales</div><div class="kpi-value">${fmt(k.sales?.net||0)}</div><div class="muted small">${k.sales?.orders||0} orders</div></div>
+        <div class="kpi"><div class="kpi-label">Gross profit</div><div class="kpi-value">${fmt(k.gross_profit||0)}</div><div class="muted small">COGS ${fmt(k.cogs||0)}</div></div>
+        <div class="kpi"><div class="kpi-label">NOP</div><div class="kpi-value">${fmt(k.nop||0)}</div><div class="muted small">exp ${fmt(k.expenses||0)} · stock ${fmt(k.stock_value||0)}</div></div>
+      </div>
+      <div style="margin-top:8px"><b>Branch ranking</b><br>${(r.branch_ranking||[]).slice(0,5).map((b)=>`${esc(b.name)}: ${fmt(b.sales)} (margin ${fmt(b.margin)})`).join('<br>')||'<span class="muted">no data</span>'}</div>
+      <div style="margin-top:8px"><b>Top products</b><br>${(r.top_products||[]).slice(0,5).map((p)=>`${esc(p.name)}: ${fmt(p.gross)} margin ${fmt(p.margin)}`).join('<br>')||'<span class="muted">no data</span>'}</div>
+      <div class="muted small" style="margin-top:6px">Discounts ${fmt(k.discounts?.total||0)} (${k.discounts?.n||0}) · Shortages ${fmt(k.cash_shortages?.total_abs||0)} in ${k.cash_shortages?.n||0} shifts</div>
+    `;
+  } catch {}
+}
+async function loadBranchDash() {
+  try {
+    const branch = $('#rep-branch').value || (BOOT.branches||[])[0]?.id;
+    const r = await api(`/api/dashboard/branch-manager?from=${encodeURIComponent($('#rep-from').value)}&to=${encodeURIComponent($('#rep-to').value)}${branch?`&branch_id=${branch}`:''}`);
+    $('#dash-bm').innerHTML = `
+      <h4 style="margin:0 0 6px">Branch Manager — ${esc(((BOOT.branches||[]).find((b)=>b.id==r.branch_id)||{}).name||r.branch_id)}</h4>
+      <div class="grid cols-2">
+        <div class="kpi"><div class="kpi-label">Net</div><div class="kpi-value">${fmt(r.kpis?.sales?.net||0)}</div><div class="muted small">${r.kpis?.sales?.orders||0} orders</div></div>
+        <div class="kpi"><div class="kpi-label">NOP</div><div class="kpi-value">${fmt(r.kpis?.nop||0)}</div><div class="muted small">shr ${fmt(r.kpis?.shrinkage||0)}</div></div>
+      </div>
+      <div class="muted small" style="margin-top:6px">Top: ${(r.top_products||[]).slice(0,3).map((p)=>esc(p.name)).join(', ')||'—'}<br>Low stock: ${(r.low_stock||[]).slice(0,3).map((p)=>esc(p.name)).join(', ')||'—'}</div>
+    `;
+  } catch {}
+}
+async function loadStockDash() {
+  try {
+    const branch = $('#rep-branch').value;
+    const r = await api(`/api/dashboard/stock-manager${branch?`?branch_id=${branch}`:''}`);
+    $('#dash-sm').innerHTML = `
+      <h4 style="margin:0 0 6px">Stock Manager</h4>
+      <div class="grid cols-2">
+        <div class="kpi"><div class="kpi-label">Stock value</div><div class="kpi-value">${fmt(r.stock_value?.v||0)}</div><div class="muted small">${r.stock_value?.qty||0} units</div></div>
+        <div class="kpi"><div class="kpi-label">Shrinkage 30d</div><div class="kpi-value">${fmt(r.shrinkage_30d?.total||0)}</div><div class="muted small">${r.shrinkage_30d?.moves||0} moves</div></div>
+      </div>
+      <div class="muted small" style="margin-top:6px">Low: ${(r.low_stock||[]).length} · Dead: ${(r.dead_stock||[]).length} · Pending transfers: ${r.pending_transfers||0}</div>
+    `;
+  } catch {}
+}
+async function loadCashierDash() {
+  try {
+    const r = await api('/api/dashboard/cashier');
+    $('#dash-cash').innerHTML = `
+      <h4 style="margin:0 0 6px">Cashier — today</h4>
+      <div class="grid cols-2">
+        <div class="kpi"><div class="kpi-label">My sales</div><div class="kpi-value">${fmt(r.today?.net||0)}</div><div class="muted small">${r.today?.orders||0} orders</div></div>
+        <div class="kpi"><div class="kpi-label">Expected cash</div><div class="kpi-value">${r.expected_cash!=null?fmt(r.expected_cash):'—'}</div><div class="muted small">${r.open_shift?`float ${fmt(r.open_shift.float_open)}`:'no shift'}</div></div>
+      </div>
+      <div class="muted small" style="margin-top:6px">Voids ${r.voids||0} · Returns ${r.returns?.n||0} (${fmt(r.returns?.total||0)})</div>
+    `;
+  } catch {}
+}
+
+async function loadSalesReport() {
+  try {
+    const group = $('#sales-group').value || 'product';
+    const branch = $('#rep-branch').value;
+    const q = `${repRangeQS()}&group_by=${encodeURIComponent(group)}&limit=100`;
+    const r = await api('/api/reports/sales' + q);
+    $('#sales-rows').innerHTML = (r.rows||[]).map((row)=>{
+      const name = row.product_name || row.variant_name || row.branch_name || row.cashier_name || row.day || row.category_name || row.product_id || '—';
+      const id = row.product_id || row.variant_id || row.branch_id || row.cashier_id || '';
+      const drill = group==='product' ? `data-drill-product="${row.product_id}"` : group==='cashier' ? `data-drill-cashier="${row.cashier_id}"` : '';
+      return `<tr>
+        <td class="small">${esc(String(name))}</td>
+        <td class="mono">${row.qty||0}</td>
+        <td class="mono">${row.orders||''}</td>
+        <td class="mono">${fmt(row.gross||0)}</td>
+        <td class="mono">${fmt(row.margin||0)}</td>
+        <td><button class="btn small ghost" ${drill}>drill</button></td>
+      </tr>`;
+    }).join('') || `<tr><td colspan="6" class="muted">no data</td></tr>`;
+    document.querySelectorAll('#sales-rows [data-drill-product]').forEach((b)=>{
+      b.onclick = async () => {
+        const pid = b.dataset.drillProduct;
+        const detail = await api(`/api/reports/sales?from=${encodeURIComponent($('#rep-from').value)}&to=${encodeURIComponent($('#rep-to').value)}&group_by=variant&product_id=${pid}`).catch(()=>null);
+        if (detail) alert(`Product ${pid} variants: ` + (detail.rows||[]).map((v)=>`${v.variant_name||v.product_name}: ${v.qty} / ${fmt(v.gross)}`).join('; '));
+      };
+    });
+  } catch {}
+}
+async function loadMarginReport() {
+  try {
+    const losing = $('#margin-losing').checked ? '&losing=1' : '';
+    const r = await api('/api/reports/margin' + repRangeQS() + losing + '&limit=100');
+    $('#margin-rows').innerHTML = (r.rows||[]).map((row)=>`<tr>
+      <td class="small">${esc(row.product_name)}</td>
+      <td class="mono">${row.qty}</td>
+      <td class="mono">${fmt(row.gross)}</td>
+      <td class="mono">${fmt(row.cogs)}</td>
+      <td class="mono ${row.margin<0?'r':''}">${fmt(row.margin)}</td>
+      <td class="mono">${(row.margin_pct||0).toFixed(1)}%</td>
+    </tr>`).join('') || `<tr><td colspan="6" class="muted">no data</td></tr>`;
+  } catch {}
+}
+async function loadSlow() {
+  try {
+    const days = Number($('#slow-days').value)||30;
+    const branch = $('#rep-branch').value;
+    const r = await api(`/api/reports/slow-moving?days=${days}${branch?`&branch_id=${branch}`:''}`);
+    $('#slow-rows').innerHTML = (r.rows||[]).slice(0,50).map((row)=>`<tr>
+      <td class="small">${esc(row.product_name)}</td>
+      <td class="mono">${row.stock_qty}</td>
+      <td class="mono">${fmt(row.stock_value)}</td>
+      <td class="mono small">${row.last_sale_at?new Date(row.last_sale_at).toLocaleDateString():'never'}</td>
+    </tr>`).join('') || `<tr><td colspan="4" class="muted">no slow stock</td></tr>`;
+  } catch {}
+}
+async function loadDead() {
+  try {
+    const days = Number($('#dead-days').value)||60;
+    const branch = $('#rep-branch').value;
+    const r = await api(`/api/reports/dead-stock?days=${days}${branch?`&branch_id=${branch}`:''}`);
+    $('#dead-rows').innerHTML = (r.rows||[]).slice(0,50).map((row)=>`<tr>
+      <td class="small">${esc(row.product_name)}</td>
+      <td class="mono">${row.stock_qty}</td>
+      <td class="mono">${fmt(row.stock_value)}</td>
+      <td class="mono small">${row.last_consumption_at?new Date(row.last_consumption_at).toLocaleDateString():'never'}</td>
+    </tr>`).join('') || `<tr><td colspan="4" class="muted">no dead stock</td></tr>`;
+  } catch {}
+}
+async function loadStockValue() {
+  try {
+    const branch = $('#rep-branch').value;
+    const r = await api(`/api/reports/stock-value${branch?`?branch_id=${branch}`:''}`);
+    $('#stock-value-total').textContent = `Total value tied: ${fmt(r.total_value||0)} across ${r.rows?.length||0} products`;
+  } catch {}
+}
+async function loadCashierReport() {
+  try {
+    const r = await api('/api/reports/cashiers' + repRangeQS());
+    $('#cashier-rows').innerHTML = (r.rows||[]).map((row)=>`<tr>
+      <td class="small">${esc(row.cashier_name||('ID '+row.cashier_id))}</td>
+      <td class="mono">${row.orders||0}</td>
+      <td class="mono">${fmt(row.gross||0)}</td>
+      <td class="mono">${(row.discount_pct||0).toFixed(1)}%</td>
+      <td class="mono">${row.voids||0}</td>
+      <td class="mono">${row.returns_count||0} / ${fmt(row.refunds||0)}</td>
+    </tr>`).join('') || `<tr><td colspan="6" class="muted">no data</td></tr>`;
+  } catch {}
+}
+async function loadReorder() {
+  try {
+    const cover = Number($('#reorder-cover').value)||14;
+    const branch = $('#rep-branch').value;
+    const r = await api(`/api/reports/reorder?days_cover=${cover}${branch?`&branch_id=${branch}`:''}`);
+    $('#reorder-rows').innerHTML = (r.rows||[]).slice(0,100).map((row)=>`<tr>
+      <td class="small">${esc(row.product_name)}</td>
+      <td class="mono">${row.stock_qty}</td>
+      <td class="mono">${(row.velocity_per_day||0).toFixed(2)}</td>
+      <td class="mono">${(row.days_of_cover||0).toFixed(1)}</td>
+      <td class="mono"><b>${row.suggested_qty}</b></td>
+      <td class="small">${esc(row.supplier_name||'—')}</td>
+    </tr>`).join('') || `<tr><td colspan="6" class="muted">all stocked</td></tr>`;
+  } catch {}
+}
+
+async function loadDiscountsReport() {
+  try {
+    const r = await api('/api/reports/discounts' + repRangeQS());
+    const byCash = (r.by_cashier||[]).map((c)=>`${esc(c.cashier_name||c.cashier_id)}: ${fmt(c.total_discount)} (${(c.avg_pct||0).toFixed(1)}%)`).join('<br>') || '<span class="muted">none</span>';
+    const rows = (r.rows||[]).slice(0,20).map((s)=>`${new Date(s.created_at).toLocaleDateString()} ${esc(s.cashier_name||'')} ${fmt(s.discount)} (${(s.discount_pct||0).toFixed(1)}%)`).join('<br>');
+    $('#disc-area').innerHTML = `<div><b>By cashier</b><br>${byCash}</div><div style="margin-top:8px"><b>Top discounts</b><br>${rows||'<span class="muted">none</span>'}</div>`;
+  } catch {}
+}
+async function loadRefundsReport() {
+  try {
+    const r = await api('/api/reports/refunds' + repRangeQS());
+    const refunds = (r.refunds||[]).slice(0,10).map((x)=>`${new Date(x.created_at).toLocaleDateString()} ${fmt(x.refund_amount)} ${esc(x.reason||'')}`).join('<br>') || 'none';
+    const voids = (r.voided||[]).slice(0,10).map((x)=>`${new Date(x.voided_at).toLocaleDateString()} ${fmt(x.gross)} ${esc(x.void_reason||'')}`).join('<br>') || 'none';
+    $('#disc-area').innerHTML = `<div><b>Refunds</b><br>${refunds}</div><div style="margin-top:8px"><b>Voids</b><br>${voids}</div>`;
+  } catch {}
+}
+async function loadShortagesReport() {
+  try {
+    const r = await api('/api/reports/cash-shortages' + repRangeQS());
+    const byCash = (r.by_cashier||[]).map((c)=>`${esc(c.cashier_name||c.cashier_id)}: ${c.shifts} shifts, avg ${fmt(c.avg_abs_variance||0)} total ${fmt(c.total_variance||0)}`).join('<br>') || '<span class="muted">none</span>';
+    const rows = (r.rows||[]).slice(0,10).map((s)=>`${new Date(s.closed_at).toLocaleDateString()} ${esc(s.cashier_name||'')} ${fmt(s.variance)}`).join('<br>');
+    $('#disc-area').innerHTML = `<div><b>By cashier</b><br>${byCash}</div><div style="margin-top:8px"><b>Worst shortages</b><br>${rows||'<span class="muted">none</span>'}</div>`;
+  } catch {}
+}
+
+$('#rep-reload').onclick = loadReports;
+document.querySelectorAll('[data-dash]').forEach((b)=>{
+  b.onclick = () => {
+    const d = b.dataset.dash;
+    if (d==='owner') loadOwnerDash();
+    if (d==='branch-manager') loadBranchDash();
+    if (d==='stock-manager') loadStockDash();
+    if (d==='cashier') loadCashierDash();
+  };
+});
+$('#sales-reload').onclick = loadSalesReport;
+$('#margin-reload').onclick = loadMarginReport;
+$('#slow-reload').onclick = loadSlow;
+$('#dead-reload').onclick = loadDead;
+$('#reorder-reload').onclick = loadReorder;
+$('#disc-reload').onclick = loadDiscountsReport;
+$('#refund-reload').onclick = loadRefundsReport;
+$('#short-reload').onclick = loadShortagesReport;
+$('#sales-csv').onclick = () => { const qs = repRangeQS(); window.open(`/api/reports/export?report=sales${qs.replace('?','&')}&format=csv`, '_blank'); };
+$('#margin-csv').onclick = () => { const qs = repRangeQS(); window.open(`/api/reports/export?report=margin${qs.replace('?','&')}&format=csv`, '_blank'); };
 
 // ---------- audit ----------
 async function loadAudit() {

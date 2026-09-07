@@ -6031,6 +6031,545 @@ function createApp(d) {
     res.json({ branches: rows, from, to });
   });
 
+  // ---- Phase 15 Day 20 — Reporting & BI: what sold, what made money, slow, reorder, cashier, discounts, shortages ----
+  function parseRange(req) {
+    const from = req.query.from ? new Date(req.query.from).toISOString() : new Date(Date.now() - 30*86400000).toISOString();
+    const to = req.query.to ? new Date(req.query.to).toISOString() : new Date().toISOString();
+    const fromDate = from.slice(0,10);
+    const toDate = to.slice(0,10);
+    return { from, to, fromDate, toDate };
+  }
+
+  app.get('/api/reports/sales', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({ rows: [] });
+    const branchId = numOrNull(req.query.branch_id);
+    const branches = branchId ? [branchId] : vis;
+    if (branchId && !vis.includes(branchId)) return res.status(404).json({ error: 'branch not found' });
+    const { from, to } = parseRange(req);
+    const groupBy = String(req.query.group_by || 'product');
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    const productId = numOrNull(req.query.product_id);
+    const cashierId = numOrNull(req.query.cashier_id);
+    const ph = branches.map(() => '?').join(',');
+    let rows = [];
+    const baseWhere = `s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?`;
+    const baseArgs = [...branches, from, to];
+    if (productId) { baseWhere + ` AND si.product_id = ?`; baseArgs.push(productId); } // placeholder, will be handled per query
+    // We build per group
+    if (groupBy === 'product') {
+      const q = `
+        SELECT p.id AS product_id, p.name AS product_name, p.sku,
+               SUM(si.qty) AS qty, COUNT(DISTINCT s.id) AS orders,
+               SUM(si.gross) AS gross, SUM(si.discount) AS discount, SUM(si.net) AS net,
+               SUM(si.qty * COALESCE(v.cost, p.cost, 0)) AS cogs,
+               SUM(si.gross - si.qty * COALESCE(v.cost, p.cost, 0)) AS margin
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id
+        JOIN products p ON p.id = si.product_id
+        LEFT JOIN variants v ON v.id = si.variant_id
+        WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+          ${productId ? 'AND si.product_id = ?' : ''}
+          ${cashierId ? 'AND s.cashier_id = ?' : ''}
+        GROUP BY p.id ORDER BY gross DESC LIMIT ?
+      `;
+      const args = [...branches, from, to];
+      if (productId) args.push(productId);
+      if (cashierId) args.push(cashierId);
+      args.push(limit);
+      rows = d.prepare(q).all(...args);
+    } else if (groupBy === 'variant') {
+      const q = `
+        SELECT v.id AS variant_id, p.id AS product_id, p.name AS product_name, v.name AS variant_name,
+               SUM(si.qty) AS qty, COUNT(DISTINCT s.id) AS orders,
+               SUM(si.gross) AS gross, SUM(si.discount) AS discount, SUM(si.net) AS net,
+               SUM(si.qty * COALESCE(v.cost, p.cost, 0)) AS cogs,
+               SUM(si.gross - si.qty * COALESCE(v.cost, p.cost, 0)) AS margin
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id
+        JOIN products p ON p.id = si.product_id
+        LEFT JOIN variants v ON v.id = si.variant_id
+        WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+          ${cashierId ? 'AND s.cashier_id = ?' : ''}
+        GROUP BY v.id ORDER BY gross DESC LIMIT ?
+      `;
+      const args = [...branches, from, to];
+      if (cashierId) args.push(cashierId);
+      args.push(limit);
+      rows = d.prepare(q).all(...args);
+    } else if (groupBy === 'branch') {
+      const q = `
+        SELECT s.branch_id, b.name AS branch_name,
+               COUNT(DISTINCT s.id) AS orders, SUM(s.gross) AS gross, SUM(s.discount) AS discount, SUM(s.net) AS net,
+               SUM(si.qty) AS qty
+        FROM sales s JOIN sale_items si ON si.sale_id = s.id
+        JOIN branches b ON b.id = s.branch_id
+        WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+        GROUP BY s.branch_id ORDER BY gross DESC LIMIT ?
+      `;
+      rows = d.prepare(q).all(...branches, from, to, limit);
+    } else if (groupBy === 'cashier') {
+      const q = `
+        SELECT s.cashier_id, u.name AS cashier_name,
+               COUNT(DISTINCT s.id) AS orders, SUM(s.gross) AS gross, SUM(s.discount) AS discount, SUM(s.net) AS net,
+               SUM(si.qty) AS qty
+        FROM sales s JOIN sale_items si ON si.sale_id = s.id
+        LEFT JOIN users u ON u.id = s.cashier_id
+        WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+        GROUP BY s.cashier_id ORDER BY gross DESC LIMIT ?
+      `;
+      rows = d.prepare(q).all(...branches, from, to, limit);
+    } else if (groupBy === 'day') {
+      const q = `
+        SELECT substr(s.created_at,1,10) AS day,
+               COUNT(DISTINCT s.id) AS orders, SUM(s.gross) AS gross, SUM(s.discount) AS discount, SUM(s.net) AS net,
+               SUM(si.qty) AS qty
+        FROM sales s JOIN sale_items si ON si.sale_id = s.id
+        WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+        GROUP BY day ORDER BY day DESC LIMIT ?
+      `;
+      rows = d.prepare(q).all(...branches, from, to, limit);
+    } else if (groupBy === 'category') {
+      const q = `
+        SELECT c.id AS category_id, c.name AS category_name,
+               SUM(si.qty) AS qty, COUNT(DISTINCT s.id) AS orders,
+               SUM(si.gross) AS gross, SUM(si.discount) AS discount, SUM(si.net) AS net
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id
+        JOIN products p ON p.id = si.product_id
+        LEFT JOIN categories c ON c.id = p.category_id
+        WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+        GROUP BY c.id ORDER BY gross DESC LIMIT ?
+      `;
+      rows = d.prepare(q).all(...branches, from, to, limit);
+    } else {
+      return res.status(400).json({ error: 'group_by must be product|variant|branch|cashier|day|category' });
+    }
+    res.json({ from, to, branches, group_by: groupBy, rows, drill: { product_id, cashier_id } });
+  });
+
+  app.get('/api/reports/margin', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({ rows: [] });
+    const branchId = numOrNull(req.query.branch_id);
+    const branches = branchId ? [branchId] : vis;
+    const { from, to } = parseRange(req);
+    const ph = branches.map(() => '?').join(',');
+    const threshold = Number(req.query.margin_pct) || 0;
+    const losingOnly = String(req.query.losing || '') === '1';
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    let q = `
+      SELECT p.id AS product_id, p.name AS product_name,
+             SUM(si.qty) AS qty, SUM(si.gross) AS gross,
+             SUM(si.qty * COALESCE(v.cost, p.cost, 0)) AS cogs,
+             SUM(si.gross - si.qty * COALESCE(v.cost, p.cost, 0)) AS margin,
+             CASE WHEN SUM(si.gross) > 0 THEN (SUM(si.gross - si.qty * COALESCE(v.cost, p.cost, 0)) * 100.0 / SUM(si.gross)) ELSE 0 END AS margin_pct
+      FROM sale_items si JOIN sales s ON s.id = si.sale_id
+      JOIN products p ON p.id = si.product_id
+      LEFT JOIN variants v ON v.id = si.variant_id
+      WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+      GROUP BY p.id
+      ${losingOnly ? 'HAVING margin < 0 OR margin_pct < ?' : 'HAVING 1=1'}
+      ORDER BY margin ${losingOnly ? 'ASC' : 'DESC'} LIMIT ?
+    `;
+    const args = [...branches, from, to];
+    if (losingOnly) args.push(threshold);
+    args.push(limit);
+    const rows = d.prepare(q).all(...args);
+    res.json({ from, to, branches, losingOnly, threshold, rows });
+  });
+
+  app.get('/api/reports/slow-moving', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({ rows: [] });
+    const branchId = numOrNull(req.query.branch_id);
+    const branches = branchId ? [branchId] : vis;
+    const days = Math.max(Number(req.query.days) || 30, 1);
+    const cutoff = new Date(Date.now() - days*86400000).toISOString();
+    const ph = branches.map(() => '?').join(',');
+    // stock qty per product in these branches
+    const locPh = branches.length ? d.prepare(`SELECT id FROM locations WHERE branch_id IN (${ph})`).all(...branches).map((r)=>r.id) : [];
+    const locIn = locPh.length ? locPh.map(() => '?').join(',') : 'SELECT 0 WHERE 0';
+    const q = `
+      SELECT p.id AS product_id, p.name AS product_name, p.sku,
+             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
+             COALESCE((SELECT SUM(st.qty * COALESCE(v.cost, p.cost,0)) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_value,
+             COALESCE((SELECT SUM(si.qty) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id AND s.branch_id IN (${ph}) AND s.created_at >= ?),0) AS sold_last_${days}d,
+             (SELECT MAX(s.created_at) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id AND s.branch_id IN (${ph})) AS last_sale_at
+      FROM products p WHERE p.active = 1
+      HAVING stock_qty > 0 AND sold_last_${days}d = 0
+      ORDER BY stock_value DESC LIMIT 200
+    `;
+    // Build args: locPh for first subquery, locPh for second, branches for sold, branches for last_sale
+    const args = [...locPh, ...locPh, ...branches, cutoff, ...branches];
+    const rows = d.prepare(q).all(...args);
+    res.json({ days, cutoff, branches, rows });
+  });
+
+  app.get('/api/reports/dead-stock', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({ rows: [] });
+    const branchId = numOrNull(req.query.branch_id);
+    const branches = branchId ? [branchId] : vis;
+    const days = Math.max(Number(req.query.days) || 60, 1);
+    const cutoff = new Date(Date.now() - days*86400000).toISOString();
+    const ph = branches.map(() => '?').join(',');
+    const locIds = d.prepare(`SELECT id FROM locations WHERE branch_id IN (${ph})`).all(...branches).map((r)=>r.id);
+    const locIn = locIds.length ? locIds.map(() => '?').join(',') : 'SELECT 0 WHERE 0';
+    const q = `
+      SELECT p.id AS product_id, p.name AS product_name,
+             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
+             COALESCE((SELECT SUM(st.qty * COALESCE(v.cost, p.cost,0)) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_value,
+             (SELECT MAX(sm.created_at) FROM stock_moves sm WHERE sm.product_id = p.id AND sm.branch_id IN (${ph}) AND sm.type = 'sale') AS last_consumption_at
+      FROM products p WHERE p.active = 1
+      HAVING stock_qty > 0 AND (last_consumption_at IS NULL OR last_consumption_at < ?)
+      ORDER BY stock_value DESC LIMIT 200
+    `;
+    const args = [...locIds, ...locIds, ...branches, cutoff];
+    const rows = d.prepare(q).all(...args);
+    res.json({ days, cutoff, branches, rows });
+  });
+
+  app.get('/api/reports/stock-value', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({ rows: [] });
+    const branchId = numOrNull(req.query.branch_id);
+    const branches = branchId ? [branchId] : vis;
+    const ph = branches.map(() => '?').join(',');
+    const locIds = d.prepare(`SELECT id FROM locations WHERE branch_id IN (${ph})`).all(...branches).map((r)=>r.id);
+    if (!locIds.length) return res.json({ branches, rows: [], total_value: 0 });
+    const locIn = locIds.map(() => '?').join(',');
+    const rows = d.prepare(`
+      SELECT p.id AS product_id, p.name AS product_name, p.category_id, c.name AS category_name,
+             SUM(st.qty) AS qty, SUM(st.qty * COALESCE(v.cost, p.cost,0)) AS value
+      FROM stock st JOIN variants v ON v.id = st.variant_id JOIN products p ON p.id = v.product_id
+      LEFT JOIN categories c ON c.id = p.category_id
+      WHERE st.location_id IN (${locIn}) AND st.qty != 0
+      GROUP BY p.id ORDER BY value DESC LIMIT 300
+    `).all(...locIds);
+    const total = rows.reduce((a,r)=>a+(r.value||0),0);
+    res.json({ branches, total_value: total, rows });
+  });
+
+  app.get('/api/reports/cashiers', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({ rows: [] });
+    const branchId = numOrNull(req.query.branch_id);
+    const branches = branchId ? [branchId] : vis;
+    const { from, to } = parseRange(req);
+    const ph = branches.map(() => '?').join(',');
+    const rows = d.prepare(`
+      SELECT s.cashier_id, u.name AS cashier_name, u.role,
+             COUNT(DISTINCT s.id) AS orders, SUM(s.gross) AS gross, SUM(s.discount) AS discount, SUM(s.net) AS net,
+             SUM(CASE WHEN s.status = 'voided' THEN 1 ELSE 0 END) AS voids,
+             COALESCE((SELECT COUNT(*) FROM returns r JOIN sales rs ON rs.id = r.sale_id WHERE rs.cashier_id = s.cashier_id AND r.created_at >= ? AND r.created_at <= ?),0) AS returns_count,
+             COALESCE((SELECT SUM(r.refund_amount) FROM returns r JOIN sales rs ON rs.id = r.sale_id WHERE rs.cashier_id = s.cashier_id AND r.created_at >= ? AND r.created_at <= ?),0) AS refunds
+      FROM sales s LEFT JOIN users u ON u.id = s.cashier_id
+      WHERE s.branch_id IN (${ph}) AND s.created_at >= ? AND s.created_at <= ?
+      GROUP BY s.cashier_id ORDER BY gross DESC
+    `).all(from, to, from, to, ...branches, from, to);
+    // Compute avg basket
+    const enriched = rows.map((r) => ({ ...r, avg_basket: r.orders ? r.gross / r.orders : 0, discount_pct: r.gross ? (r.discount*100.0/r.gross) : 0 }));
+    enriched.sort((a,b)=> b.gross - a.gross);
+    res.json({ from, to, branches, rows: enriched });
+  });
+
+  app.get('/api/reports/discounts', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({ rows: [] });
+    const branchId = numOrNull(req.query.branch_id);
+    const branches = branchId ? [branchId] : vis;
+    const { from, to } = parseRange(req);
+    const ph = branches.map(() => '?').join(',');
+    const rows = d.prepare(`
+      SELECT s.id AS sale_id, s.branch_id, b.name AS branch_name, s.cashier_id, u.name AS cashier_name,
+             s.gross, s.discount, s.net, s.created_at,
+             CASE WHEN s.gross > 0 THEN (s.discount*100.0/s.gross) ELSE 0 END AS discount_pct,
+             s.discount_approver_id
+      FROM sales s JOIN branches b ON b.id = s.branch_id LEFT JOIN users u ON u.id = s.cashier_id
+      WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.discount > 0 AND s.created_at >= ? AND s.created_at <= ?
+      ORDER BY discount_pct DESC LIMIT 200
+    `).all(...branches, from, to);
+    const byCashier = d.prepare(`
+      SELECT s.cashier_id, u.name AS cashier_name,
+             COUNT(*) AS discounted_orders, SUM(s.discount) AS total_discount, AVG(CASE WHEN s.gross>0 THEN s.discount*100.0/s.gross ELSE 0 END) AS avg_pct
+      FROM sales s LEFT JOIN users u ON u.id = s.cashier_id
+      WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.discount > 0 AND s.created_at >= ? AND s.created_at <= ?
+      GROUP BY s.cashier_id ORDER BY total_discount DESC
+    `).all(...branches, from, to);
+    res.json({ from, to, branches, rows, by_cashier: byCashier });
+  });
+
+  app.get('/api/reports/refunds', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({ rows: [] });
+    const branchId = numOrNull(req.query.branch_id);
+    const branches = branchId ? [branchId] : vis;
+    const { from, to } = parseRange(req);
+    const ph = branches.map(() => '?').join(',');
+    const rows = d.prepare(`
+      SELECT r.id, r.sale_id, r.refund_amount, r.reason, r.created_at, r.created_by, u.name AS created_by_name,
+             s.branch_id, s.cashier_id
+      FROM returns r JOIN sales s ON s.id = r.sale_id LEFT JOIN users u ON u.id = r.created_by
+      WHERE s.branch_id IN (${ph}) AND r.created_at >= ? AND r.created_at <= ?
+      ORDER BY r.created_at DESC LIMIT 200
+    `).all(...branches, from, to);
+    const voided = d.prepare(`
+      SELECT id, branch_id, cashier_id, gross, net, voided_at, void_reason, created_at
+      FROM sales WHERE branch_id IN (${ph}) AND status = 'voided' AND voided_at >= ? AND voided_at <= ?
+      ORDER BY voided_at DESC LIMIT 200
+    `).all(...branches, from, to);
+    res.json({ from, to, branches, refunds: rows, voided });
+  });
+
+  app.get('/api/reports/cash-shortages', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({ rows: [] });
+    const branchId = numOrNull(req.query.branch_id);
+    const branches = branchId ? [branchId] : vis;
+    const { from, to } = parseRange(req);
+    const ph = branches.map(() => '?').join(',');
+    const rows = d.prepare(`
+      SELECT sh.id, sh.branch_id, b.name AS branch_name, sh.cashier_id, u.name AS cashier_name,
+             sh.float_open, sh.expected_cash, sh.counted_cash, sh.variance, sh.opened_at, sh.closed_at, sh.status
+      FROM shifts sh JOIN branches b ON b.id = sh.branch_id LEFT JOIN users u ON u.id = sh.cashier_id
+      WHERE sh.branch_id IN (${ph}) AND sh.opened_at >= ? AND sh.opened_at <= ? AND sh.status = 'closed'
+      ORDER BY ABS(COALESCE(sh.variance,0)) DESC LIMIT 200
+    `).all(...branches, from, to);
+    const byCashier = d.prepare(`
+      SELECT sh.cashier_id, u.name AS cashier_name,
+             COUNT(*) AS shifts, SUM(CASE WHEN ABS(COALESCE(sh.variance,0)) > 0 THEN 1 ELSE 0 END) AS shortages,
+             SUM(COALESCE(sh.variance,0)) AS total_variance, AVG(ABS(COALESCE(sh.variance,0))) AS avg_abs_variance
+      FROM shifts sh LEFT JOIN users u ON u.id = sh.cashier_id
+      WHERE sh.branch_id IN (${ph}) AND sh.opened_at >= ? AND sh.opened_at <= ? AND sh.status = 'closed'
+      GROUP BY sh.cashier_id ORDER BY avg_abs_variance DESC
+    `).all(...branches, from, to);
+    res.json({ from, to, branches, rows, by_cashier: byCashier });
+  });
+
+  app.get('/api/reports/reorder', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({ rows: [] });
+    const branchId = numOrNull(req.query.branch_id);
+    const branches = branchId ? [branchId] : vis;
+    const daysCover = Math.max(Number(req.query.days_cover) || 14, 1);
+    const ph = branches.map(() => '?').join(',');
+    const locIds = d.prepare(`SELECT id FROM locations WHERE branch_id IN (${ph})`).all(...branches).map((r)=>r.id);
+    const locIn = locIds.length ? locIds.map(() => '?').join(',') : 'SELECT 0 WHERE 0';
+    // velocity from last 30 days
+    const from30 = new Date(Date.now() - 30*86400000).toISOString();
+    const rows = d.prepare(`
+      SELECT p.id AS product_id, p.name AS product_name, p.reorder_level, p.supplier_id, s.name AS supplier_name,
+             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
+             COALESCE((SELECT SUM(si.qty) FROM sale_items si JOIN sales sa ON sa.id = si.sale_id WHERE si.product_id = p.id AND sa.branch_id IN (${ph}) AND sa.created_at >= ?),0) / 30.0 AS velocity_per_day
+      FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
+      WHERE p.active = 1
+      HAVING stock_qty <= COALESCE(p.reorder_level, 0) OR stock_qty < velocity_per_day * ?
+      ORDER BY velocity_per_day DESC LIMIT 100
+    `).all(...locIds, ...branches, from30, daysCover);
+    const enriched = rows.map((r) => ({
+      ...r,
+      suggested_qty: Math.max(0, Math.ceil(r.velocity_per_day * daysCover - r.stock_qty)),
+      days_of_cover: r.velocity_per_day > 0 ? r.stock_qty / r.velocity_per_day : 999
+    })).filter((r) => r.suggested_qty > 0).sort((a,b)=> b.suggested_qty - a.suggested_qty);
+    res.json({ branches, days_cover: daysCover, rows: enriched });
+  });
+
+  // ---- Dashboards: Owner / Branch Manager / Stock Manager / Cashier ----
+  app.get('/api/dashboard/owner', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({ branches: [] });
+    const { from, to } = parseRange(req);
+    const fromDate = from.slice(0,10);
+    const toDate = to.slice(0,10);
+    const ph = vis.map(() => '?').join(',');
+    const sales = d.prepare(`SELECT COUNT(*) AS orders, COALESCE(SUM(gross),0) AS gross, COALESCE(SUM(net),0) AS net, COALESCE(SUM(discount),0) AS discount FROM sales WHERE branch_id IN (${ph}) AND status IN ('paid','partial') AND created_at >= ? AND created_at <= ?`).get(...vis, from, to);
+    const cogs = d.prepare(`SELECT COALESCE(SUM(-qty * unit_cost),0) AS cogs FROM stock_moves WHERE branch_id IN (${ph}) AND type='sale' AND created_at >= ? AND created_at <= ?`).get(...vis, from, to).cogs;
+    const expenses = d.prepare(`SELECT COALESCE(SUM(amount),0) AS total FROM expenses WHERE branch_id IN (${ph}) AND expense_date >= ? AND expense_date <= ?`).get(...vis, fromDate, toDate).total;
+    const grossProfit = sales.net - cogs;
+    const nop = grossProfit - expenses;
+    const branches = d.prepare(`SELECT id, name FROM branches WHERE id IN (${ph}) ORDER BY id`).all(...vis).map((b) => {
+      const bs = d.prepare(`SELECT COUNT(*) AS orders, COALESCE(SUM(gross),0) AS sales FROM sales WHERE branch_id = ? AND status IN ('paid','partial') AND created_at >= ? AND created_at <= ?`).get(b.id, from, to);
+      const bm = d.prepare(`SELECT COALESCE(SUM(si.gross - COALESCE(v.cost, p.cost,0)*si.qty),0) AS margin FROM sale_items si JOIN sales s ON s.id = si.sale_id LEFT JOIN variants v ON v.id = si.variant_id JOIN products p ON p.id = si.product_id WHERE s.branch_id = ? AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?`).get(b.id, from, to).margin;
+      const shr = d.prepare(`SELECT COALESCE(SUM(-qty*unit_cost),0) AS shr FROM stock_moves WHERE branch_id = ? AND (type='damage' OR type='expiry_writeoff' OR (type='adjustment' AND qty<0)) AND created_at >= ? AND created_at <= ?`).get(b.id, from, to).shr;
+      return { id: b.id, name: b.name, orders: bs.orders, sales: bs.sales, margin: bm, shrinkage: shr };
+    });
+    branches.sort((a,b)=> b.sales - a.sales);
+    const topProducts = d.prepare(`
+      SELECT p.id, p.name, SUM(si.qty) AS qty, SUM(si.gross) AS gross, SUM(si.gross - si.qty*COALESCE(v.cost,p.cost,0)) AS margin
+      FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN products p ON p.id = si.product_id LEFT JOIN variants v ON v.id = si.variant_id
+      WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+      GROUP BY p.id ORDER BY gross DESC LIMIT 10
+    `).all(...vis, from, to);
+    const worstProducts = d.prepare(`
+      SELECT p.id, p.name, SUM(si.qty) AS qty, SUM(si.gross) AS gross, SUM(si.gross - si.qty*COALESCE(v.cost,p.cost,0)) AS margin
+      FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN products p ON p.id = si.product_id LEFT JOIN variants v ON v.id = si.variant_id
+      WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+      GROUP BY p.id HAVING margin < 0 ORDER BY margin ASC LIMIT 10
+    `).all(...vis, from, to);
+    const cashShortages = d.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(ABS(variance)),0) AS total_abs, COALESCE(SUM(variance),0) AS net FROM shifts WHERE branch_id IN (${ph}) AND status='closed' AND opened_at >= ? AND opened_at <= ? AND ABS(COALESCE(variance,0)) > 0`).get(...vis, from, to);
+    const discounts = d.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(discount),0) AS total FROM sales WHERE branch_id IN (${ph}) AND status IN ('paid','partial') AND discount > 0 AND created_at >= ? AND created_at <= ?`).get(...vis, from, to);
+    const stockValue = (() => {
+      const locIds = d.prepare(`SELECT id FROM locations WHERE branch_id IN (${ph})`).all(...vis).map((r)=>r.id);
+      if (!locIds.length) return 0;
+      const locIn = locIds.map(() => '?').join(',');
+      return d.prepare(`SELECT COALESCE(SUM(st.qty * COALESCE(v.cost,p.cost,0)),0) AS v FROM stock st JOIN variants v ON v.id = st.variant_id JOIN products p ON p.id = v.product_id WHERE st.location_id IN (${locIn})`).get(...locIds).v;
+    })();
+    res.json({
+      from, to, branches: vis,
+      kpis: { sales, cogs, gross_profit: grossProfit, expenses, nop, stock_value: stockValue, cash_shortages: cashShortages, discounts },
+      branch_ranking: branches,
+      top_products: topProducts,
+      worst_margin: worstProducts
+    });
+  });
+
+  app.get('/api/dashboard/branch-manager', me, (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({});
+    const branchId = numOrNull(req.query.branch_id) || vis[0];
+    if (!vis.includes(branchId)) return res.status(404).json({ error: 'branch not found' });
+    const { from, to } = parseRange(req);
+    const fromDate = from.slice(0,10);
+    const toDate = to.slice(0,10);
+    const sales = d.prepare(`SELECT COUNT(*) AS orders, COALESCE(SUM(gross),0) AS gross, COALESCE(SUM(net),0) AS net, COALESCE(SUM(discount),0) AS discount FROM sales WHERE branch_id = ? AND status IN ('paid','partial') AND created_at >= ? AND created_at <= ?`).get(branchId, from, to);
+    const cogs = d.prepare(`SELECT COALESCE(SUM(-qty*unit_cost),0) AS cogs FROM stock_moves WHERE branch_id = ? AND type='sale' AND created_at >= ? AND created_at <= ?`).get(branchId, from, to).cogs;
+    const expenses = d.prepare(`SELECT COALESCE(SUM(amount),0) AS total FROM expenses WHERE branch_id = ? AND expense_date >= ? AND expense_date <= ?`).get(branchId, fromDate, toDate).total;
+    const shrinkage = d.prepare(`SELECT COALESCE(SUM(-qty*unit_cost),0) AS total FROM stock_moves WHERE branch_id = ? AND (type='damage' OR type='expiry_writeoff' OR (type='adjustment' AND qty<0)) AND created_at >= ? AND created_at <= ?`).get(branchId, from, to).total;
+    const cashiers = d.prepare(`
+      SELECT s.cashier_id, u.name AS cashier_name, COUNT(*) AS orders, SUM(s.gross) AS gross
+      FROM sales s LEFT JOIN users u ON u.id = s.cashier_id
+      WHERE s.branch_id = ? AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+      GROUP BY s.cashier_id ORDER BY gross DESC LIMIT 10
+    `).all(branchId, from, to);
+    const topProducts = d.prepare(`
+      SELECT p.id, p.name, SUM(si.qty) AS qty, SUM(si.gross) AS gross
+      FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN products p ON p.id = si.product_id
+      WHERE s.branch_id = ? AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+      GROUP BY p.id ORDER BY gross DESC LIMIT 10
+    `).all(branchId, from, to);
+    const lowStock = d.prepare(`
+      SELECT p.id, p.name, p.reorder_level,
+             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (SELECT id FROM locations WHERE branch_id = ?)),0) AS stock
+      FROM products p WHERE p.active = 1 AND p.reorder_level > 0
+      HAVING stock <= p.reorder_level ORDER BY stock ASC LIMIT 15
+    `).all(branchId);
+    res.json({
+      branch_id: branchId,
+      from, to,
+      kpis: { sales, cogs, gross_profit: sales.net - cogs, expenses, shrinkage, nop: sales.net - cogs - expenses },
+      cashiers, top_products: topProducts, low_stock: lowStock
+    });
+  });
+
+  app.get('/api/dashboard/stock-manager', me, can('stock.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({});
+    const branchId = numOrNull(req.query.branch_id);
+    const branches = branchId ? [branchId] : vis;
+    const ph = branches.map(() => '?').join(',');
+    const locIds = d.prepare(`SELECT id FROM locations WHERE branch_id IN (${ph})`).all(...branches).map((r)=>r.id);
+    const locIn = locIds.length ? locIds.map(() => '?').join(',') : 'SELECT 0 WHERE 0';
+    const stockValue = locIds.length ? d.prepare(`SELECT COALESCE(SUM(st.qty * COALESCE(v.cost,p.cost,0)),0) AS v, COALESCE(SUM(st.qty),0) AS qty FROM stock st JOIN variants v ON v.id = st.variant_id JOIN products p ON p.id = v.product_id WHERE st.location_id IN (${locIn})`).get(...locIds) : { v: 0, qty: 0 };
+    const lowStock = d.prepare(`
+      SELECT p.id, p.name, p.reorder_level,
+             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock
+      FROM products p WHERE p.active = 1 AND p.reorder_level > 0
+      HAVING stock <= p.reorder_level ORDER BY stock ASC LIMIT 20
+    `).all(...locIds);
+    const deadStock = d.prepare(`
+      SELECT p.id, p.name,
+             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
+             COALESCE((SELECT SUM(st.qty * COALESCE(v.cost,p.cost,0)) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_value,
+             (SELECT MAX(sm.created_at) FROM stock_moves sm WHERE sm.product_id = p.id AND sm.branch_id IN (${ph}) AND sm.type='sale') AS last_sale
+      FROM products p WHERE p.active = 1
+      HAVING stock_qty > 0 AND (last_sale IS NULL OR last_sale < ?)
+      ORDER BY stock_value DESC LIMIT 20
+    `).all(...locIds, ...locIds, ...branches, new Date(Date.now() - 60*86400000).toISOString());
+    const shrinkage30 = d.prepare(`SELECT COALESCE(SUM(-qty*unit_cost),0) AS total, COUNT(*) AS moves FROM stock_moves WHERE branch_id IN (${ph}) AND (type='damage' OR type='expiry_writeoff' OR (type='adjustment' AND qty<0)) AND created_at >= ?`).get(...branches, new Date(Date.now() - 30*86400000).toISOString());
+    const pendingTransfers = d.prepare(`SELECT COUNT(*) AS n FROM transfers WHERE (from_branch IN (${ph}) OR to_branch IN (${ph})) AND status IN ('requested','approved','shipped','scheduled')`).get(...branches, ...branches).n;
+    const ageing = d.prepare(`
+      SELECT CASE WHEN julianday('now') - julianday(b.expiry_date) < -90 THEN 'fresh'
+                  WHEN julianday('now') - julianday(b.expiry_date) < -30 THEN 'mid'
+                  WHEN julianday('now') - julianday(b.expiry_date) < 0 THEN 'near_expiry'
+                  ELSE 'expired' END AS bucket,
+             COUNT(*) AS lots, SUM(bl.qty) AS qty, SUM(bl.qty * COALESCE(v.cost,p.cost,0)) AS value
+      FROM batch_lots bl JOIN batches b ON b.id = bl.batch_id JOIN variants v ON v.id = bl.variant_id JOIN products p ON p.id = v.product_id
+      WHERE bl.location_id IN (${locIn}) AND bl.qty > 0
+      GROUP BY bucket
+    `).all(...locIds);
+    res.json({ branches, stock_value: stockValue, low_stock: lowStock, dead_stock: deadStock, shrinkage_30d: shrinkage30, pending_transfers: pendingTransfers, ageing });
+  });
+
+  app.get('/api/dashboard/cashier', me, (req, res) => {
+    const user = req.user;
+    const todayIso = new Date(new Date().setHours(0,0,0,0)).toISOString();
+    const mySales = d.prepare(`SELECT COUNT(*) AS orders, COALESCE(SUM(gross),0) AS gross, COALESCE(SUM(net),0) AS net, COALESCE(SUM(discount),0) AS discount FROM sales WHERE cashier_id = ? AND status IN ('paid','partial') AND created_at >= ?`).get(user.id, todayIso);
+    const myVoids = d.prepare(`SELECT COUNT(*) AS n FROM sales WHERE cashier_id = ? AND status='voided' AND voided_at >= ?`).get(user.id, todayIso).n;
+    const myReturns = d.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(r.refund_amount),0) AS total FROM returns r JOIN sales s ON s.id = r.sale_id WHERE s.cashier_id = ? AND r.created_at >= ?`).get(user.id, todayIso);
+    const openShift = d.prepare(`SELECT * FROM shifts WHERE cashier_id = ? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(user.id);
+    let expected = null;
+    if (openShift) {
+      const cashIn = d.prepare(`SELECT COALESCE(SUM(p.amount),0) AS total FROM payments p JOIN sales s ON s.id = p.sale_id WHERE s.shift_id = ? AND p.method='cash' AND p.status='confirmed'`).get(openShift.id).total;
+      const refunds = d.prepare(`SELECT COALESCE(SUM(r.refund_amount),0) AS total FROM returns r JOIN sales s ON s.id = r.sale_id WHERE s.shift_id = ?`).get(openShift.id).total;
+      const payouts = d.prepare(`SELECT COALESCE(SUM(amount),0) AS total FROM shift_payouts WHERE shift_id = ?`).get(openShift.id).total;
+      const deposits = d.prepare(`SELECT COALESCE(SUM(amount),0) AS total FROM deposits WHERE shift_id = ?`).get(openShift.id).total;
+      expected = openShift.float_open + cashIn - refunds - payouts - deposits;
+    }
+    res.json({ cashier_id: user.id, today: mySales, voids: myVoids, returns: myReturns, open_shift: openShift, expected_cash: expected });
+  });
+
+  app.get('/api/reports/export', me, can('reports.view'), (req, res) => {
+    const report = String(req.query.report || 'sales');
+    const format = String(req.query.format || 'csv');
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.status(400).json({ error: 'no branches' });
+    const branchId = numOrNull(req.query.branch_id);
+    const branches = branchId ? [branchId] : vis;
+    const { from, to } = parseRange(req);
+    const ph = branches.map(() => '?').join(',');
+    let rows = [];
+    let columns = [];
+    if (report === 'sales') {
+      columns = ['product_id','product_name','qty','orders','gross','discount','net','cogs','margin'];
+      rows = d.prepare(`
+        SELECT p.id AS product_id, p.name AS product_name, SUM(si.qty) AS qty, COUNT(DISTINCT s.id) AS orders,
+               SUM(si.gross) AS gross, SUM(si.discount) AS discount, SUM(si.net) AS net,
+               SUM(si.qty * COALESCE(v.cost,p.cost,0)) AS cogs,
+               SUM(si.gross - si.qty * COALESCE(v.cost,p.cost,0)) AS margin
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN products p ON p.id = si.product_id LEFT JOIN variants v ON v.id = si.variant_id
+        WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+        GROUP BY p.id ORDER BY gross DESC LIMIT 1000
+      `).all(...branches, from, to);
+    } else if (report === 'margin') {
+      columns = ['product_id','product_name','qty','gross','cogs','margin','margin_pct'];
+      rows = d.prepare(`
+        SELECT p.id AS product_id, p.name AS product_name, SUM(si.qty) AS qty, SUM(si.gross) AS gross,
+               SUM(si.qty * COALESCE(v.cost,p.cost,0)) AS cogs,
+               SUM(si.gross - si.qty * COALESCE(v.cost,p.cost,0)) AS margin,
+               CASE WHEN SUM(si.gross)>0 THEN SUM(si.gross - si.qty * COALESCE(v.cost,p.cost,0))*100.0/SUM(si.gross) ELSE 0 END AS margin_pct
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN products p ON p.id = si.product_id LEFT JOIN variants v ON v.id = si.variant_id
+        WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at <= ?
+        GROUP BY p.id ORDER BY margin DESC LIMIT 1000
+      `).all(...branches, from, to);
+    } else if (report === 'cashiers') {
+      columns = ['cashier_id','cashier_name','orders','gross','discount','net','avg_basket'];
+      const raw = d.prepare(`
+        SELECT s.cashier_id, u.name AS cashier_name, COUNT(DISTINCT s.id) AS orders, SUM(s.gross) AS gross, SUM(s.discount) AS discount, SUM(s.net) AS net
+        FROM sales s LEFT JOIN users u ON u.id = s.cashier_id
+        WHERE s.branch_id IN (${ph}) AND s.created_at >= ? AND s.created_at <= ?
+        GROUP BY s.cashier_id ORDER BY gross DESC
+      `).all(...branches, from, to);
+      rows = raw.map((r)=> ({ ...r, avg_basket: r.orders ? r.gross / r.orders : 0 }));
+    } else {
+      return res.status(400).json({ error: 'unknown report, use sales|margin|cashiers' });
+    }
+    if (format === 'csv') {
+      const csv = require('./lib/csv').toCsv(columns, rows);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename=\"${report}-${from.slice(0,10)}-${to.slice(0,10)}.csv\"`);
+      return res.send(csv);
+    }
+    res.json({ report, from, to, branches, columns, rows });
+  });
+
   // ---- CSV import/export (products + variants + packs in one file) --------------------------------
   const CSV_COLUMNS = [
     'section', 'product_id', 'product_sku', 'product_name', 'product_name_sw', 'category', 'brand',
