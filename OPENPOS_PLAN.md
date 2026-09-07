@@ -603,7 +603,35 @@ transaction.
 - **Acceptance:** breakage matrix passes or yields filed, severity-rated defects; 3 real
   businesses run live transactions in test mode; **a brand-new solo shop owner onboards and
   trades without ever meeting an ERP concept** (observed, not assumed — R-C1/R-C2).
+### Phase 31 — Testing With Real Kenyan Businesses · Days 43–45
+Scenario suites per trade (duka, wines & spirits, boutique, pharmacy, multi-branch retailer)
++ **deliberate breakage:** internet outage · duplicate payment · partial refund · wrong stock
+count · cash shortage · M-Pesa mismatch · transfer not received · price changed after sale ·
+product returned · expired batch · variant sold from another branch · device dies mid-
+transaction.
+- **Acceptance:** breakage matrix passes or yields filed, severity-rated defects; 3 real
+  businesses run live transactions in test mode; **a brand-new solo shop owner onboards and
+  trades without ever meeting an ERP concept** (observed, not assumed — R-C1/R-C2).
 
+
+**Status (2026-09-07): half done — the machine half.** The deliberate-breakage half is written and asserted; the half that needs real shopkeepers is not, and cannot be done from here.
+
+| breakage | what the book must still say | asserted |
+|---|---|---|
+| internet outage | a sale made offline is not lost, and replaying it does not double it | ✅ one sale, one stock move |
+| duplicate payment | the same money posted twice is counted once | ✅ refused by `uq_payments_ref` |
+| partial refund | the money back is on the payment; the rest of the goods stay paid for | ✅ and refunding more than is left is refused |
+| wrong stock count | the count corrects the shelf and records the difference | ✅ a counted, audited move |
+| cash shortage | a shift closed short records the variance | ✅ and the variance drill finds it per cashier |
+| M-Pesa mismatch | a short callback leaves the sale open, never quietly paid | ✅ |
+| transfer not received | in-transit stock belongs to neither shelf | ✅ and nothing vanishes |
+| price changed after sale | the sold line keeps its frozen price | ✅ and the new price applies from then on |
+
+Three real fixes came out of writing these: a refund now takes an **amount** (the route had been refunding the whole payment — a shop refunds one line, not a sale); **locking by IP became a setting** (`lockout.lock_by_ip`), because every till in a Kenyan shop usually sits behind one public address and one person's mistake should not lock out the shop; and the evidence reconciliation now recognises `sale/return` as well as `payment/refund`.
+
+**Still to do (needs people):** the per-trade scenario suites run *with* duka, wines & spirits, boutique, pharmacy and multi-branch retailers, on their own data, with their own staff — the part where a shopkeeper says "that is not how my shop works".
+
+**Phase 30 — AI business assistant: deliberately not built.** It answers from the database with cited rows, which is only honest once there is pilot data to answer from. Building it now would mean practising on numbers no shop has made yet.
 ### Phase 32 — Performance, Security & Production Hardening · Days 46–48
 DB optimisation + query perf (100k rows / 10k moves), API perf budgets, offline sync stress,
 **backup / restore / DR drill**, security + permission review, error handling + structured

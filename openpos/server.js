@@ -834,7 +834,11 @@ function createApp(d) {
       secure_cookies: b.secure_cookies !== undefined ? !!b.secure_cookies : undefined,
       require_reason_on_adjust: b.require_reason_on_adjust !== undefined ? !!b.require_reason_on_adjust : undefined,
       branch_scope_enforced: b.branch_scope_enforced !== undefined ? !!b.branch_scope_enforced : undefined,
-      lockout: b.lockout ? { max_fails: Number(b.lockout.max_fails) || 5, lock_minutes: Number(b.lockout.lock_minutes) || 5 } : undefined,
+      lockout: b.lockout ? {
+        max_fails: Number(b.lockout.max_fails) || 5,
+        lock_minutes: Number(b.lockout.lock_minutes) || 5,
+        lock_by_ip: b.lockout.lock_by_ip !== false
+      } : undefined,
       https: b.https ? { enabled: !!b.https.enabled, cert: String(b.https.cert || ''), key: String(b.https.key || ''), port: Number(b.https.port) || 443 } : undefined,
       backup: b.backup && b.backup.passphrase ? { encrypt: true, passphrase_set: true } : (b.backup ? { encrypt: !!b.backup.encrypt, passphrase_set: !!b.backup.passphrase_set } : undefined)
     });
@@ -1923,12 +1927,15 @@ function createApp(d) {
   app.post('/api/login', (req, res) => {
     const ip = auth.clientIp(req);
     const agent = String((req.headers || {})['user-agent'] || '').slice(0, 200);
+    // Phase 28: locking by IP is a setting — tills behind one router share it.
+    const secCfg = sec.settings(d, dbm);
+    const lockIp = secCfg.lockout.lock_by_ip !== false;
     const name = String((req.body && req.body.name) || '').trim();
     const pin = String((req.body && req.body.pin) || '');
     if (!name) return res.status(400).json({ error: 'select staff member' });
 
     const byName = auth.isLocked(d, 'name', name);
-    const byIp = auth.isLocked(d, 'ip', ip);
+    const byIp = lockIp ? auth.isLocked(d, 'ip', ip) : 0;
     if (byName || byIp) {
       const ms = Math.max(byName || 0, byIp || 0);
       // Phase 28: a refused attempt is a fact the owner may need later.
@@ -1939,7 +1946,7 @@ function createApp(d) {
     const user = d.prepare('SELECT * FROM users WHERE lower(name) = lower(?) AND active = 1').get(name);
     if (!user || !auth.verifyPin(pin, user.salt, user.pin_hash)) {
       const r1 = auth.recordFail(d, 'name', name);
-      const r2 = auth.recordFail(d, 'ip', ip);
+      const r2 = lockIp ? auth.recordFail(d, 'ip', ip) : { fails: 0, locked: false };
       const locked = r1.locked || r2.locked;
       sec.recordLogin(d, { userId: user ? user.id : null, name, ok: false, reason: locked ? 'locked after too many tries' : 'wrong PIN', ip, agent });
       if (locked) dbm.audit(d, { userId: user ? user.id : null, action: 'auth/lockout', entity: 'user', entityId: name, detail: { ip, fails: Math.max(r1.fails, r2.fails) } });
@@ -1950,7 +1957,7 @@ function createApp(d) {
     }
 
     auth.clearFails(d, 'name', name);
-    auth.clearFails(d, 'ip', ip);
+    if (lockIp) auth.clearFails(d, 'ip', ip);
     const token = auth.createSession(d, user.id);
     d.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), user.id);
     sec.recordLogin(d, { userId: user.id, name: user.name, ok: true, reason: '', ip, agent });
@@ -5525,13 +5532,17 @@ function createApp(d) {
       const p = d.prepare('SELECT * FROM payments WHERE id = ?').get(numOrNull(req.params.id));
       if (!p) return res.status(404).json({ error: 'payment not found' });
       const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(p.sale_id);
+      // A shop refunds ONE line of a basket, not the whole sale: the amount is
+      // the customer's to name, and the payment keeps what is still theirs.
+      const amount = (req.body || {}).amount;
       const run = d.transaction(() =>
-        pme.refundPayment(d, { paymentId: p.id, user: req.user, note: (req.body || {}).note }));
+        pme.refundPayment(d, { paymentId: p.id, user: req.user, note: (req.body || {}).note, amount: amount === undefined ? undefined : intShillings(amount) }));
       run();
+      const after = d.prepare('SELECT * FROM payments WHERE id = ?').get(p.id);
       dbm.audit(d, {
         userId: req.user.id, branchId: sale.branch_id, action: 'payment/refund',
         entity: 'payment', entityId: String(p.id),
-        detail: { invoice: sale.invoice_no, method: p.method, amount: p.amount, note: (req.body || {}).note || undefined }
+        detail: { invoice: sale.invoice_no, method: p.method, amount: after.refunded, note: (req.body || {}).note || undefined }
       });
       res.json({ ok: true, ...buildSalePayload(d, p.sale_id) });
     } catch (e) {

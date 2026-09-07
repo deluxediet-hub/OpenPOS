@@ -12,7 +12,10 @@
 const crypto = require('crypto');
 
 const DEFAULTS = {
-  lockout: { max_fails: 5, lock_minutes: 5 },
+  // lock_by_ip: every till in a Kenyan shop often shares ONE public address,
+  // so locking by IP can lock out the whole shop for one person's mistake.
+  // It is on by default and is the owner's to switch off.
+  lockout: { max_fails: 5, lock_minutes: 5, lock_by_ip: true },
   session_hours: 12,
   secure_cookies: false,       // on when the shop fronts the till with HTTPS
   https: { enabled: false, cert: '', key: '', port: 443 },
@@ -119,8 +122,8 @@ const RECONCILIATIONS = [
     expected: (d, w) => d.prepare(`SELECT COUNT(*) AS n FROM stock_moves WHERE type = 'adjust' AND ts >= ? AND ts <= ?`).get(w.from, w.to).n,
     patterns: ['^stock/adjust'] },
   { id: 'payment_refunded', label: 'money was handed back', cls: 'refund',
-    expected: (d, w) => d.prepare(`SELECT COUNT(*) AS n FROM payments WHERE refunded = 1 AND updated_at >= ? AND updated_at <= ?`).get(w.from, w.to).n,
-    patterns: ['^payment/refund', '^return/'] },
+    expected: (d, w) => d.prepare(`SELECT COUNT(*) AS n FROM payments WHERE refunded > 0 AND updated_at >= ? AND updated_at <= ?`).get(w.from, w.to).n,
+    patterns: ['^payment/refund', '^sale/return', '^return/'] },
   { id: 'discount_given', label: 'a sale was discounted', cls: 'discount',
     expected: (d, w) => d.prepare(`SELECT COUNT(*) AS n FROM sales WHERE discount > 0 AND ts >= ? AND ts <= ?`).get(w.from, w.to).n,
     patterns: ['^sale/create', '^sale/discount'] },
