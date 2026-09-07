@@ -1374,6 +1374,41 @@
       </div>
 
       <div class="card" style="margin-top:14px">
+        <h3>Pilot &amp; go/no-go</h3>
+        <p class="muted small" style="margin:0 0 10px">A pilot is not a demo. Each business below has its own book; this
+          reads what those books say without asking anybody. What confuses a cashier goes in the friction register —
+          felt twice is counted twice — and nothing is called "go" until five shops have traded a full week.</p>
+        <div class="row">
+          <button class="btn" id="pl-provision">Provision the five pilot books</button>
+          <button class="btn ghost" id="pl-reload">Reload</button>
+          <span class="pill" id="pl-verdict">—</span>
+          <span class="spacer"></span>
+          <span class="small muted" id="pl-doors"></span>
+        </div>
+        <table style="margin-top:10px">
+          <thead><tr><th>Pilot</th><th>Trade</th><th>Status</th><th>Days trading</th><th>Sales</th><th>What its book says</th></tr></thead>
+          <tbody id="pl-rows"></tbody>
+        </table>
+
+        <h4 style="margin:16px 0 6px">Friction register — what people actually stumbled on</h4>
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          <input id="pl-what" placeholder="What went wrong?" style="flex:1;min-width:220px">
+          <input id="pl-screen" placeholder="Screen (till / manager)" style="width:160px">
+          <select id="pl-sev" style="width:150px">
+            <option value="3">3 — stops the sale</option>
+            <option value="2" selected>2 — slows it down</option>
+            <option value="1">1 — cosmetic</option>
+          </select>
+          <button class="btn small" id="pl-add">Log it</button>
+        </div>
+        <table style="margin-top:8px">
+          <thead><tr><th>#</th><th>What</th><th>Screen</th><th>Felt</th><th>Sev</th><th>State</th></tr></thead>
+          <tbody id="pl-friction"></tbody>
+        </table>
+        <div id="pl-out" class="small" style="margin-top:8px"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
         <h3>Security settings</h3>
         <div class="grid cols-3">
           <label class="f"><span>Lock after (wrong PINs)</span><input id="ev-max-fails" type="number" min="2" max="20"></label>
@@ -3801,12 +3836,55 @@ async function loadEvidence() {
     $('#sub-usage').textContent = sub.usage ? sub.usage.sentence : '';
   }
   await loadBusinesses();
+  await loadPilots();
 
   const cfg = await api('/api/settings/security').catch(() => ({}));
   $('#ev-max-fails').value = (cfg.lockout || {}).max_fails || 5;
   $('#ev-lock-mins').value = (cfg.lockout || {}).lock_minutes || 5;
   $('#ev-session-hours').value = cfg.session_hours || 12;
   $('#ev-secure-cookies').checked = !!cfg.secure_cookies;
+}
+
+// ---------- pilot & go/no-go (Phase 35) ----------
+async function loadPilots() {
+  const rows = $('#pl-rows');
+  if (!rows) return;
+  const r = await api('/api/pilots').catch(() => null);
+  if (!r) return;
+  rows.innerHTML = (r.pilots || []).map((p) => `<tr>
+      <td>${esc(p.name)}</td>
+      <td>${esc(p.trade)}</td>
+      <td><span class="pill ${p.status === 'trading' ? '' : 'r'}">${esc(p.status)}</span></td>
+      <td>${p.trading_days}${p.week_complete ? ' ✓' : ''}</td>
+      <td>${p.sales}</td>
+      <td class="small muted">${esc(p.sentence || '')}</td>
+    </tr>`).join('') || `<tr><td colspan="6"><div class="empty"><div class="empty-t">no pilots provisioned yet</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
+  $('#pl-friction').innerHTML = (r.friction || []).map((f) => `<tr>
+      <td class="small muted">${esc(f.id)}</td>
+      <td>${esc(f.what)}</td>
+      <td class="small muted">${esc(f.screen || '—')}</td>
+      <td>${f.count}×</td>
+      <td>${f.severity}</td>
+      <td>${f.fixed ? `<span class="pill">${esc(f.fix || 'fixed')}</span>` : `<button class="btn ghost small" data-fix="${esc(f.id)}">Mark fixed</button>`}</td>
+    </tr>`).join('') || `<tr><td colspan="6"><div class="empty"><div class="empty-t">nothing logged yet</div><div class="empty-s">When a cashier hesitates, write it down here.</div></div></td></tr>`;
+  $('#pl-friction').querySelectorAll('[data-fix]').forEach((b) => {
+    b.onclick = async () => {
+      const fix = prompt('What fixed it?');
+      if (fix === null) return;
+      try {
+        await api(`/api/pilots/friction/${b.dataset.fix}/fix`, { method: 'POST', body: { fix } });
+        toast($('#ev-msg'), 'friction marked fixed', true);
+        await loadPilots();
+      } catch (e) { toast($('#ev-msg'), errText(e), false); }
+    };
+  });
+  const go = r.doors ? `${r.doors.ok} doors, all open` : '';
+  $('#pl-doors').textContent = go;
+  const verdict = await api('/api/pilots/go-no-go').catch(() => null);
+  if (verdict) {
+    $('#pl-verdict').textContent = `${verdict.verdict} — ${verdict.weeks}/5 weeks`;
+    $('#pl-out').textContent = verdict.sentence;
+  }
 }
 
 // ---------- businesses & subscriptions (Phase 33) ----------
@@ -3977,6 +4055,24 @@ $('#biz-check').onclick = async () => {
     const r = await api('/api/admin/isolation-check', { method: 'POST', body: {} });
     $('#biz-out').textContent = r.sentence;
     toast($('#ev-msg'), r.isolated ? 'no data crosses between businesses' : 'LEAK FOUND', r.isolated);
+  } catch (e) { toast($('#ev-msg'), errText(e), false); }
+};
+$('#pl-provision').onclick = async () => {
+  try {
+    const r = await api('/api/pilots/provision', { method: 'POST', body: {} });
+    toast($('#ev-msg'), `${r.pilots.length} pilot books provisioned`, true);
+    await loadPilots();
+  } catch (e) { toast($('#ev-msg'), errText(e), false); }
+};
+$('#pl-reload').onclick = async () => { try { await loadPilots(); } catch (e) { toast($('#ev-msg'), errText(e), false); } };
+$('#pl-add').onclick = async () => {
+  const what = $('#pl-what').value.trim();
+  if (!what) return toast($('#ev-msg'), 'say what went wrong', false);
+  try {
+    await api('/api/pilots/friction', { method: 'POST', body: { what, screen: $('#pl-screen').value.trim(), severity: Number($('#pl-sev').value) || 2 } });
+    $('#pl-what').value = '';
+    toast($('#ev-msg'), 'logged — felt twice counts twice', true);
+    await loadPilots();
   } catch (e) { toast($('#ev-msg'), errText(e), false); }
 };
 $('#ev-save').onclick = async () => {

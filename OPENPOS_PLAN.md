@@ -725,13 +725,33 @@ one-till owner pause is cut or hidden.
   onboarding v2 re-write and dashboard redesign — better done against what the five pilots
   actually look at in Phase 35.
 
-### Phase 35 — Pilot Release · Days 54–60
+### Phase 35 — Pilot Release · Days 54–60 — **machine half done, human half outstanding**
 Deploy to **five** real businesses: 1 general shop · 1 wines & spirits · 1 boutique ·
 1 pharmacy · 1 multi-branch. Observe: what they use, what they ignore, what confuses
 cashiers, what owners check daily, where stock goes wrong, where payments go wrong, which
 reports they actually need. Refine before broad release.
 - **Acceptance:** pilots complete a full trading week; top-10 friction points fixed;
-  go/no-go on broad release with evidence.
+  go/no-go on broad release with evidence. **Not met — and not faked.** No shop has traded
+  a week yet, because standing in five real businesses is a human act.
+- **What is done (the machine half):** `lib/pilot.js` provisions the five pilot businesses
+  in one idempotent call — each a real business with its own book, sample catalogue and an
+  owner who can log in. `observe()` reads each pilot's **own database** and reports trading
+  days, sales, revenue, average basket, offline sales, voids, till variance, stockouts and
+  last activity — so a pilot is judged by its ledger, not by a report somebody typed. The
+  **friction register** records what went wrong, where, at what severity, and what fixed it;
+  the same complaint felt twice is one item counted twice. `goNoGo()` answers with five
+  checks (five businesses trading · a full week each · the books tie out · no severity-3
+  friction open · every door in the app opens) and today says **"no-go yet"**, naming the
+  checks that fail. `lib/linkaudit.js` finds the friction a machine can find on its own:
+  every internal door in the shipped pages checked against the 298 registered routes —
+  **150 doors, all of them open**. Manager: a **Pilot & go/no-go** card (pilot list,
+  friction register with add/fix, verdict with its reason).
+- **What remains (the human half — flagged, never simulated):** physically deploy to the
+  five businesses, watch them trade for a week, fill the friction register from what
+  cashiers and owners actually do, fix the top-10 that come out of it, then let
+  `goNoGo()` answer for itself. This needs the shopkeepers; it cannot be done from here.
+- **Also deferred to after the pilots:** the onboarding v2 re-write and dashboard redesign
+  from Phase 34 — better designed against what the pilots actually look at than guessed.
 
 ## 5. Risks & mitigations
 

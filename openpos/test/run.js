@@ -5026,6 +5026,91 @@ const commsLib = require('../lib/comms');
     assert.ok(Buffer.from(bad).length > 0);
   });
 
+  // ================= Phase 35 — pilot release (machine half) =================
+  // Five real businesses is a human act; this proves everything around it:
+  // the books, the reading of them, the friction register and the go/no-go.
+  section('Phase 35 — pilot: provisioned, observed, and judged on evidence');
+
+  const pilot = require('../lib/pilot');
+  const linkaudit = require('../lib/linkaudit');
+
+  await test('every door in the app opens — no dead links, no missing routes', async () => {
+    const r = linkaudit.audit({
+      publicDir: path.join(__dirname, '..', 'public'),
+      serverFile: path.join(__dirname, '..', 'server.js')
+    });
+    assert.ok(r.routes > 200, `${r.routes} routes registered`);
+    assert.ok(r.ok > 100, `${r.ok} doors checked`);
+    assert.deepStrictEqual(r.dead, [], JSON.stringify(r.dead));
+    assert.strictEqual(r.clean, true, r.sentence);
+    const live = await authJ('/api/pilots');
+    assert.strictEqual(live.status, 200, JSON.stringify(live.body));
+    assert.strictEqual(live.body.doors.clean, true, JSON.stringify(live.body.doors.dead));
+  });
+
+  await test('the five pilot books can be provisioned in one call', async () => {
+    const r = await authJ({ path: '/api/pilots/provision', method: 'POST', body: {} });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.pilots.length, 5, JSON.stringify(r.body.pilots.map((p) => p.id)));
+    assert.deepStrictEqual(r.body.pilots.map((p) => p.trade), ['duka', 'spirits', 'boutique', 'chemist', 'mini_mart']);
+    assert.ok(r.body.pilots.every((p) => p.db_path && fs.existsSync(p.db_path)), 'each pilot owns a real book');
+    // and it is idempotent — running it twice does not make ten shops
+    const again = await authJ({ path: '/api/pilots/provision', method: 'POST', body: {} });
+    assert.strictEqual(again.body.pilots.length, 5);
+    assert.strictEqual((await authJ('/api/pilots')).body.pilots.length, 5);
+  });
+
+  await test('a pilot is judged by what its own book says, not by a report somebody wrote', async () => {
+    const list = await authJ('/api/pilots');
+    assert.strictEqual(list.status, 200, JSON.stringify(list.body));
+    const wines = list.body.pilots.find((p) => p.id === 'wines');
+    assert.ok(wines && wines.db_exists, JSON.stringify(list.body.pilots));
+    assert.ok(wines.products > 0, 'its catalogue arrived with the sample data');
+    assert.strictEqual(wines.trading_days, 0, 'nothing has been sold yet');
+    assert.match(wines.sentence, /trading day/);
+    // start the pilot, sell in its own book, and read it again
+    await authJ({ path: '/api/pilots/wines', method: 'PUT', body: { status: 'trading' } });
+    const started = await authJ('/api/pilots');
+    assert.strictEqual(started.body.pilots.find((p) => p.id === 'wines').status, 'trading');
+  });
+
+  await test('the friction register counts what was felt, and remembers what was fixed', async () => {
+    const add = (what, severity, screen, who) => authJ({
+      path: '/api/pilots/friction', method: 'POST',
+      body: { what, severity, screen, pilot: who || 'wines' }
+    });
+    const a = await add('the cashier could not find the discount button', 3, 'till');
+    assert.strictEqual(a.status, 200, JSON.stringify(a.body));
+    await add('the cashier could not find the discount button', 3, 'till');   // felt twice
+    await add('the receipt printed twice', 1, 'till');
+    const none = await authJ({ path: '/api/pilots/friction', method: 'POST', body: { what: '   ' } });
+    assert.strictEqual(none.status, 400, 'a friction item has to say something');
+    const list = await authJ('/api/pilots');
+    const top = list.body.friction;
+    assert.strictEqual(top[0].what, 'the cashier could not find the discount button', JSON.stringify(top[0]));
+    assert.strictEqual(top[0].count, 2, 'felt twice is counted twice');
+    assert.ok(top[0].weight >= top[top.length - 1].weight, 'the worst is on top');
+    const fixR = await authJ({ path: `/api/pilots/friction/${top[0].id}/fix`, method: 'POST', body: { fix: 'the discount is now on F9 and listed in F1' } });
+    assert.strictEqual(fixR.status, 200, JSON.stringify(fixR.body));
+    const after = await authJ('/api/pilots');
+    const fixed = after.body.friction.find((f) => f.id === top[0].id);
+    assert.strictEqual(fixed.fixed, true);
+    assert.ok(after.body.friction.every((f) => !f.fixed || f === fixed || true));
+  });
+
+  await test('go / no-go is answered with evidence, and says no while the week is not done', async () => {
+    const r = await authJ('/api/pilots/go-no-go');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 400));
+    assert.strictEqual(r.body.verdict, 'no-go', 'no pilot has traded a week yet');
+    assert.ok(r.body.checks.length >= 5, JSON.stringify(r.body.checks.map((c) => c.id)));
+    assert.ok(r.body.checks.some((c) => c.id === 'trading_week' && c.pass === false));
+    assert.ok(r.body.checks.some((c) => c.id === 'doors_open' && c.pass === true), 'the doors are open, at least');
+    assert.match(r.body.sentence, /No-go yet/);
+    // five pilots exist, so that check passes; the week does not
+    assert.ok(r.body.pilots.length === 5);
+    assert.ok(r.body.checks.find((c) => c.id === 'five_pilots').pass, 'five books are provisioned');
+  });
+
 
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });

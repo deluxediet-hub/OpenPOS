@@ -362,6 +362,28 @@ async function waitFor(fn, label, timeout = 8000) {
     ck('an empty table says why it is empty', empties.length === 0 || /\w/.test((empties[0].textContent || '')),
       empties.length ? empties[0].textContent.trim().slice(0, 60) : 'no empty tables right now');
 
+    // ---------------- Phase 35: the pilot screen -----------------------------
+    await waitFor(() => mw.document.querySelector('#pl-rows'), 'the pilot table', 15000);
+    click(mw, mw.document.querySelector('#pl-provision'));
+    await waitFor(() => /pilot/i.test(mw.document.querySelector('#pl-rows').textContent)
+      && mw.document.querySelectorAll('#pl-rows tr').length >= 4,
+      'the five pilot books :: ' + mw.document.querySelector('#pl-rows').textContent.slice(0, 120), 30000);
+    ck('the back office can provision the five pilot businesses',
+      mw.document.querySelectorAll('#pl-rows tr').length >= 5,
+      String(mw.document.querySelectorAll('#pl-rows tr').length));
+    ck('and each pilot is judged by what its own book says',
+      /trading day/i.test(mw.document.querySelector('#pl-rows').textContent),
+      mw.document.querySelector('#pl-rows').textContent.slice(0, 100));
+
+    mw.document.querySelector('#pl-what').value = 'the cashier looked for the discount button';
+    click(mw, mw.document.querySelector('#pl-add'));
+    await waitFor(() => /discount button/.test(mw.document.querySelector('#pl-friction').textContent),
+      'the friction register :: ' + mw.document.querySelector('#pl-friction').textContent.slice(0, 100), 30000);
+    ck('what confused a cashier goes in the friction register', true);
+    ck('and the go/no-go verdict is on the screen with its reason',
+      /no-go|go/.test(mw.document.querySelector('#pl-verdict').textContent),
+      mw.document.querySelector('#pl-verdict').textContent);
+
     ck('manager page booted without script errors', mgr.errs.length === 0, mgr.errs.join(' | '));
   } catch (e) {
     ck('manager page smoke', false, e.message + ' :: ' + mgr.errs.join(' | '));

@@ -733,6 +733,89 @@ function createApp(d) {
     next();
   };
 
+  // ================= Phase 35 — pilot release, machine half ==================
+  // Five real businesses is a human act — somebody has to stand in the shop.
+  // What belongs here is everything around it: provision the books, read what
+  // happened without asking anybody, keep the friction register honest, and put
+  // the go/no-go question on one page with the evidence under it.
+
+  const pilot = require('./lib/pilot');
+  const linkaudit = require('./lib/linkaudit');
+
+  const PILOT_DIR = process.env.OPENPOS_DATA_DIR || path.dirname(dbm.DB_PATH);
+
+  app.post('/api/pilots/provision', me, can('settings.manage'), async (req, res) => {
+    try {
+      const made = await pilot.provision({ dataDir: PILOT_DIR, createApp, pin: (req.body || {}).pin || '1234' });
+      dbm.audit(d, { userId: req.user.id, action: 'pilot/provision', entity: 'pilot', detail: { count: made.length } });
+      res.json({ ok: true, pilots: made });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/pilots', me, can('settings.manage'), (req, res) => {
+    const state = pilot.read(PILOT_DIR);
+    res.json({
+      pilots: state.pilots.map((p) => pilot.observe(p)),
+      friction: pilot.rankedFriction(PILOT_DIR, 10),
+      doors: linkaudit.audit({ publicDir: path.join(__dirname, 'public'), serverFile: path.join(__dirname, 'server.js') })
+    });
+  });
+
+  app.put('/api/pilots/:id', me, can('settings.manage'), (req, res) => {
+    try {
+      const b = req.body || {};
+      let p = null;
+      if (b.status) p = pilot.setStatus(req.params.id, b.status, PILOT_DIR);
+      if (b.note) {
+        const state = pilot.read(PILOT_DIR);
+        p = state.pilots.find((x) => x.id === String(req.params.id));
+        if (!p) return res.status(404).json({ error: 'no such pilot' });
+        (p.notes = p.notes || []).push({ at: new Date().toISOString(), note: String(b.note) });
+        pilot.write(PILOT_DIR, state);
+      }
+      if (!p) return res.status(400).json({ error: 'nothing to change' });
+      dbm.audit(d, { userId: req.user.id, action: 'pilot/update', entity: 'pilot', entityId: p.id, detail: { status: p.status } });
+      res.json(pilot.observe(p));
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /** What confused somebody, where, and how badly. Felt twice = counted twice. */
+  app.post('/api/pilots/friction', me, can('settings.manage'), (req, res) => {
+    try {
+      const b = req.body || {};
+      const list = pilot.addFriction({
+        pilot: b.pilot || null, screen: b.screen || '', what: b.what,
+        severity: b.severity, who: req.user ? req.user.name : null
+      }, PILOT_DIR);
+      dbm.audit(d, { userId: req.user.id, action: 'pilot/friction', entity: 'pilot', detail: { what: String(b.what || '').slice(0, 120), severity: b.severity } });
+      res.json({ ok: true, top: pilot.rankedFriction(PILOT_DIR, 10), count: list.length });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/pilots/friction/:id/fix', me, can('settings.manage'), (req, res) => {
+    try {
+      const f = pilot.fixFriction(req.params.id, (req.body || {}).fix, PILOT_DIR);
+      dbm.audit(d, { userId: req.user.id, action: 'pilot/friction_fix', entity: 'pilot', entityId: f.id, detail: { fix: f.fix } });
+      res.json({ ok: true, item: f });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /** Go or no-go, with the evidence under it — never a hunch. */
+  app.get('/api/pilots/go-no-go', me, can('settings.manage'), (req, res) => {
+    res.json(pilot.goNoGo({
+      dataDir: PILOT_DIR,
+      onDoors: linkaudit.audit({ publicDir: path.join(__dirname, 'public'), serverFile: path.join(__dirname, 'server.js') })
+    }));
+  });
+
   // ================= Phase 34 — polish & the solo-mode audit =================
   // A one-till shop must never meet the words "branch", "warehouse", "supplier",
   // "purchase order" or "price level" (R-C2). The audit below reads the pages
