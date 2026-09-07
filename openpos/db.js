@@ -1208,6 +1208,67 @@ function migrate(d) {
   d.exec(`CREATE INDEX IF NOT EXISTS idx_stocktakes_branch ON stocktakes(branch_id, created_at)`);
   d.exec(`CREATE INDEX IF NOT EXISTS idx_moves_reason ON stock_moves(reason, created_at)`);
   d.exec(`CREATE INDEX IF NOT EXISTS idx_stocktake_lines_variant ON stocktake_lines(variant_id)`);
+
+  // Phase 14 Day 19: expenses & business finance (P&L-lite, daily sheet, petty cash)
+  addCol(d, 'expenses', 'register_id', 'INTEGER');
+  addCol(d, 'expenses', 'payment_method', "TEXT NOT NULL DEFAULT 'cash'");
+  addCol(d, 'expenses', 'supplier_id', 'INTEGER');
+  addCol(d, 'expenses', 'reference', "TEXT NOT NULL DEFAULT ''");
+  addCol(d, 'expenses', 'receipt', "TEXT NOT NULL DEFAULT ''");
+
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS expense_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT NOT NULL DEFAULT '',
+      color TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+  `);
+  // Seed default categories if empty
+  try {
+    const cnt = d.prepare('SELECT COUNT(*) AS n FROM expense_categories').get().n;
+    if (cnt === 0) {
+      const now2 = new Date().toISOString();
+      const defaults = [
+        ['rent', 'Rent & premises', '#f59e0b'],
+        ['utilities', 'Utilities (power, water, internet)', '#06b6d4'],
+        ['salaries', 'Salaries & wages', '#8b5cf6'],
+        ['transport', 'Transport & fuel', '#ef4444'],
+        ['supplies', 'Office & cleaning supplies', '#10b981'],
+        ['marketing', 'Marketing & promo', '#ec4899'],
+        ['maintenance', 'Repairs & maintenance', '#6366f1'],
+        ['fees', 'Licenses, fees, tax', '#f97316'],
+        ['food', 'Staff food & refreshments', '#84cc16'],
+        ['other', 'Other', '#6b7280']
+      ];
+      const ins = d.prepare('INSERT INTO expense_categories (name, description, color, active, created_at) VALUES (?, ?, ?, 1, ?)');
+      for (const [name, desc, color] of defaults) ins.run(name, desc, color, now2);
+    }
+  } catch (_) {}
+
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS cash_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      branch_id INTEGER NOT NULL REFERENCES branches(id),
+      register_id INTEGER,
+      shift_id INTEGER REFERENCES shifts(id),
+      type TEXT NOT NULL CHECK(type IN ('opening','payout','expense','deposit','sale_cash','refund_cash','adjustment','closing')),
+      amount INTEGER NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      note TEXT NOT NULL DEFAULT '',
+      reference TEXT NOT NULL DEFAULT '',
+      user_id INTEGER,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_cash_branch_date ON cash_movements(branch_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_cash_register ON cash_movements(register_id, created_at);
+  `);
+
+  // Enhance deposits with payment_method if needed (already has branch/register)
+  addCol(d, 'deposits', 'payment_method', "TEXT NOT NULL DEFAULT 'cash'");
+  addCol(d, 'deposits', 'category', "TEXT NOT NULL DEFAULT ''");
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------

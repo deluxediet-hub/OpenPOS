@@ -5655,7 +5655,7 @@ function createApp(d) {
     });
   });
 
-  // ==================== Day 17 — expenses (branch-scoped) ====================
+  // ==================== Day 17-19 — expenses & finance (branch-scoped, P&L-lite) ====================
   app.get('/api/expenses', me, (req, res) => {
     const user = req.user;
     const vis = visibleBranches(d, user).map((b) => b.id);
@@ -5663,6 +5663,7 @@ function createApp(d) {
     const branchId = numOrNull(req.query.branch_id);
     const from = req.query.from ? String(req.query.from) : null;
     const to = req.query.to ? String(req.query.to) : null;
+    const cat = req.query.category ? String(req.query.category).trim() : null;
     const where = [`branch_id IN (${vis.map(() => '?').join(',')})`];
     const args = [...vis];
     if (branchId) {
@@ -5671,6 +5672,7 @@ function createApp(d) {
     }
     if (from) { where.push('expense_date >= ?'); args.push(from); }
     if (to) { where.push('expense_date <= ?'); args.push(to); }
+    if (cat) { where.push('category = ?'); args.push(cat); }
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
     const rows = d.prepare(`SELECT * FROM expenses WHERE ${where.join(' AND ')} ORDER BY expense_date DESC, id DESC LIMIT ?`).all(...args, limit);
     res.json(rows);
@@ -5687,18 +5689,300 @@ function createApp(d) {
       if (!vis.includes(branchId)) return res.status(404).json({ error: 'branch not found' });
       const cat = String(b.category || 'other').trim() || 'other';
       const note = String(b.note || '').trim();
+      const reference = String(b.reference || '').trim();
+      const receipt = String(b.receipt || '').trim();
+      const paymentMethod = String(b.payment_method || 'cash').trim();
+      const supplierId = numOrNull(b.supplier_id);
+      const registerId = numOrNull(b.register_id);
       const expDate = b.expense_date ? String(b.expense_date).trim() : new Date().toISOString().slice(0, 10);
       if (isNaN(Date.parse(expDate))) return res.status(400).json({ error: 'expense_date must be ISO date' });
       const id = d.prepare(
-        `INSERT INTO expenses (branch_id, category, amount, note, expense_date, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).run(branchId, cat, amount, note, expDate, req.user.id, new Date().toISOString()).lastInsertRowid;
-      dbm.audit(d, { userId: req.user.id, branchId, action: 'expense/create', entity: 'expense', entityId: String(id), detail: { amount, category: cat } });
+        `INSERT INTO expenses (branch_id, category, amount, note, expense_date, created_by, created_at, register_id, payment_method, supplier_id, reference, receipt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(branchId, cat, amount, note, expDate, req.user.id, new Date().toISOString(), registerId, paymentMethod, supplierId, reference, receipt).lastInsertRowid;
+      // Cash movement for petty cash reconciliation (if cash)
+      if (paymentMethod === 'cash') {
+        try {
+          d.prepare(
+            `INSERT INTO cash_movements (branch_id, register_id, type, amount, reason, note, reference, user_id, created_at)
+             VALUES (?, ?, 'expense', ?, ?, ?, ?, ?, ?)`
+          ).run(branchId, registerId, amount, cat, note, reference, req.user.id, new Date().toISOString());
+        } catch (_) {}
+      }
+      dbm.audit(d, { userId: req.user.id, branchId, action: 'expense/create', entity: 'expense', entityId: String(id), detail: { amount, category: cat, payment_method: paymentMethod, reference } });
       res.json({ ok: true, id, expense: d.prepare('SELECT * FROM expenses WHERE id = ?').get(id) });
     } catch (e) {
       const st = e.status || 500;
       if (st === 500) console.error(e);
       res.status(st).json({ error: e.message });
     }
+  });
+
+  app.get('/api/expense-categories', me, (req, res) => {
+    const rows = d.prepare('SELECT * FROM expense_categories WHERE active = 1 ORDER BY name').all();
+    res.json(rows);
+  });
+
+  app.post('/api/expense-categories', me, can('expenses.manage'), (req, res) => {
+    const name = String((req.body || {}).name || '').trim();
+    if (!name) return res.status(400).json({ error: 'name required' });
+    const desc = String((req.body || {}).description || '').trim();
+    const color = String((req.body || {}).color || '').trim();
+    try {
+      const id = d.prepare('INSERT INTO expense_categories (name, description, color, active, created_at) VALUES (?, ?, ?, 1, ?)').run(name, desc, color, new Date().toISOString()).lastInsertRowid;
+      res.json({ ok: true, id, category: d.prepare('SELECT * FROM expense_categories WHERE id = ?').get(id) });
+    } catch (e) {
+      if (String(e.message).includes('UNIQUE')) return res.status(409).json({ error: 'category exists' });
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/cash-movements', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json([]);
+    const branchId = numOrNull(req.query.branch_id);
+    const registerId = numOrNull(req.query.register_id);
+    const from = req.query.from ? new Date(req.query.from).toISOString() : null;
+    const to = req.query.to ? new Date(req.query.to).toISOString() : null;
+    const where = [`branch_id IN (${vis.map(() => '?').join(',')})`];
+    const args = [...vis];
+    if (branchId) { where.push('branch_id = ?'); args.push(branchId); }
+    if (registerId) { where.push('register_id = ?'); args.push(registerId); }
+    if (from) { where.push('created_at >= ?'); args.push(from); }
+    if (to) { where.push('created_at <= ?'); args.push(to); }
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    const rows = d.prepare(`SELECT * FROM cash_movements WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...args, limit);
+    res.json(rows);
+  });
+
+  app.post('/api/cash-movements', me, can('expenses.manage'), (req, res) => {
+    try {
+      const b = req.body || {};
+      const amount = intShillings(b.amount);
+      if (amount === null || amount <= 0) return res.status(400).json({ error: 'amount must be > 0' });
+      const branchId = numOrNull(b.branch_id);
+      if (!branchId) return res.status(400).json({ error: 'branch_id required' });
+      const vis = visibleBranches(d, req.user).map((x) => x.id);
+      if (!vis.includes(branchId)) return res.status(404).json({ error: 'branch not found' });
+      const type = String(b.type || '').trim();
+      if (!['opening','payout','expense','deposit','sale_cash','refund_cash','adjustment','closing'].includes(type)) return res.status(400).json({ error: 'invalid type' });
+      const registerId = numOrNull(b.register_id);
+      const shiftId = numOrNull(b.shift_id);
+      const reason = String(b.reason || '').trim();
+      const note = String(b.note || '').trim();
+      const reference = String(b.reference || '').trim();
+      const id = d.prepare(
+        `INSERT INTO cash_movements (branch_id, register_id, shift_id, type, amount, reason, note, reference, user_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(branchId, registerId, shiftId, type, amount, reason, note, reference, req.user.id, new Date().toISOString()).lastInsertRowid;
+      dbm.audit(d, { userId: req.user.id, branchId, action: 'cash_movement/create', entity: 'cash_movement', entityId: String(id), detail: { type, amount, reason } });
+      res.json({ ok: true, id, movement: d.prepare('SELECT * FROM cash_movements WHERE id = ?').get(id) });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  // ---- Day 19: daily financial summary & P&L-lite ----
+  function financeForRange(branchIds, fromIso, toIso) {
+    const ph = branchIds.map(() => '?').join(',');
+    // Sales
+    const sales = d.prepare(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(subtotal),0) AS subtotal, COALESCE(SUM(discount),0) AS discount,
+              COALESCE(SUM(net),0) AS net, COALESCE(SUM(tax),0) AS tax, COALESCE(SUM(gross),0) AS gross
+         FROM sales WHERE branch_id IN (${ph}) AND status IN ('paid','partial') AND created_at >= ? AND created_at < ?`
+    ).get(...branchIds, fromIso, toIso);
+    // COGS from stock_moves sale (more accurate: unit_cost * qty)
+    const cogsRow = d.prepare(
+      `SELECT COALESCE(SUM(-qty * unit_cost),0) AS cogs, COALESCE(SUM(-qty),0) AS qty_sold
+         FROM stock_moves WHERE branch_id IN (${ph}) AND type = 'sale' AND created_at >= ? AND created_at < ?`
+    ).get(...branchIds, fromIso, toIso);
+    // Alternative COGS from sale_items cost (for cross-check)
+    const cogsAlt = d.prepare(
+      `SELECT COALESCE(SUM(si.qty * COALESCE(v.cost, p.cost, 0)),0) AS cogs
+         FROM sale_items si JOIN sales s ON s.id = si.sale_id
+         LEFT JOIN variants v ON v.id = si.variant_id
+         LEFT JOIN products p ON p.id = si.product_id
+        WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.created_at >= ? AND s.created_at < ?`
+    ).get(...branchIds, fromIso, toIso);
+    // Expenses
+    const fromDate = fromIso.slice(0,10);
+    const toDate = toIso.slice(0,10);
+    const exp = d.prepare(
+      `SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS count FROM expenses WHERE branch_id IN (${ph}) AND expense_date >= ? AND expense_date < ?`
+    ).get(...branchIds, fromDate, toDate);
+    const expByCat = d.prepare(
+      `SELECT category, COALESCE(SUM(amount),0) AS total, COUNT(*) AS count FROM expenses WHERE branch_id IN (${ph}) AND expense_date >= ? AND expense_date < ? GROUP BY category ORDER BY total DESC`
+    ).all(...branchIds, fromDate, toDate);
+    // Payouts & deposits
+    const payouts = d.prepare(
+      `SELECT COALESCE(SUM(sp.amount),0) AS total, COUNT(*) AS count FROM shift_payouts sp JOIN shifts sh ON sh.id = sp.shift_id WHERE sh.branch_id IN (${ph}) AND sp.created_at >= ? AND sp.created_at < ?`
+    ).get(...branchIds, fromIso, toIso);
+    const deposits = d.prepare(
+      `SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS count FROM deposits WHERE branch_id IN (${ph}) AND created_at >= ? AND created_at < ?`
+    ).get(...branchIds, fromIso, toIso);
+    // Supplier payments
+    const suppPay = d.prepare(
+      `SELECT COALESCE(SUM(ip.amount),0) AS total, COUNT(*) AS count FROM invoice_payments ip JOIN supplier_invoices si ON si.id = ip.invoice_id WHERE si.id IN (SELECT id FROM supplier_invoices WHERE branch_id IN (${ph}) OR branch_id IS NULL) AND ip.created_at >= ? AND ip.created_at < ?`
+    ).all(...branchIds, fromIso, toIso)[0] || { total: 0, count: 0 };
+    // Customer repayments
+    const custRep = d.prepare(
+      `SELECT COALESCE(SUM(cl.amount),0) AS total, COUNT(*) AS count FROM customer_ledger cl JOIN customers c ON c.id = cl.customer_id WHERE (c.branch_id IN (${ph}) OR c.branch_id IS NULL) AND cl.type = 'repayment' AND cl.created_at >= ? AND cl.created_at < ?`
+    ).get(...branchIds, fromIso, toIso);
+    // Cash movements
+    const cash = d.prepare(
+      `SELECT type, COALESCE(SUM(amount),0) AS total, COUNT(*) AS count FROM cash_movements WHERE branch_id IN (${ph}) AND created_at >= ? AND created_at < ? GROUP BY type`
+    ).all(...branchIds, fromIso, toIso);
+    const cashMap = Object.fromEntries(cash.map((r) => [r.type, r]));
+    const grossProfit = sales.net - cogsRow.cogs;
+    const nop = grossProfit - exp.total;
+    return {
+      sales,
+      cogs: { total: cogsRow.cogs, qty: cogsRow.qty_sold, alt: cogsAlt.cogs },
+      gross_profit: grossProfit,
+      expenses: { total: exp.total, count: exp.count, by_category: expByCat },
+      payouts,
+      deposits,
+      supplier_payments: suppPay,
+      customer_repayments: custRep,
+      cash_movements: cashMap,
+      nop,
+      // For acceptance: daily sheet ties
+      tie: {
+        formula: 'net - cogs - expenses = nop',
+        net: sales.net,
+        cogs: cogsRow.cogs,
+        expenses: exp.total,
+        computed_nop: sales.net - cogsRow.cogs - exp.total,
+        reported_nop: nop,
+        match: Math.abs((sales.net - cogsRow.cogs - exp.total) - nop) < 1
+      }
+    };
+  }
+
+  app.get('/api/reports/daily', me, can('reports.view'), (req, res) => {
+    const user = req.user;
+    const vis = visibleBranches(d, user).map((b) => b.id);
+    if (!vis.length) return res.json({ error: 'no branches' });
+    const branchId = numOrNull(req.query.branch_id);
+    const dateStr = req.query.date ? String(req.query.date).trim() : new Date().toISOString().slice(0,10);
+    if (isNaN(Date.parse(dateStr))) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    const branches = branchId ? [branchId] : vis;
+    if (branchId && !vis.includes(branchId)) return res.status(404).json({ error: 'branch not found' });
+    const fromIso = new Date(dateStr).toISOString();
+    const toIso = new Date(new Date(dateStr).getTime() + 86400000).toISOString();
+    const fin = financeForRange(branches, fromIso, toIso);
+    // Supplier balances consolidated
+    const supBalances = d.prepare('SELECT * FROM suppliers WHERE active = 1').all().map((s) => ({ id: s.id, name: s.name, balance: supplierBalance(s.id, branchId) })).filter((s) => s.balance.outstanding !== 0 || s.balance.invoices_total > 0);
+    // Customer balances
+    const custOutstanding = d.prepare(
+      `SELECT c.id, c.name, c.phone, COALESCE((SELECT SUM(CASE WHEN type='credit_sale' THEN amount WHEN type='repayment' THEN -amount ELSE 0 END) FROM customer_ledger WHERE customer_id = c.id),0) AS outstanding
+         FROM customers c WHERE c.active = 1 AND (c.branch_id IN (${branches.map(() => '?').join(',')}) OR c.branch_id IS NULL)
+         ORDER BY outstanding DESC LIMIT 20`
+    ).all(...branches).filter((c) => c.outstanding !== 0);
+
+    res.json({
+      date: dateStr,
+      branch_id: branchId || null,
+      branches,
+      finance: fin,
+      supplier_balances: supBalances.slice(0, 20),
+      customer_balances: custOutstanding,
+      petty_cash: {
+        // Petty cash reconciles: float + cash sales - payouts - deposits - cash expenses
+        payouts: fin.payouts,
+        deposits: fin.deposits,
+        cash_expenses: d.prepare(`SELECT COALESCE(SUM(amount),0) AS total FROM expenses WHERE branch_id IN (${branches.map(() => '?').join(',')}) AND expense_date = ? AND payment_method = 'cash'`).get(...branches, dateStr).total,
+        cash_movements: fin.cash_movements
+      }
+    });
+  });
+
+  app.get('/api/reports/pnl', me, can('reports.view'), (req, res) => {
+    const user = req.user;
+    const vis = visibleBranches(d, user).map((b) => b.id);
+    if (!vis.length) return res.json({ branches: [], rows: [] });
+    const branchId = numOrNull(req.query.branch_id);
+    const from = req.query.from ? String(req.query.from).trim() : new Date(Date.now() - 30*86400000).toISOString().slice(0,10);
+    const to = req.query.to ? String(req.query.to).trim() : new Date().toISOString().slice(0,10);
+    if (isNaN(Date.parse(from)) || isNaN(Date.parse(to))) return res.status(400).json({ error: 'from/to must be YYYY-MM-DD' });
+    const groupBy = String(req.query.group_by || 'day');
+    const branches = branchId ? [branchId] : vis;
+    if (branchId && !vis.includes(branchId)) return res.status(404).json({ error: 'branch not found' });
+    const fromIso = new Date(from).toISOString();
+    const toIso = new Date(new Date(to).getTime() + 86400000).toISOString();
+
+    let rows = [];
+    if (groupBy === 'branch') {
+      rows = branches.map((bid) => {
+        const b = branchRow(d, bid);
+        const fin = financeForRange([bid], fromIso, toIso);
+        return { branch_id: bid, branch_name: b ? b.name : `#${bid}`, ...fin, period: { from, to } };
+      });
+    } else if (groupBy === 'day') {
+      const days = [];
+      const start = new Date(from);
+      const end = new Date(to);
+      for (let dt = new Date(start); dt <= end; dt.setDate(dt.getDate() + 1)) {
+        const ds = dt.toISOString().slice(0,10);
+        const f = new Date(ds).toISOString();
+        const t2 = new Date(new Date(ds).getTime() + 86400000).toISOString();
+        const fin = financeForRange(branches, f, t2);
+        days.push({ date: ds, ...fin });
+      }
+      rows = days;
+    } else {
+      // consolidated
+      const fin = financeForRange(branches, fromIso, toIso);
+      rows = [{ period: { from, to }, branches, ...fin }];
+    }
+
+    const consolidated = financeForRange(branches, fromIso, toIso);
+    res.json({ from, to, group_by: groupBy, branches, consolidated, rows });
+  });
+
+  app.get('/api/reports/petty-cash', me, can('reports.view'), (req, res) => {
+    const vis = visibleBranches(d, req.user).map((b) => b.id);
+    if (!vis.length) return res.json({ movements: [] });
+    const branchId = numOrNull(req.query.branch_id);
+    const registerId = numOrNull(req.query.register_id);
+    const dateStr = req.query.date ? String(req.query.date).trim() : new Date().toISOString().slice(0,10);
+    const fromIso = new Date(dateStr).toISOString();
+    const toIso = new Date(new Date(dateStr).getTime() + 86400000).toISOString();
+    const branches = branchId ? [branchId] : vis;
+    const ph = branches.map(() => '?').join(',');
+    const regFilter = registerId ? ' AND register_id = ?' : '';
+    const regArgs = registerId ? [registerId] : [];
+    const movements = d.prepare(
+      `SELECT * FROM cash_movements WHERE branch_id IN (${ph})${regFilter} AND created_at >= ? AND created_at < ? ORDER BY created_at`
+    ).all(...branches, ...regArgs, fromIso, toIso);
+    const salesCash = d.prepare(
+      `SELECT COALESCE(SUM(p.amount),0) AS total FROM payments p JOIN sales s ON s.id = p.sale_id WHERE s.branch_id IN (${ph}) AND p.method = 'cash' AND p.created_at >= ? AND p.created_at < ?`
+    ).get(...branches, fromIso, toIso).total;
+    const cashExpenses = d.prepare(
+      `SELECT COALESCE(SUM(amount),0) AS total FROM expenses WHERE branch_id IN (${ph}) AND expense_date = ? AND payment_method = 'cash'`
+    ).get(...branches, dateStr).total;
+    const opening = movements.filter((m) => m.type === 'opening').reduce((a, b) => a + b.amount, 0);
+    const payouts = movements.filter((m) => m.type === 'payout').reduce((a, b) => a + b.amount, 0);
+    const deposits = movements.filter((m) => m.type === 'deposit').reduce((a, b) => a + b.amount, 0);
+    const closing = movements.filter((m) => m.type === 'closing').reduce((a, b) => a + b.amount, 0);
+    const expected = opening + salesCash - cashExpenses - payouts - deposits;
+    res.json({
+      date: dateStr,
+      branch_id: branchId || null,
+      register_id: registerId || null,
+      movements,
+      summary: {
+        opening,
+        sales_cash: salesCash,
+        cash_expenses: cashExpenses,
+        payouts,
+        deposits,
+        closing,
+        expected_closing: expected,
+        variance: closing ? closing - expected : null,
+        reconciles: closing ? Math.abs(closing - expected) < 1 : null
+      }
+    });
   });
 
   // ---- Phase 12 — branch comparison (R-3): rank visible branches by sales ----
