@@ -148,6 +148,22 @@ async function waitFor(fn, label, timeout = 8000) {
   }
 
   const click = (w, el) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const press = (w, key, target) => (target || w.document.body).dispatchEvent(
+    new w.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+  /** Text a shop can actually see — hidden tabs and cut fields do not count. */
+  const seenText = (w) => {
+    const out = [];
+    const walk = (el, hidden) => {
+      for (const c of el.childNodes) {
+        if (c.nodeType === 3) { if (!hidden) out.push(c.textContent); continue; }
+        if (c.nodeType !== 1) continue;
+        if (c.tagName === 'SCRIPT' || c.tagName === 'STYLE') continue;
+        walk(c, hidden || c.classList.contains('hidden') || c.getAttribute('aria-hidden') === 'true');
+      }
+    };
+    walk(w.document.body, false);
+    return out.join(' ').toLowerCase();
+  };
 
   console.log('\nUI smoke — the shell mounts what the modules declare (Phase 18)');
 
@@ -338,6 +354,14 @@ async function waitFor(fn, label, timeout = 8000) {
         /zero data crossing/.test((mw.document.querySelector('#biz-out') || {}).textContent || ''),
         (mw.document.querySelector('#biz-out') || {}).textContent);
 
+    // ---------------- Phase 34: empty states and the solo audit ---------------
+    const mgrText = seenText(mw);
+    const erpM = ['warehouse', 'supplier', 'purchase order', 'price level'].filter((w) => mgrText.includes(w));
+    ck('the back office hides what a one-shop business cannot use', erpM.length === 0, erpM.join(', '));
+    const empties = mw.document.querySelectorAll('.empty');
+    ck('an empty table says why it is empty', empties.length === 0 || /\w/.test((empties[0].textContent || '')),
+      empties.length ? empties[0].textContent.trim().slice(0, 60) : 'no empty tables right now');
+
     ck('manager page booted without script errors', mgr.errs.length === 0, mgr.errs.join(' | '));
   } catch (e) {
     ck('manager page smoke', false, e.message + ' :: ' + mgr.errs.join(' | '));
@@ -349,6 +373,27 @@ async function waitFor(fn, label, timeout = 8000) {
     await waitFor(() => pos.w.document.querySelector('#p-main') && !pos.w.document.querySelector('#p-main').classList.contains('hidden'), 'till booted');
     ck('till boots with the module framework loaded', true);
     ck('till has the module panel host', !!pos.w.document.querySelector('#p-modules'));
+
+    // ---------------- Phase 34: a till you can run from the keyboard ----------
+    const help = pos.w.document.querySelector('#p-keys');
+    press(pos.w, 'F1');
+    ck('F1 shows every shortcut the till knows',
+      !help.classList.contains('hidden') && /F6/.test(help.textContent),
+      help.textContent.slice(0, 80));
+    ck('and the shortcuts are written in words, not just keys',
+      /search|tafut/i.test(help.textContent), help.textContent.slice(0, 120));
+    press(pos.w, 'F1');
+    ck('F1 again puts it away', help.classList.contains('hidden'));
+    pos.w.document.querySelector('#p-amount').focus();
+    press(pos.w, 'F2');
+    ck('F2 jumps to scan / search', pos.w.document.activeElement === pos.w.document.querySelector('#scan'),
+      String(pos.w.document.activeElement && pos.w.document.activeElement.id));
+    press(pos.w, 'Escape');
+
+    // ---------------- Phase 34 solo audit (R-C2) ------------------------------
+    const tillText = seenText(pos.w);
+    const erp = ['branch', 'warehouse', 'supplier', 'purchase order', 'price level'].filter((w) => tillText.includes(w));
+    ck('the till never talks to a one-till shop like it is a chain', erp.length === 0, erp.join(', '));
     ck('till page booted without script errors', pos.errs.length === 0, pos.errs.join(' | '));
   } catch (e) {
     ck('till page smoke', false, e.message + ' :: ' + pos.errs.join(' | '));

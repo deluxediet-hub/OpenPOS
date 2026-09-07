@@ -105,7 +105,7 @@ function money(n) {
  * A receipt, in bytes. Everything the till shows, in the order a Kenyan
  * receipt is expected to read: shop, lines, VAT, total, payment, QR, drawer.
  */
-function receiptBytes({ business = {}, sale = {}, items = [], payments = [], customer = null, profile = {} }) {
+function receiptBytes({ business = {}, sale = {}, items = [], payments = [], customer = null, profile = {}, receiptLines = [] }) {
   const cfg = profileOf('printer', profile);
   const c = Number(cfg.chars) || 48;
   const out = [];
@@ -138,6 +138,10 @@ function receiptBytes({ business = {}, sale = {}, items = [], payments = [], cus
   out.push('\n');
   out.push([ESC, 0x61, 0x01]);
   if (business.footer) out.push(centre(business.footer, c) + '\n');
+  // What this trade's receipt must say that another's does not (a chemist's
+  // batch warning, a wines & spirits age notice). The core prints what the
+  // modules hand it and never asks which trade it is.
+  for (const line of receiptLines || []) out.push(centre(enc(line).slice(0, c), c) + '\n');
   if (cfg.qr && sale.invoice_no) {
     out.push(qrBytes(sale.qr || sale.cuin || sale.invoice_no));
     out.push('\n');

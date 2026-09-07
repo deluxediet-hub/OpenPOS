@@ -41,7 +41,9 @@ const HOOKS = {
   commands: 'collect',
   permissions: 'collect',
   ui: 'collect',
-  template: 'collect'
+  template: 'collect',
+  // Phase 34: what a trade's receipt must say that no other trade's does.
+  receipt: 'collect'
 };
 
 const HOOK_NAMES = Object.keys(HOOKS);
@@ -165,6 +167,11 @@ function normalize(raw, file) {
       beforeCommit: (raw.checkout && typeof raw.checkout.beforeCommit === 'function') ? raw.checkout.beforeCommit : null
     },
     stock: { rule: (raw.stock && typeof raw.stock.rule === 'function') ? raw.stock.rule : null },
+    // Phase 34: lines this trade's receipt must carry ({ en, sw }). Data only —
+    // the module owns its own wording; the core just prints what it is given.
+    receipt: Array.isArray(raw.receipt) ? raw.receipt.map((r) => ({
+      en: String(r.en || '').trim(), sw: String(r.sw || r.en || '').trim()
+    })).filter((r) => r.en) : [],
     activate: typeof raw.activate === 'function' ? raw.activate : null,
     file: file || null
   };
@@ -437,6 +444,16 @@ class Registry {
   ui() { return this.collect('ui'); }
   reports() { return this.collect('reports').map((r) => ({ ...r, module: r.module })); }
   template() { return this.collect('template'); }
+
+  /**
+   * Receipt lines the active trades ask for, in the language of the shop.
+   * The core never names a trade: it prints whatever the modules hand it.
+   */
+  receiptLines(lang = 'en') {
+    return this.collect('receipt')
+      .map((r) => r[lang] || r.en)
+      .filter((x) => typeof x === 'string' && x.trim());
+  }
 
   commands() { return this.collect('commands'); }
   command(id) { return this.commands().find((c) => c.id === String(id)) || null; }

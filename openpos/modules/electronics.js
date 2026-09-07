@@ -303,5 +303,11 @@ module.exports = {
         }
       }
     }
+  ],
+  receipt: [
+    { en: 'Warranty is 12 months from this date — keep this receipt.',
+      sw: 'Dhamana ni miezi 12 kuanzia leo — hifadhi risiti hii.' },
+    { en: 'Serial / IMEI numbers above identify your unit.',
+      sw: 'Namba za seriali / IMEI hapo juu zinatambua kifaa chako.' }
   ]
 };

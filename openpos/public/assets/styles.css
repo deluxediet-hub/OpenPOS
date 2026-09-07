@@ -151,3 +151,21 @@ tr.clickable:hover { background: var(--green-soft); }
 .placeholder h2 { color: var(--ink); }
 .hidden { display: none !important; }
 .lang-toggle { cursor: pointer; user-select: none; }
+
+/* ---- Phase 34: empty states, focus, tablet ---- */
+.empty { text-align: center; padding: 22px 14px; color: var(--muted); }
+.empty-t { font-size: 14px; font-weight: 600; color: var(--ink); margin-bottom: 4px; }
+.empty-s { font-size: 13px; }
+:focus-visible { outline: 2px solid var(--green, #1f9d55); outline-offset: 2px; border-radius: 4px; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--green, #1f9d55); }
+@media (max-width: 900px) {
+  .grid.cols-3, .grid.cols-4, .grid.cols-5 { grid-template-columns: 1fr 1fr !important; }
+  table { font-size: 13px; }
+}
+@media (max-width: 600px) {
+  .grid.cols-3, .grid.cols-4, .grid.cols-5 { grid-template-columns: 1fr !important; }
+  .topbar { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

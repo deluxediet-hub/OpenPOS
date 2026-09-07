@@ -514,5 +514,14 @@ module.exports = {
         }
       }
     }
+  ],
+  // A medicine receipt carries the warnings a chemist is required to give.
+  receipt: [
+    { en: 'Check the expiry date before use.',
+      sw: 'Angalia tarehe ya mwisho kabla ya kutumia.' },
+    { en: 'Keep all medicines out of reach of children.',
+      sw: 'Weka dawa mbali na watoto.' },
+    { en: 'Medicines once sold are not returnable.',
+      sw: 'Dawa zilizouzwa hazirudishwi.' }
   ]
 };

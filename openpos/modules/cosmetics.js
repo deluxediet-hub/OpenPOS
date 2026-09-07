@@ -202,6 +202,10 @@ module.exports = {
         }
       }
     }
+  ],
+  receipt: [
+    { en: 'Do a patch test before first use.',
+      sw: 'Jaribu kidogo kabla ya kutumia kwa mara ya kwanza.' }
   ]
 };
 

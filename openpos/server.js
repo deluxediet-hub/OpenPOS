@@ -733,6 +733,18 @@ function createApp(d) {
     next();
   };
 
+  // ================= Phase 34 — polish & the solo-mode audit =================
+  // A one-till shop must never meet the words "branch", "warehouse", "supplier",
+  // "purchase order" or "price level" (R-C2). The audit below reads the pages
+  // the shop actually loads — everything a solo business can never reach is
+  // stripped first — and counts what is left. It is measured, not promised.
+
+  const uiaudit = require('./lib/uiaudit');
+
+  app.get('/api/solo/audit', me, can('settings.manage'), (req, res) => {
+    res.json(uiaudit.soloAudit(caps.getCapabilityMap(d), path.join(__dirname, 'public')));
+  });
+
   // ================= Phase 33 — deployment & SaaS layer =====================
   // One shop, one book: every business gets its own database FILE, so no
   // forgotten WHERE clause can ever put one shop's customer in another's till.
@@ -1303,6 +1315,16 @@ function createApp(d) {
   });
 
   /** Receipt bytes for a sale, from whichever printer this counter uses. */
+  /**
+   * The language the shop PRINTS in — its own choice, already on the settings
+   * screen: a cashier may read English while the customer reads Swahili.
+   */
+  function langOf(db) {
+    const rc = dbm.getSetting(db, 'receipt', {}) || {};
+    const v = String(dbm.getSetting(db, 'receipt_language', null) || rc.language || 'en').toLowerCase();
+    return v.startsWith('sw') ? 'sw' : 'en';
+  }
+
   app.get('/api/sales/:id/receipt-bytes', me, can('sales.view'), (req, res) => {
     try {
       const payload = buildSalePayload(d, numOrNull(req.params.id));
@@ -1314,8 +1336,13 @@ function createApp(d) {
       if (!dev) return res.status(404).json({ error: 'no printer configured for this counter' });
       const profile = hw.profileOf(dev.type, { ...JSON.parse(dev.profile || '{}'), driver: dev.driver });
       const bytes = hw.receiptBytes({
-        business: payload.receipt.business || {}, sale: { ...payload.sale, cashier: payload.sale.cashier },
-        items: payload.items, payments: payload.payments, customer: payload.customer, profile
+        // Phase 34 fix: the footer the shop wrote belongs on the paper too — it
+        // was built into the payload but never handed to the printer.
+        business: { ...(payload.receipt.business || {}), footer: payload.receipt.footer || '' },
+        sale: { ...payload.sale, cashier: payload.sale.cashier },
+        items: payload.items, payments: payload.payments, customer: payload.customer, profile,
+        // the trade's own words on the receipt, in the shop's language
+        receiptLines: registry(d).receiptLines(langOf(d))
       });
       res.json({
         ok: true, device: { id: dev.id, name: dev.name, driver: dev.driver },

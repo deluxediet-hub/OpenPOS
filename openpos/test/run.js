@@ -4894,6 +4894,138 @@ const commsLib = require('../lib/comms');
     assert.strictEqual(missing.status, 404);
   });
 
+  // ================= Phase 34 — polish & the solo audit =====================
+  // Acceptance: a cashier can sell without the mouse; nothing on the screen
+  // talks to a one-till shop like it is a chain; every string has a Swahili.
+  section('Phase 34 — polish: keyboard-first, plain words, no ERP leakage');
+
+  await test('the till can be run without ever touching the mouse', async () => {
+    const pos = fs.readFileSync(path.join(__dirname, '..', 'public', 'pos.html'), 'utf8');
+    // the shortcuts exist in code, and they are written on the screen too
+    for (const key of ['F2', 'F3', 'F4', 'F6', 'F8', 'F9', 'ArrowDown', 'Delete']) {
+      assert.ok(new RegExp(`'${key}'`).test(pos) || new RegExp(`"${key}"`).test(pos), `the till knows ${key}`);
+    }
+    assert.ok(/SHORTCUTS/.test(pos) && /toggleKeyHelp/.test(pos), 'and every shortcut is listed (F1)');
+    assert.ok(/class="cline\$\{i === SEL/.test(pos), 'the arrow keys show which line they are on');
+    assert.ok(/aria-label=/.test(pos), 'icon-only buttons have names a screen reader can read');
+    const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'assets', 'styles.css'), 'utf8');
+    assert.ok(/max-width: *820px/.test(css) || /max-width: *1100px/.test(css), 'the till works on a tablet');
+    assert.ok(/prefers-reduced-motion/.test(css), 'and respects a shop that asked for less motion');
+  });
+
+  await test('an empty table explains itself instead of showing a blank row', async () => {
+    const mgr = fs.readFileSync(path.join(__dirname, '..', 'public', 'manager.html'), 'utf8');
+    const empties = (mgr.match(/class="empty"/g) || []).length;
+    assert.ok(empties >= 40, `most tables have a real empty state (${empties})`);
+    assert.ok(/empty-s/.test(mgr) && /nothing_here_sub/.test(mgr), 'with a sentence under the heading');
+    const appjs = fs.readFileSync(path.join(__dirname, '..', 'public', 'assets', 'app.js'), 'utf8');
+    assert.ok(/function emptyRow/.test(appjs), 'and one helper draws them all the same way');
+  });
+
+  await test('every core string has a Swahili', async () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'assets', 'app.js'), 'utf8');
+    const I18N = eval('(' + src.match(/const I18N = (\{[\s\S]*?\n\});/)[1] + ')');
+    const en = Object.keys(I18N.en), sw = Object.keys(I18N.sw);
+    assert.ok(en.length >= 380, `${en.length} strings translated`);
+    const missing = en.filter((k) => !I18N.sw[k] || !I18N.sw[k].trim());
+    assert.deepStrictEqual(missing, [], `untranslated: ${missing.join(', ')}`);
+    const untranslated = en.filter((k) => I18N.sw[k] === I18N.en[k]);
+    assert.ok(untranslated.length <= 12, `${untranslated.length} strings still identical (proper nouns aside)`);
+    // the till and the back office use the dictionary, not hard-coded English
+    for (const f of ['manager.html', 'pos.html']) {
+      const html = fs.readFileSync(path.join(__dirname, '..', 'public', f), 'utf8');
+      const keys = [...html.matchAll(/data-i18n(?:-ph|-title)?="([a-z0-9_]+)"/g)].map((m) => m[1]);
+      const unknown = [...new Set(keys)].filter((k) => !I18N.en[k]);
+      assert.deepStrictEqual(unknown, [], `${f} asks for strings that do not exist: ${unknown.slice(0, 6).join(', ')}`);
+    }
+  });
+
+  await test('solo mode: a one-till shop never meets the words of a chain', async () => {
+    const uiaudit = require('../lib/uiaudit');
+    const r = uiaudit.soloAudit({ deni: true }, path.join(__dirname, '..', 'public'));
+    assert.strictEqual(r.solo, true, 'this business is solo');
+    assert.strictEqual(r.clean, true, r.sentence);
+    assert.strictEqual(r.hits, 0, JSON.stringify(r.pages.flatMap((p) => p.hits)));
+    assert.match(r.sentence, /Solo mode is clean/);
+    // ...and the same audit, run through the API the back office calls
+    const live = await authJ('/api/solo/audit');
+    assert.strictEqual(live.status, 200, JSON.stringify(live.body));
+    assert.strictEqual(live.body.clean, true, live.body.sentence);
+    assert.ok(live.body.pages.length >= 2, 'both the till and the back office were walked');
+  });
+
+  await test('the audit catches leakage rather than promising there is none', async () => {
+    const uiaudit = require('../lib/uiaudit');
+    // the same page, with every capability on, is allowed to say "branch"
+    const chain = uiaudit.soloAudit({ multi_branch: true, purchasing: true }, path.join(__dirname, '..', 'public'));
+    assert.strictEqual(chain.solo, false, 'a chain is not solo');
+    // and a page that leaks is named, line by line
+    const os = require('os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpos-audit-'));
+    fs.writeFileSync(path.join(dir, 'pos.html'), '<div>Branch stock report</div>');
+    const leaky = uiaudit.soloAudit({ deni: true }, dir);
+    assert.strictEqual(leaky.clean, false);
+    assert.ok(leaky.pages[0].hits.some((h) => h.matched === 'branch' && h.line >= 1), JSON.stringify(leaky.pages[0].hits));
+    assert.match(leaky.sentence, /still talk to a one-till shop/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+
+  await test('the printed receipt carries the shop footer and honours its print language', async () => {
+    // a printer at the counter
+    const dev = await authJ({ path: '/api/devices', method: 'POST', body: { type: 'printer', name: 'P34 Counter', driver: 'escpos', profile: { width: 80, qr: false }, is_default: true } });
+    assert.strictEqual(dev.status, 200, JSON.stringify(dev.body));
+    const sale = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: (await mkP({ name: 'P34 Receipt', sku: 'P34R', cost: 50, price: 100 }, 5)).vid, qty: 1 }],
+      payment: { method: 'cash', amount: 100 }
+    } });
+    assert.strictEqual(sale.status, 200, JSON.stringify(sale.body));
+    const text = async () => {
+      const r = await authJ(`/api/sales/${sale.body.sale.id}/receipt-bytes`);
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      return Buffer.from(r.body.base64, 'base64').toString('latin1');
+    };
+    const en = await text();
+    assert.ok(/P34 Receipt/.test(en), 'the line the customer bought is on it');
+    // this book is a general shop (duka): no trade boilerplate is added
+    // switch the shop's PRINT language to Swahili and print again
+    await authJ({ path: '/api/settings', method: 'PUT', body: { receipt: { language: 'sw', footer: 'Asante' } } });
+    const sw = await text();
+    assert.ok(/Asante/.test(sw), 'the footer the shop wrote is on it');
+    await authJ({ path: '/api/settings', method: 'PUT', body: { receipt: { language: 'en', footer: '' } } });
+    const back = await text();
+    assert.ok(!/Asante/.test(back), 'and the choice is honoured in both directions');
+  });
+
+  await test('a receipt reads like it came from that trade, and speaks Swahili when asked', async () => {
+    const mods = require('../modules/loader');
+    if (!mods.all().length) mods.discover();
+    const lines = (trade, lang) => new mods.Registry(mods.forTrade(trade), { trade }).receiptLines(lang);
+    const spirits = lines('spirits', 'en');
+    assert.ok(spirits.some((l) => /responsibly/i.test(l)), JSON.stringify(spirits));
+    assert.ok(lines('spirits', 'sw').some((l) => /kiasi/i.test(l)), 'the same receipt in Swahili');
+    const chem = lines('chemist', 'en');
+    assert.ok(chem.some((l) => /out of reach of children/i.test(l)), JSON.stringify(chem));
+    assert.ok(lines('chemist', 'sw').some((l) => /watoto/i.test(l)));
+    assert.ok(lines('hardware', 'en').some((l) => /returnable/i.test(l)));
+    assert.deepStrictEqual(lines('duka', 'en'), [], 'a general shop gets no trade boilerplate');
+    // and the core prints them without ever asking which trade it is
+    const hw = require('../lib/devices');
+    const bytes = hw.receiptBytes({
+      business: { name: 'Baraka Wines' },
+      sale: { invoice_no: 'INV-1', gross: 100 },
+      items: [{ name: 'Whisky 750ml', qty: 1, unit_price: 100, gross: 100 }],
+      receiptLines: spirits
+    });
+    const text = Buffer.from(bytes).toString('latin1');
+    assert.ok(/responsibly/i.test(text), 'the trade line is on the printed receipt');
+    const plain = hw.receiptBytes({ business: { name: 'Baraka' }, sale: { invoice_no: 'INV-2', gross: 100 }, items: [] });
+    assert.ok(!/responsibly/i.test(Buffer.from(plain).toString('latin1')), 'and absent when no trade asks for it');
+    // a broken module must never stop a receipt from printing
+    const bad = hw.receiptBytes({ business: { name: 'X' }, sale: { gross: 1 }, items: [], receiptLines: [null, '', '  '] });
+    assert.ok(Buffer.from(bad).length > 0);
+  });
+
 
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });

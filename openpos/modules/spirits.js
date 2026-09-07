@@ -338,5 +338,12 @@ module.exports = {
         }
       }
     }
+  ],
+  // What a wines & spirits receipt must say that a general shop's need not.
+  receipt: [
+    { en: 'Enjoy responsibly. Not for sale to persons under 18.',
+      sw: 'Kunywa kwa kiasi. Hairuhusiwi kuuzwa kwa watu chini ya miaka 18.' },
+    { en: 'Excise duty included where applicable.',
+      sw: 'Ushuru wa bidhaa umejumuishwa inapohitajika.' }
   ]
 };

@@ -174,6 +174,10 @@ module.exports = {
         }
       }
     }
+  ],
+  receipt: [
+    { en: 'Exchange within 7 days with this receipt — unworn, in the box.',
+      sw: 'Badilisha ndani ya siku 7 na risiti hii — bila kuvaa, kwenye sanduku.' }
   ]
 };
 

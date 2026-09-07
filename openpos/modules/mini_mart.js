@@ -265,5 +265,9 @@ module.exports = {
         }
       }
     }
+  ],
+  receipt: [
+    { en: 'Perishables: please check the date on the pack.',
+      sw: 'Bidhaa zinazoharibika: tafadhali angalia tarehe kwenye pakiti.' }
   ]
 };

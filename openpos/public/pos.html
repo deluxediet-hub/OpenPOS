@@ -95,6 +95,23 @@
     #receipt { position: absolute; left: 0; top: 0; width: 72mm; }
     #receipt-overlay { position: static; background: none; }
   }
+
+  /* ---- Phase 34: keyboard-first ---- */
+  .cline.sel { outline: 2px solid var(--accent, #2f6fed); outline-offset: -2px; border-radius: 8px; }
+  #p-keys { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 90; display: flex; align-items: center; justify-content: center; }
+  #p-keys .card { max-width: 460px; width: 92%; }
+  #p-keys table td { padding: 4px 6px; }
+  #p-keys kbd { background: #f2f4f8; border: 1px solid #d7dbe4; border-bottom-width: 2px; border-radius: 5px; padding: 1px 7px; font: 600 12px/1.6 ui-monospace, monospace; }
+  :focus-visible { outline: 2px solid var(--accent, #2f6fed); outline-offset: 2px; }
+  @media (max-width: 1100px) {
+    /* a tablet held sideways: the till stays two-handed but breathes */
+    .pos-body { grid-template-columns: 1fr 340px !important; }
+    #grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)) !important; }
+  }
+  @media (max-width: 820px) {
+    .pos-body { grid-template-columns: 1fr !important; }
+    .pos-right { max-height: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -165,6 +182,18 @@
     </div>
     <div class="msg" id="p-msg" style="margin:4px 0 0"></div>
     <div class="held" id="p-held"></div>
+
+  <!-- Phase 34: every shortcut the till knows, written down -->
+  <div id="p-keys" class="hidden">
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h3 data-i18n="keyboard_shortcuts" style="margin:0">Keyboard shortcuts</h3>
+        <button class="btn ghost" id="p-keys-x" style="padding:2px 10px">✕</button>
+      </div>
+      <p class="muted small" data-i18n="keys_intro" style="margin:6px 0 10px">A cashier should never have to reach for the mouse. These keys work anywhere on the till.</p>
+      <table id="p-keys-rows"></table>
+    </div>
+  </div>
 
   <!-- Phase 10: returns & exchanges -->
   <div class="ret-modal hidden" id="ret-modal">
@@ -261,7 +290,7 @@
 
 <script src="/assets/app.js"></script>
 <script>
-const { t, setLang, api, fmt, esc, pinpad, toast, netBadge } = OP;
+const { t, setLang, api, fmt, esc, pinpad, toast, netBadge, emptyRow, errText } = OP;
 const $ = (s) => document.querySelector(s);
 
 let ME = null, CTX = { branchId: null, register: null, registerName: '' };
@@ -505,7 +534,7 @@ function initLogin() {
       ME = r.user;
       await initMain();
     } catch (e) {
-      toast(msg, /locked|attempts/.test(e.message) ? t('locked') : e.message, false);
+      toast(msg, /locked|attempts/.test(e.message) ? t('locked') : errText(e), false);
     }
   };
   applyI18n();
@@ -710,12 +739,102 @@ async function reprice() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 34 — a till you can run without letting go of the keyboard.
+// A cashier sells the same fifty things all day; the mouse is the slow part.
+// Every shortcut below is also written on the screen (F1), because a shortcut
+// nobody can find is not a shortcut.
+// ---------------------------------------------------------------------------
+const SHORTCUTS = [
+  { key: 'F2', label: 'keys_search' },
+  { key: 'F3', label: 'keys_customer' },
+  { key: 'F4', label: 'keys_tender' },
+  { key: 'F6', label: 'keys_pay' },
+  { key: 'F8', label: 'keys_hold' },
+  { key: 'F9', label: 'keys_quote' },
+  { key: '↑ ↓', label: 'keys_move' },
+  { key: '+ −', label: 'keys_qty' },
+  { key: 'Del', label: 'keys_remove' },
+  { key: 'Esc', label: 'keys_escape' },
+  { key: 'F1', label: 'keys_this_help' }
+];
+let SEL = -1;                       // which cart line the arrow keys are on
+
+function drawKeyHelp() {
+  const rows = $('#p-keys-rows');
+  if (!rows) return;
+  rows.innerHTML = SHORTCUTS.map((k) => `<tr>
+      <td><kbd>${esc(k.key)}</kbd></td>
+      <td>${esc(t(k.label))}</td>
+    </tr>`).join('');
+}
+
+function toggleKeyHelp(force) {
+  const el = $('#p-keys');
+  if (!el) return;
+  const show = force === undefined ? el.classList.contains('hidden') : force;
+  el.classList.toggle('hidden', !show);
+  if (show) drawKeyHelp();
+}
+
+function moveSel(delta) {
+  if (!CART.length) return;
+  SEL = SEL < 0 ? 0 : Math.min(CART.length - 1, Math.max(0, SEL + delta));
+  drawCart();
+  const row = document.querySelectorAll('#cart .cline')[SEL];
+  if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+}
+function qtySel(delta) {
+  if (SEL < 0 || !CART[SEL]) return;
+  CART[SEL].qty = Math.max(0.5, CART[SEL].qty + delta);
+  drawCart();
+}
+function delSel() {
+  if (SEL < 0 || !CART[SEL]) return;
+  CART.splice(SEL, 1);
+  if (SEL >= CART.length) SEL = CART.length - 1;
+  drawCart();
+}
+
+function typingIn(e) {
+  const tag = (e.target && e.target.tagName) || '';
+  return tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+}
+
+function tillKeys(e) {
+  if (e.key === 'F1' || (e.key === '?' && !typingIn(e))) { e.preventDefault(); return toggleKeyHelp(); }
+  if (e.key === 'Escape') {
+    if (!$('#p-keys').classList.contains('hidden')) return toggleKeyHelp(false);
+    if (typingIn(e)) { e.target.blur(); return; }
+    if ($('#scan').value) { $('#scan').value = ''; return drawGrid($('#cats .on') ? $('#cats .on').dataset.c : ''); }
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  switch (e.key) {
+    case 'F2': e.preventDefault(); $('#scan').focus(); $('#scan').select(); return;
+    case 'F3': e.preventDefault(); $('#p-cust').focus(); return;
+    case 'F4': e.preventDefault(); $('#p-amount').focus(); $('#p-amount').select(); return;
+    case 'F6': e.preventDefault(); if (!$('#sell-btn').disabled) completeSale(); return;
+    case 'F8': e.preventDefault(); if (!$('#p-hold').disabled) holdSale('sale'); return;
+    case 'F9': e.preventDefault(); if (!$('#p-quote').disabled) holdSale('quote'); return;
+    default: break;
+  }
+  if (typingIn(e)) return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); return moveSel(1); }
+  if (e.key === 'ArrowUp') { e.preventDefault(); return moveSel(-1); }
+  if (e.key === '+' || e.key === '=') { e.preventDefault(); return qtySel(1); }
+  if (e.key === '-' || e.key === '_') { e.preventDefault(); return qtySel(-1); }
+  if (e.key === 'Delete') { e.preventDefault(); return delSel(); }
+}
+
 function wireCart() {
   $('#scan').oninput = () => drawGrid($('#cats .on') ? $('#cats .on').dataset.c : '');
   $('#scan').onkeydown = (e) => { if (e.key === 'Enter') { scan($('#scan').value.trim()); } }
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'F2') { e.preventDefault(); $('#scan').focus(); }
-  });
+  document.addEventListener('keydown', tillKeys);
+  const helpBtn = $('#p-keys-x');
+  if (helpBtn) helpBtn.onclick = () => toggleKeyHelp(false);
+  const keysPanel = $('#p-keys');
+  if (keysPanel) keysPanel.onclick = (e) => { if (e.target === keysPanel) toggleKeyHelp(false); };
   drawPayTabs();
   $('#p-amount').oninput = drawQuick;
   $('#sell-btn').onclick = () => completeSale();
@@ -733,7 +852,7 @@ function scan(code) {
   }).catch((e) => {
     $('#scan').value = code;
     drawGrid($('#cats .on') ? $('#cats .on').dataset.c : '');
-    if (navigator.onLine) toast($('#p-msg'), e.message, false);
+    if (navigator.onLine) toast($('#p-msg'), errText(e), false);
     else {
       // offline barcode search in cached PRODUCTS
       const lower = code.toLowerCase();
@@ -761,16 +880,17 @@ function drawCart() {
     $('#sell-btn').textContent = t('complete_sale');
     $('#p-hold').disabled = !CART.length;
     $('#p-quote').disabled = !CART.length;
+    if (SEL >= CART.length) SEL = CART.length - 1;
     el.innerHTML = CART.map((L, i) => `
-      <div class="cline">
+      <div class="cline${i === SEL ? ' sel' : ''}" data-line="${i}">
         <div>
           <div class="nm">${esc(L.name)}${L.line_discount ? ` <span class="pill r">−${fmt(L.line_discount)}</span>` : ''}${L.line_note ? ' <span class="pill">📝</span>' : ''}</div>
           <div class="sub">${fmt(L.unit_price)} × ${L.qty}</div>
         </div>
         <div class="qty">
-          <button data-a="dec" data-i="${i}">−</button>
-          <input type="number" min="0" step="0.5" value="${L.qty}" data-q="${i}">
-          <button data-a="inc" data-i="${i}">+</button>
+          <button data-a="dec" data-i="${i}" aria-label="${esc(t('decrease_qty'))}" title="${esc(t('decrease_qty'))}">−</button>
+          <input type="number" min="0" step="0.5" value="${L.qty}" data-q="${i}" aria-label="${esc(t('qty'))}">
+          <button data-a="inc" data-i="${i}" aria-label="${esc(t('increase_qty'))}" title="${esc(t('increase_qty'))}">+</button>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
           <div class="tot">${fmt(lineGross(L))}</div>
@@ -793,6 +913,9 @@ function drawCart() {
   drawQuick();
   drawOffers();
 
+  el.querySelectorAll('.cline[data-line]').forEach((row) => {
+    row.onclick = (e) => { if (e.target.closest('[data-a]')) return; SEL = Number(row.dataset.line); drawCart(); };
+  });
   el.querySelectorAll('[data-a]').forEach((b) => {
     const i = Number(b.dataset.i);
     b.onclick = () => {
@@ -911,7 +1034,7 @@ async function completeSale() {
       showOfflineReceipt(body, client_id);
       toast(msg, 'Offline — sale queued locally', true);
     } else {
-      toast(msg, e.message, false);
+      toast(msg, errText(e), false);
     }
   }
 }
@@ -993,7 +1116,7 @@ async function holdSale(kind) {
     toast(msg, `${kind === 'quote' ? t('quote_sale') : t('held_sale')} #${r.sale.id}`, true);
     CART = []; CUST_ID(); $('#p-promo').value = '';
     drawCart(); loadHeld(); $('#scan').focus();
-  } catch (e) { toast(msg, e.message, false); }
+  } catch (e) { toast(msg, errText(e), false); }
 }
 
 async function loadHeld() {
@@ -1025,7 +1148,7 @@ async function resumeSale() {
     RESUME_SALE = null;
     showReceipt(r);
     loadHeld();
-  } catch (e) { toast(msg, e.message, false); }
+  } catch (e) { toast(msg, errText(e), false); }
 }
 
 // ---------------- receipt ----------------
@@ -1130,7 +1253,7 @@ function drawShift() {
       try {
         await api('/api/shifts', { method: 'POST', body: { float_open: Number($('#sh-float').value) || 0 } });
         SHIFT_RESULT = null; await loadShift();
-      } catch (e) { toast($('#p-msg'), e.message, false); }
+      } catch (e) { toast($('#p-msg'), errText(e), false); }
     };
     if (enforced && sellBtn) sellBtn.disabled = true;
     return;
@@ -1159,7 +1282,7 @@ function drawShift() {
       try {
         await api(`/api/shifts/${SHIFT.id}/payouts`, { method: 'POST', body: { amount: Number($('#sh-payout-amt').value), reason: $('#sh-payout-reason').value.trim() } });
         await loadShift();
-      } catch (e) { toast($('#p-msg'), e.message, false); }
+      } catch (e) { toast($('#p-msg'), errText(e), false); }
     };
   }
   const cl = el.querySelector('#sh-close');
@@ -1169,7 +1292,7 @@ function drawShift() {
       try {
         const r = await api(`/api/shifts/${SHIFT.id}/close`, { method: 'POST', body: { counted_cash: Number($('#sh-counted').value) || 0, note: $('#sh-note').value.trim() } });
         SHIFT = r.shift; drawShift();
-      } catch (e) { toast($('#p-msg'), e.message, false); }
+      } catch (e) { toast($('#p-msg'), errText(e), false); }
     };
   }
   const nw = el.querySelector('#sh-new');
@@ -1177,7 +1300,7 @@ function drawShift() {
     try {
       await api('/api/shifts', { method: 'POST', body: { float_open: Number(prompt(t('float') + '?', '0')) || 0 } });
       await loadShift();
-    } catch (e) { toast($('#p-msg'), e.message, false); }
+    } catch (e) { toast($('#p-msg'), errText(e), false); }
   };
 }
 
@@ -1355,20 +1478,20 @@ function wireFollowup(data, pendingPay, balance) {
       try {
         const r = await api(`/api/payments/${pendingPay.id}/confirm`, { method: 'POST', body: { code: asyncCode.value.trim() } });
         showReceipt(r);
-      } catch (e) { toast(msg, e.message, false); }
+      } catch (e) { toast(msg, errText(e), false); }
     };
     $('#async-cancel').onclick = async () => {
       try {
         const r = await api(`/api/payments/${pendingPay.id}/cancel`, { method: 'POST', body: {} });
         showReceipt(r);
-      } catch (e) { toast(msg, e.message, false); }
+      } catch (e) { toast(msg, errText(e), false); }
     };
     const sim = $('#async-sim');
     if (sim) sim.onclick = async () => {
       try {
         const r = await api(`/api/payments/${pendingPay.id}/simulate-callback`, { method: 'POST', body: {} });
         showReceipt(r);
-      } catch (e) { toast(msg, e.message, false); }
+      } catch (e) { toast(msg, errText(e), false); }
     };
     if (asyncCode) asyncCode.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#async-confirm').click(); });
   }
@@ -1388,7 +1511,7 @@ function wireFollowup(data, pendingPay, balance) {
       try {
         const r = await api(`/api/sales/${data.sale.id}/payments`, { method: 'POST', body });
         showReceipt(r);
-      } catch (e) { toast(msg, e.message, false); }
+      } catch (e) { toast(msg, errText(e), false); }
     };
   }
 }

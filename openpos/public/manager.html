@@ -58,7 +58,7 @@
           <label class="f"><span>KRA item code</span><input id="p-kra" class="mono"></label>
           <label class="f"><span>Min age</span><input id="p-age" type="number" min="0" placeholder="—" value=""></label>
           <label class="f"><span>Brand</span><input id="p-brand"></label>
-          <label class="f"><span>Supplier</span><select id="p-supplier"><option value="">—</option></select></label>
+          <label class="f" data-cap="purchasing"><span data-i18n="supplier">Supplier</span><select id="p-supplier"><option value="">—</option></select></label>
           <label class="f"><span>Reorder level</span><input id="p-reorder" type="number" min="0" value="0"></label>
           <label class="f"><span>Image URL</span><input id="p-image" placeholder="https://… (optional)"></label>
         </div>
@@ -139,10 +139,10 @@
         <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
           <h3 style="margin:0">Shrinkage analysis</h3>
           <div class="row wrap" style="gap:6px">
-            <select id="shr-branch" style="width:160px"></select>
+            <select id="shr-branch" style="width:160px" data-cap="multi_branch"></select>
             <input type="date" id="shr-from" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px">
             <input type="date" id="shr-to" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px">
-            <select id="shr-group" style="width:120px"><option value="variant">by SKU</option><option value="reason">by reason</option><option value="branch">by branch</option><option value="location">by location</option></select>
+            <select id="shr-group" style="width:120px"><option value="variant">by SKU</option><option value="reason">by reason</option><option value="branch" data-cap="multi_branch">by branch</option><option value="location" data-cap="multi_location">by location</option></select>
             <button class="btn small" id="shr-run">Run</button>
             <span class="muted small" id="shr-msg"></span>
           </div>
@@ -153,10 +153,10 @@
           <div><h4 style="margin:0 0 6px">By reason</h4><div style="overflow:auto"><table><thead><tr><th>Reason</th><th>Qty lost</th><th>Value lost</th><th>Occur</th></tr></thead><tbody id="shr-reason"></tbody></table></div></div>
         </div>
         <div class="grid cols-2" style="gap:14px;margin-top:12px">
-          <div><h4 style="margin:0 0 6px">By branch</h4><div style="overflow:auto"><table><thead><tr><th>Branch</th><th>Qty lost</th><th>Value lost</th><th>Occur</th></tr></thead><tbody id="shr-branch-tbl"></tbody></table></div></div>
-          <div><h4 style="margin:0 0 6px">By location</h4><div style="overflow:auto"><table><thead><tr><th>Location</th><th>Qty lost</th><th>Value lost</th><th>Occur</th></tr></thead><tbody id="shr-loc"></tbody></table></div></div>
+          <div data-cap="multi_branch"><h4 style="margin:0 0 6px">By branch</h4><div style="overflow:auto"><table><thead><tr><th>Branch</th><th>Qty lost</th><th>Value lost</th><th>Occur</th></tr></thead><tbody id="shr-branch-tbl"></tbody></table></div></div>
+          <div data-cap="multi_location"><h4 style="margin:0 0 6px">By location</h4><div style="overflow:auto"><table><thead><tr><th>Location</th><th>Qty lost</th><th>Value lost</th><th>Occur</th></tr></thead><tbody id="shr-loc"></tbody></table></div></div>
         </div>
-        <div style="margin-top:12px"><h4 style="margin:0 0 6px">Per-branch Top 10</h4><div id="shr-per-branch" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px"></div></div>
+        <div style="margin-top:12px" data-cap="multi_branch"><h4 style="margin:0 0 6px">Per-branch Top 10</h4><div id="shr-per-branch" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px"></div></div>
       </div>
 
       <div class="card" style="margin-bottom:14px">
@@ -365,7 +365,7 @@
             <div><h4 style="margin:0 0 6px">Recent transfers</h4><div style="overflow:auto"><table><thead><tr><th>Ref</th><th>Route</th><th>Status</th></tr></thead><tbody id="dash-tr"></tbody></table></div></div>
           </div>
           <div class="grid cols-2" style="gap:14px;margin-top:12px">
-            <div><h4 style="margin:0 0 6px">Suppliers (with balance in branch)</h4><div style="overflow:auto"><table><thead><tr><th>Supplier</th><th>Owed</th><th>Open PO</th></tr></thead><tbody id="dash-sup"></tbody></table></div></div>
+            <div data-cap="purchasing"><h4 style="margin:0 0 6px" data-i18n="suppliers_with_balance">Suppliers (with balance in branch)</h4><div style="overflow:auto"><table><thead><tr><th>Supplier</th><th>Owed</th><th>Open PO</th></tr></thead><tbody id="dash-sup"></tbody></table></div></div>
             <div><h4 style="margin:0 0 6px">Expenses (30d: <span id="dash-exp-total"></span>)</h4>
               <div class="row" style="gap:6px;margin-bottom:6px"><input id="exp-cat" placeholder="category" style="width:100px;padding:4px;border:1px solid #cbd5e1;border-radius:4px"><input id="exp-amt" type="number" placeholder="amount Ksh" style="width:110px;padding:4px;border:1px solid #cbd5e1;border-radius:4px"><input id="exp-note" placeholder="note" style="flex:1;padding:4px;border:1px solid #cbd5e1;border-radius:4px"><button class="btn small" id="exp-add">Add</button></div>
               <div style="overflow:auto;max-height:180px"><table><thead><tr><th>Date</th><th>Category</th><th>Amount</th><th>Note</th></tr></thead><tbody id="dash-exp"></tbody></table></div>
@@ -698,7 +698,7 @@
           <button class="btn small" id="sh-m-reload" data-i18n="reload">Reload</button>
         </div>
         <div style="overflow:auto">
-          <table><thead><tr><th data-i18n="cashier">Cashier</th><th data-i18n="register_serial">Till</th><th data-i18n="branch_name">Branch</th><th data-i18n="starts_at">Opened</th><th data-i18n="float">Float</th><th data-i18n="cash_in">Cash in</th><th data-i18n="expected">Expected</th><th></th></tr></thead>
+          <table><thead><tr><th data-i18n="cashier">Cashier</th><th data-i18n="register_serial">Till</th><th data-i18n="branch_name" data-cap="multi_branch">Branch</th><th data-i18n="starts_at">Opened</th><th data-i18n="float">Float</th><th data-i18n="cash_in">Cash in</th><th data-i18n="expected">Expected</th><th></th></tr></thead>
           <tbody id="sh-open-body"></tbody>
         </table>
         <div class="muted small" id="sh-open-empty" data-i18n="no_rows">No rows</div>
@@ -825,12 +825,12 @@
                 <option value="" data-i18n="scope_none">Whole variant</option>
                 <option value="promo" data-i18n="scope_promo">Promo code</option>
                 <option value="customer" data-i18n="scope_customer">Customer</option>
-                <option value="branch" data-i18n="scope_branch">Branch</option>
-                <option value="tier" data-i18n="scope_tier">Price level (tier)</option>
+                <option value="branch" data-i18n="scope_branch" data-cap="multi_branch">Branch</option>
+                <option value="tier" data-i18n="scope_tier" data-cap="price_levels">Price level (tier)</option>
               </select></label>
             <label class="f hidden" id="pr-scope-promo"><span data-i18n="promo_code">Promo code</span><input id="pr-promo" placeholder="BLACK_FRIDAY"></label>
             <label class="f hidden" id="pr-scope-customer"><span data-i18n="customers">Customers</span><select id="pr-customer"></select></label>
-            <label class="f hidden" id="pr-scope-branch"><span data-i18n="branches">Branches</span><select id="pr-branch"></select></label>
+            <label class="f hidden" id="pr-scope-branch" data-cap="multi_branch"><span data-i18n="branches">Branches</span><select id="pr-branch"></select></label>
             <label class="f hidden" id="pr-scope-tier"><span data-i18n="tier">Tier</span>
               <select id="pr-tier"><option value="retail" data-i18n="retail">Retail</option><option value="wholesale" data-i18n="wholesale">Wholesale</option><option value="member" data-i18n="member">Member</option></select></label>
           </div>
@@ -857,7 +857,7 @@
           <h3 style="margin:0" data-i18n="margin_guard">Minimum margin guard</h3>
           <div class="msg" id="pr-margin-msg" style="margin:0"></div>
         </div>
-        <p class="muted small" data-i18n="margin_hint">Any price that would sell below this margin needs approval — or is blocked. Floors can be set per product, per branch, and here (most specific wins).</p>
+        <p class="muted small" data-i18n="margin_hint">Any price that would sell below this margin needs approval — or is blocked. Floors can be set per product, <span data-cap="multi_branch">per branch, </span>and here (most specific wins).</p>
         <div class="grid cols-3">
           <label class="f"><span data-i18n="min_margin">Minimum margin %</span><input id="pr-min-margin" type="number" min="0" max="99"></label>
           <label class="f"><span data-i18n="margin_policy">Policy</span>
@@ -890,7 +890,7 @@
           <h3 style="margin:0">Business Finance</h3>
           <span class="spacer"></span>
           <input type="date" id="fin-date" />
-          <select id="fin-branch"><option value="">All branches</option></select>
+          <select id="fin-branch" data-cap="multi_branch"><option value="">All branches</option></select>
           <button class="btn small" id="fin-reload">Load</button>
           <div class="msg" id="fin-msg" style="margin:0"></div>
         </div>
@@ -915,29 +915,29 @@
           <span class="spacer"></span>
           <input type="date" id="pnl-from" />
           <input type="date" id="pnl-to" />
-          <select id="pnl-group"><option value="day">Per day</option><option value="branch">Per branch</option><option value="consolidated">Consolidated</option></select>
-          <select id="pnl-branch"><option value="">All branches</option></select>
+          <select id="pnl-group"><option value="day">Per day</option><option value="branch" data-cap="multi_branch">Per branch</option><option value="consolidated">Consolidated</option></select>
+          <select id="pnl-branch" data-cap="multi_branch"><option value="">All branches</option></select>
           <button class="btn small" id="pnl-reload">Run</button>
         </div>
         <div id="pnl-cons" style="margin-bottom:10px"></div>
-        <div style="overflow:auto"><table><thead><tr><th>Date/Branch</th><th>Sales (net)</th><th>COGS</th><th>Gross profit</th><th>Expenses</th><th>NOP</th><th>Tie OK?</th></tr></thead><tbody id="pnl-rows"></tbody></table></div>
+        <div style="overflow:auto"><table><thead><tr><th>Date<span data-cap="multi_branch">/Branch</span></th><th>Sales (net)</th><th>COGS</th><th>Gross profit</th><th>Expenses</th><th>NOP</th><th>Tie OK?</th></tr></thead><tbody id="pnl-rows"></tbody></table></div>
       </div>
       <div class="grid cols-2" style="margin-top:14px">
         <div class="card">
           <h4 style="margin:0 0 8px">Expenses</h4>
           <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px">
             <select id="exp-cat"></select>
-            <select id="exp-branch"><option value="">Branch</option></select>
+            <select id="exp-branch" data-cap="multi_branch"><option value="">Branch</option></select>
             <input id="exp-amount" type="number" placeholder="Amount (whole KES)" style="width:160px" />
             <select id="exp-method"><option value="cash">cash</option><option value="mpesa">mpesa</option><option value="bank">bank</option><option value="other">other</option></select>
             <input id="exp-ref" placeholder="Reference / receipt" style="width:160px" />
             <input id="exp-note" placeholder="Note" style="flex:1;min-width:160px" />
             <button class="btn small" id="exp-add">Add</button>
           </div>
-          <div style="overflow:auto;max-height:240px"><table><thead><tr><th>Date</th><th>Branch</th><th>Category</th><th>Method</th><th>Amount</th><th>Ref</th></tr></thead><tbody id="exp-rows"></tbody></table></div>
+          <div style="overflow:auto;max-height:240px"><table><thead><tr><th>Date</th><th data-cap="multi_branch">Branch</th><th>Category</th><th>Method</th><th>Amount</th><th>Ref</th></tr></thead><tbody id="exp-rows"></tbody></table></div>
         </div>
         <div class="card">
-          <h4 style="margin:0 0 8px">Balances (supplier & customer)</h4>
+          <h4 style="margin:0 0 8px" data-cap="purchasing">Balances (supplier &amp; customer)</h4>
           <div id="fin-balances"></div>
         </div>
       </div>
@@ -951,7 +951,7 @@
           <span class="spacer"></span>
           <input type="date" id="rep-from" />
           <input type="date" id="rep-to" />
-          <select id="rep-branch"><option value="">All branches</option></select>
+          <select id="rep-branch" data-cap="multi_branch"><option value="">All branches</option></select>
           <button class="btn small" id="rep-reload">Reload all</button>
           <div class="msg" id="rep-msg" style="margin:0"></div>
         </div>
@@ -960,7 +960,7 @@
             <h4 style="margin:0 0 8px">Dashboards</h4>
             <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:10px">
               <button class="btn small" data-dash="owner">Owner</button>
-              <button class="btn small" data-dash="branch-manager">Branch Mgr</button>
+              <button class="btn small" data-dash="branch-manager" data-cap="multi_branch">Branch Mgr</button>
               <button class="btn small" data-dash="stock-manager">Stock Mgr</button>
               <button class="btn small" data-dash="cashier">Cashier</button>
             </div>
@@ -981,7 +981,7 @@
           <div class="row" style="margin-bottom:8px">
             <h4 style="margin:0">What sold? (drill down)</h4>
             <span class="spacer"></span>
-            <select id="sales-group"><option value="product">Product</option><option value="variant">Variant</option><option value="category">Category</option><option value="branch">Branch</option><option value="cashier">Cashier</option><option value="day">Day</option></select>
+            <select id="sales-group"><option value="product">Product</option><option value="variant">Variant</option><option value="category">Category</option><option value="branch" data-cap="multi_branch">Branch</option><option value="cashier">Cashier</option><option value="day">Day</option></select>
             <button class="btn small" id="sales-reload">Run</button>
             <button class="btn small ghost" id="sales-csv">CSV</button>
           </div>
@@ -1032,7 +1032,7 @@
       <div class="card" style="margin-top:14px">
         <h4 style="margin:0 0 8px">What to reorder?</h4>
         <div class="row" style="gap:6px;margin-bottom:8px"><input id="reorder-cover" type="number" value="14" style="width:80px" /> days cover <button class="btn small" id="reorder-reload">Run</button></div>
-        <div style="overflow:auto"><table><thead><tr><th>Product</th><th>Stock</th><th>Velocity/d</th><th>Days cover</th><th>Suggested</th><th>Supplier</th></tr></thead><tbody id="reorder-rows"></tbody></table></div>
+        <div style="overflow:auto"><table><thead><tr><th>Product</th><th>Stock</th><th>Velocity/d</th><th>Days cover</th><th>Suggested</th><th data-cap="purchasing">Supplier</th></tr></thead><tbody id="reorder-rows"></tbody></table></div>
       </div>
     </section>
 
@@ -1057,7 +1057,7 @@
           <h4 style="margin:16px 0 6px">Reconciliation</h4>
           <div class="row" style="gap:6px;margin-bottom:8px">
             <input type="date" id="mp-recon-from" /><input type="date" id="mp-recon-to" />
-            <select id="mp-recon-branch"><option value="">All branches</option></select>
+            <select id="mp-recon-branch" data-cap="multi_branch"><option value="">All branches</option></select>
             <button class="btn small" id="mp-recon-run">Run</button>
           </div>
           <div id="mp-recon-summary" class="muted small" style="margin-bottom:8px"></div>
@@ -1131,7 +1131,7 @@
       <div class="grid cols-2" style="margin-top:14px">
         <div class="card">
           <h4 style="margin:0 0 8px">Outbox (server)</h4>
-          <div style="overflow:auto;max-height:320px"><table><thead><tr><th>Client ID</th><th>Branch</th><th>Status</th><th>Attempts</th><th>Created</th><th>Last error</th></tr></thead><tbody id="sync-outbox-rows"></tbody></table></div>
+          <div style="overflow:auto;max-height:320px"><table><thead><tr><th>Client ID</th><th data-cap="multi_branch">Branch</th><th>Status</th><th>Attempts</th><th>Created</th><th>Last error</th></tr></thead><tbody id="sync-outbox-rows"></tbody></table></div>
           <div class="muted small" id="sync-outbox-empty">No outbox</div>
         </div>
         <div class="card">
@@ -1139,7 +1139,7 @@
           <div style="overflow:auto;max-height:160px"><table><thead><tr><th>Time</th><th>Client</th><th>Reason</th><th>Resolver</th></tr></thead><tbody id="sync-conflicts-rows"></tbody></table></div>
           <div class="muted small" id="sync-conflicts-empty" style="margin-top:6px">No conflicts</div>
           <h4 style="margin:12px 0 6px">Sync Log (recent)</h4>
-          <div style="overflow:auto;max-height:160px"><table><thead><tr><th>Time</th><th>Client</th><th>Branch</th><th>Action</th><th>Sale</th></tr></thead><tbody id="sync-log-rows"></tbody></table></div>
+          <div style="overflow:auto;max-height:160px"><table><thead><tr><th>Time</th><th>Client</th><th data-cap="multi_branch">Branch</th><th>Action</th><th>Sale</th></tr></thead><tbody id="sync-log-rows"></tbody></table></div>
         </div>
       </div>
       <div class="card" style="margin-top:14px">
@@ -1276,7 +1276,7 @@
       <div class="grid cols-2" style="margin-top:14px">
         <div class="card">
           <h3>Branches against their own history</h3>
-          <table><thead><tr><th>Branch</th><th class="mono">Now</th><th class="mono">Before</th><th class="mono">Change</th></tr></thead>
+          <table><thead><tr><th data-cap="multi_branch">Branch</th><th class="mono">Now</th><th class="mono">Before</th><th class="mono">Change</th></tr></thead>
             <tbody id="ins-branches"></tbody></table>
         </div>
         <div class="card">
@@ -1530,7 +1530,7 @@
 
 <script src="/assets/app.js"></script>
 <script>
-const { t, setLang, api, fmt, esc, toast } = OP;
+const { t, setLang, api, fmt, esc, toast, emptyRow, errText, applyCaps } = OP;
 const $ = (s) => document.querySelector(s);
 
 let ME = null, BOOT = null, CATEGORIES = [];
@@ -1674,7 +1674,7 @@ async function mkSendMessage() {
     toast($('#mk-msg-note'), 'message sent', true);
     await mkDrawMessages();
   } catch (e) {
-    toast($('#mk-msg-note'), e.message, false);
+    toast($('#mk-msg-note'), errText(e), false);
   }
 }
 
@@ -1687,7 +1687,7 @@ async function mkShareCatalogue() {
     toast($('#mk-msg-note'), `catalogue sent (${r.status})`, true);
     await mkDrawMessages();
   } catch (e) {
-    toast($('#mk-msg-note'), e.message, false);
+    toast($('#mk-msg-note'), errText(e), false);
   }
 }
 
@@ -1716,7 +1716,7 @@ async function loadMarketingData() {
       <td class="mono">${r.sales}</td>
       <td class="mono">${fmt(r.discount_given)}</td>
       <td class="mono">${fmt(r.revenue)}</td>
-    </tr>`).join('') || '<tr><td colspan="4" class="muted">no offer has discounted a sale yet</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="4"><div class="empty"><div class="empty-t">no offer has discounted a sale yet</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   $('#mk-seg-rows').innerHTML = MK.segments.map((sg) => `
     <tr>
       <td>${esc(sg.label)}</td>
@@ -1724,7 +1724,7 @@ async function loadMarketingData() {
       <td class="mono">${sg.customers}</td>
       <td class="mono">${fmt(sg.spend)}</td>
       <td><button class="btn ghost small" data-seg="${esc(sg.id)}">Campaign</button></td>
-    </tr>`).join('') || '<tr><td colspan="5" class="muted">no customers yet</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="5"><div class="empty"><div class="empty-t">no customers yet</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   $('#mk-seg-rows').querySelectorAll('button[data-seg]').forEach((b) => {
     b.onclick = () => {
       mkOpenForm();
@@ -1756,14 +1756,14 @@ function mkDrawOffers(offers, perf) {
         <td>${p.active ? '<span class="pill g">on</span>' : '<span class="pill">off</span>'}</td>
         <td><button class="btn ghost small" data-toggle="${p.id}" data-on="${p.active ? 1 : 0}">${p.active ? 'Retire' : 'Switch on'}</button></td>
       </tr>`;
-  }).join('') || '<tr><td colspan="9" class="muted">no offers yet — the first one takes a minute</td></tr>';
+  }).join('') || '<tr><td colspan="9"><div class="empty"><div class="empty-t">no offers yet — the first one takes a minute</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   $('#mk-rows').querySelectorAll('button[data-toggle]').forEach((b) => {
     b.onclick = async () => {
       const on = b.dataset.on === '1';
       try {
         await api(`/api/promos/${b.dataset.toggle}/${on ? 'deactivate' : 'activate'}`, { method: 'POST', body: {} });
         await loadMarketingData();
-      } catch (e) { toast($('#mk-form-msg'), e.message, false); }
+      } catch (e) { toast($('#mk-form-msg'), errText(e), false); }
     };
   });
 }
@@ -1839,7 +1839,7 @@ async function mkSaveOffer() {
     $('#mk-name').value = ''; $('#mk-code').value = '';
     await loadMarketingData();
   } catch (e) {
-    toast($('#mk-form-msg'), e.message, false);
+    toast($('#mk-form-msg'), errText(e), false);
   }
 }
 
@@ -1866,7 +1866,7 @@ async function mkDrawMessages() {
       <td class="small">${esc(m.kind)}${m.direction === 'in' ? ' <span class="pill">in</span>' : ''}</td>
       <td class="small">${esc(String(m.body || '').slice(0, 70))}</td>
       <td>${pill(m.status)}</td>
-    </tr>`).join('') || '<tr><td colspan="5" class="muted">no messages yet</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="5"><div class="empty"><div class="empty-t">no messages yet</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
 }
 
 async function mkSaveLoyalty() {
@@ -1883,7 +1883,7 @@ async function mkSaveLoyalty() {
     });
     toast($('#mk-loy-msg'), 'loyalty saved', true);
   } catch (e) {
-    toast($('#mk-loy-msg'), e.message, false);
+    toast($('#mk-loy-msg'), errText(e), false);
   }
 }
 
@@ -2197,13 +2197,13 @@ async function drawBranchDashboard(branchId) {
     { label: 'Expenses 30d', value: fmt(r.expenses?.month?.total || 0), sub: `${r.expenses?.month?.n || 0} entries` },
   ];
   $('#dash-cards').innerHTML = cards.map((c) => `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px;background:#f8fafc"><div class="muted small">${esc(c.label)}</div><div style="font-weight:700;font-size:18px;margin:4px 0">${esc(c.value)}</div><div class="muted small">${esc(c.sub)}</div></div>`).join('');
-  $('#dash-top').innerHTML = (r.top_products || []).map((p) => `<tr><td>${esc(p.name)}</td><td>${p.qty}</td><td>${fmt(p.gross)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">no sales</td></tr>';
+  $('#dash-top').innerHTML = (r.top_products || []).map((p) => `<tr><td>${esc(p.name)}</td><td>${p.qty}</td><td>${fmt(p.gross)}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty"><div class="empty-t">no sales</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   $('#dash-locs').innerHTML = (r.locations || []).map((l) => `<tr><td>${esc(l.name)}${l.is_default ? ' ★' : ''}</td><td>${l.registers}</td><td>${l.stockLines}</td></tr>`).join('');
-  $('#dash-low').innerHTML = (r.stock?.low_items || []).map((p) => `<tr><td>${esc(p.name)}</td><td>${p.stock}</td><td>${p.reorder_level}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">all good</td></tr>';
+  $('#dash-low').innerHTML = (r.stock?.low_items || []).map((p) => `<tr><td>${esc(p.name)}</td><td>${p.stock}</td><td>${p.reorder_level}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty"><div class="empty-t">all good</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   $('#dash-tr').innerHTML = (r.transfers?.recent || []).map((tr) => `<tr><td>${esc(tr.ref)}</td><td>${esc(tr.from_location_name)}→${esc(tr.to_location_name)}</td><td><span class="pill ${tr.status==='received'?'g':''}">${esc(tr.status)}</span></td></tr>`).join('');
-  $('#dash-sup').innerHTML = (r.suppliers || []).map((s) => `<tr><td>${esc(s.name)}</td><td>${fmt(s.balance?.outstanding || 0)}</td><td>${s.balance?.open_pos || 0} / ${fmt(s.balance?.open_po_value || 0)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">no balances</td></tr>';
+  $('#dash-sup').innerHTML = (r.suppliers || []).map((s) => `<tr><td>${esc(s.name)}</td><td>${fmt(s.balance?.outstanding || 0)}</td><td>${s.balance?.open_pos || 0} / ${fmt(s.balance?.open_po_value || 0)}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty"><div class="empty-t">no balances</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   $('#dash-exp-total').textContent = fmt(r.expenses?.month?.total || 0);
-  $('#dash-exp').innerHTML = (r.expenses?.recent || []).map((e) => `<tr><td>${esc((e.expense_date||'').slice(0,10))}</td><td>${esc(e.category)}</td><td>${fmt(e.amount)}</td><td>${esc(e.note||'')}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">no expenses</td></tr>';
+  $('#dash-exp').innerHTML = (r.expenses?.recent || []).map((e) => `<tr><td>${esc((e.expense_date||'').slice(0,10))}</td><td>${esc(e.category)}</td><td>${fmt(e.amount)}</td><td>${esc(e.note||'')}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty"><div class="empty-t">no expenses</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
 }
 
 // ---------------- customers & deni (Phase 11) ----------------
@@ -2225,14 +2225,14 @@ async function loadCustomersM() {
       CU = r.customer.id;
       toast($('#tab-customers'), t('saved_ok'));
       await drawCuList(); await showCuDetail(CU);
-    } catch (e) { toast($('#tab-customers'), e.message, false); }
+    } catch (e) { toast($('#tab-customers'), errText(e), false); }
   };
   const doAction = async (path, body, okMsg) => {
     try {
       const r = await api(path, { method: 'POST', body });
       toast($('#tab-customers'), okMsg || t('saved_ok'));
       await drawCuList(); if (CU) await showCuDetail(CU);
-    } catch (e) { toast($('#tab-customers'), e.message, false); }
+    } catch (e) { toast($('#tab-customers'), errText(e), false); }
   };
   $('#cu-repay').onclick = () => {
     const amt = Number($('#cu-repay-amt').value);
@@ -2291,10 +2291,10 @@ async function showCuDetail(id) {
     <td>${new Date(r.created_at).toLocaleString('en-KE')}</td><td>${esc(r.type)}</td>
     <td style="text-align:right">${r.amount > 0 ? '+' : ''}${fmt(r.amount)}</td>
     <td style="text-align:right">${r.balance != null ? fmt(r.balance) : '—'}</td>
-    <td class="muted">${esc(r.note || '')}</td></tr>`).join('') : `<tr><td colspan="5" class="muted">${t('no_rows')}</td></tr>`;
+    <td class="muted">${esc(r.note || '')}</td></tr>`).join('') : `<tr><td colspan="5"><div class="empty"><div class="empty-t">${t('no_rows')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   $('#cu-sales').innerHTML = p.sales.length ? p.sales.map((x) => `<tr>
     <td>${esc(x.invoice_no)}</td><td>${new Date(x.created_at).toLocaleString('en-KE')}</td>
-    <td>${esc(x.cashier || '')}</td><td>${esc(x.status)}</td><td style="text-align:right">${fmt(x.gross)}</td></tr>`).join('') : `<tr><td colspan="5" class="muted">${t('no_rows')}</td></tr>`;
+    <td>${esc(x.cashier || '')}</td><td>${esc(x.status)}</td><td style="text-align:right">${fmt(x.gross)}</td></tr>`).join('') : `<tr><td colspan="5"><div class="empty"><div class="empty-t">${t('no_rows')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
 }
 
 // ---------------- returns & exchanges (Phase 10) ----------------
@@ -2440,7 +2440,7 @@ async function payDeposits() {
       $('#dep-amount').value = ''; $('#dep-ref').value = ''; $('#dep-note').value = '';
       toast($('#dep-msg'), t('save_ok'), true);
       payDeposits();
-    } catch (e) { toast($('#dep-msg'), e.message, false); }
+    } catch (e) { toast($('#dep-msg'), errText(e), false); }
   };
   const rows = await api('/api/deposits?limit=10').catch(() => []);
   $('#dep-list').innerHTML = rows.map((x) =>
@@ -2479,7 +2479,7 @@ async function paySettings() {
       await api('/api/settings/payments', { method: 'PUT', body });
       toast($('#ps-msg'), t('save_ok'), true);
       paySettings();
-    } catch (e) { toast($('#ps-msg'), e.message, false); }
+    } catch (e) { toast($('#ps-msg'), errText(e), false); }
   };
 }
 
@@ -2494,6 +2494,9 @@ async function boot() {
   }
   $('#m-main').classList.remove('hidden');
   BOOT = await api('/api/bootstrap');
+  // R-C2: cut everything this shop's capability set does not include, before
+  // anything is drawn — a one-till duka never reads the word "warehouse".
+  applyCaps(BOOT.caps);
   CATEGORIES = await api('/api/categories').catch(() => []);
   const biz = BOOT.settings.business || {};
   $('#m-biz').textContent = `${biz.name || ''} — ${ME.name} (${t(roleKey(ME.role))})`;
@@ -2508,6 +2511,7 @@ async function boot() {
   selectTab(location.hash.replace('#', '') || 'products');
   $('#m-lang').onclick = () => {
     OP.setLang(OP.lang() === 'en' ? 'sw' : 'en');
+    applyCaps(BOOT.caps);
     $('#m-lang').textContent = OP.lang() === 'en' ? 'SW' : 'EN';
     drawTabs();
   };
@@ -2568,7 +2572,7 @@ async function loadProducts() {
         <div class="msg" id="adjm-${p.id}" style="margin:0"></div>
       </div>
     </td></tr>`;
-  }).join('') || `<tr><td colspan="11" class="muted">Nothing here yet.</td></tr>`;
+  }).join('') || `<tr><td colspan="11"><div class="empty"><div class="empty-t">Nothing here yet.</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   $('#p-search').oninput = loadProducts;
 
   document.querySelectorAll('#p-rows [data-act]').forEach((b) => {
@@ -2629,7 +2633,7 @@ async function loadProducts() {
         });
         toast($(`#adjm-${id}`), 'Stock adjusted.', true);
         loadProducts();
-      } catch (e) { toast($(`#adjm-${id}`), e.message, false); }
+      } catch (e) { toast($(`#adjm-${id}`), errText(e), false); }
     };
   });
   document.querySelectorAll('#p-rows [data-adjcancel]').forEach((b) => {
@@ -2728,7 +2732,7 @@ async function toggleVariantPanel(productId) {
       });
       toast($(`#nvm-${productId}`), t('save_ok'), true);
       toggleVariantPanel(productId); await toggleVariantPanel(productId);
-    } catch (e) { toast($(`#nvm-${productId}`), e.message, false); }
+    } catch (e) { toast($(`#nvm-${productId}`), errText(e), false); }
   };
   const np = $(`[data-npack="${productId}"]`);
   if (np) np.onclick = async () => {
@@ -2745,7 +2749,7 @@ async function toggleVariantPanel(productId) {
       });
       toast($(`#npm-${productId}`), t('save_ok'), true);
       toggleVariantPanel(productId); await toggleVariantPanel(productId);
-    } catch (e) { toast($(`#npm-${productId}`), e.message, false); }
+    } catch (e) { toast($(`#npm-${productId}`), errText(e), false); }
   };
   const ns = $(`[data-nsadd="${productId}"]`);
   if (ns) ns.onclick = async () => {
@@ -2754,7 +2758,7 @@ async function toggleVariantPanel(productId) {
       toast($(`#nsm-${productId}`), t('save_ok'), true);
       renderSerialList(productId);
       $(`#ns-no-${productId}`).value = '';
-    } catch (e) { toast($(`#nsm-${productId}`), e.message, false); }
+    } catch (e) { toast($(`#nsm-${productId}`), errText(e), false); }
   };
   document.querySelectorAll(`#vp-${productId} [data-vdel]`).forEach((b) => {
     b.onclick = async () => {
@@ -2763,7 +2767,7 @@ async function toggleVariantPanel(productId) {
         await api(`/api/variants/${b.dataset.vdel}`, { method: 'DELETE' });
         toggleVariantPanel(productId); await toggleVariantPanel(productId);
         loadProducts();
-      } catch (e) { toast($('#p-msg'), e.message, false); }
+      } catch (e) { toast($('#p-msg'), errText(e), false); }
     };
   });
 }
@@ -2867,7 +2871,7 @@ $('#p-save').onclick = async () => {
     toast($('#p-msg'), t('save_ok'), true);
     resetProductForm();
     loadProducts();
-  } catch (e) { toast($('#p-msg'), e.message, false); }
+  } catch (e) { toast($('#p-msg'), errText(e), false); }
 };
 
 // ---- CSV import/export --------------------------------------------------------------------------
@@ -2881,7 +2885,7 @@ $('#p-import').onchange = async () => {
       (r.errors.length ? ` · ${r.errors.length} errors: ${r.errors[0]}` : ''), r.errors.length === 0);
     if (r.errors.length) console.warn('CSV import errors', r.errors);
     loadProducts();
-  } catch (e) { toast($('#p-msg'), e.message, false); }
+  } catch (e) { toast($('#p-msg'), errText(e), false); }
   $('#p-import').value = '';
 };
 
@@ -2892,11 +2896,11 @@ async function loadAttrs() {
     <tr><td class="mono small">${esc(a.key)}</td><td>${esc(a.label)}</td>
     <td class="small muted">${a.type}</td><td class="small muted">${a.applies_to}</td>
     <td><button class="btn danger small" data-attrdel="${a.id}">✕</button></td></tr>`).join('')
-    || `<tr><td colspan="5" class="muted">Nothing here yet.</td></tr>`;
+    || `<tr><td colspan="5"><div class="empty"><div class="empty-t">Nothing here yet.</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   document.querySelectorAll('[data-attrdel]').forEach((b) => {
     b.onclick = async () => {
       try { await api(`/api/attribute-defs/${b.dataset.attrdel}`, { method: 'DELETE' }); loadAttrs(); }
-      catch (e) { toast($('#attr-msg'), e.message, false); }
+      catch (e) { toast($('#attr-msg'), errText(e), false); }
     };
   });
 }
@@ -2913,7 +2917,7 @@ $('#attr-add').onclick = async () => {
     $('#attr-key').value = ''; $('#attr-label').value = ''; $('#attr-options').value = '';
     toast($('#attr-msg'), t('save_ok'), true);
     loadAttrs();
-  } catch (e) { toast($('#attr-msg'), e.message, false); }
+  } catch (e) { toast($('#attr-msg'), errText(e), false); }
 };
 
 // ---------- stock ledger (Phase 4 + Phase 13 Day 18: full/partial/blind, reason codes, shrinkage) ----------
@@ -2953,7 +2957,7 @@ async function loadStockBalances() {
       <td>${esc(String(l.expected))}</td>
       <td>${Math.abs(l.qty - l.expected) > 1e-9 ? '<span class="pill r">✗ ' + t('drift') + '</span>' : '<span class="pill g">✓</span>'}</td>
       <td class="muted small">${l.last_moved_at ? new Date(l.last_moved_at).toLocaleString() : '—'}</td>
-    </tr>`)).join('') || `<tr><td colspan="6" class="muted">${t('no_rows')}</td></tr>`;
+    </tr>`)).join('') || `<tr><td colspan="6"><div class="empty"><div class="empty-t">${t('no_rows')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
 }
 
 async function loadStockMoves() {
@@ -2968,7 +2972,7 @@ async function loadStockMoves() {
       <td class="mono small muted">${esc(m.ref || '')}</td>
       <td class="small">${esc(m.user_name || 'system')}</td>
       <td class="${m.qty >= 0 ? '' : 'neg'}"><b>${m.qty > 0 ? '+' : ''}${esc(String(m.qty))}</b></td>
-    </tr>`).join('') || `<tr><td colspan="7" class="muted">${t('no_rows')}</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="7"><div class="empty"><div class="empty-t">${t('no_rows')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
 }
 
 async function loadStockInsight() {
@@ -2981,14 +2985,14 @@ async function loadStockInsight() {
       <td>${agePill(a.buckets.fresh, 'g')}</td><td>${agePill(a.buckets.maturing, '')}</td>
       <td>${agePill(a.buckets.aging, 'r')}</td>
       <td class="muted small">${a.oldest_age_days}d</td>
-    </tr>`).join('') || `<tr><td colspan="6" class="muted">${t('no_rows')}</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="6"><div class="empty"><div class="empty-t">${t('no_rows')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   $('#st-dead-rows').innerHTML = dead.map((r) => `
     <tr>
       <td>${esc(r.product_name)}${r.variant_name ? ` <span class="muted small">· ${esc(r.variant_name)}</span>` : ''}</td>
       <td>${esc(r.location_name)}</td>
       <td>${esc(String(r.qty))}</td>
       <td>${r.idle_days === null ? '<span class="pill r">never sold</span>' : `${r.idle_days}d`}</td>
-    </tr>`).join('') || `<tr><td colspan="4" class="muted">${t('no_rows')}</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="4"><div class="empty"><div class="empty-t">${t('no_rows')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
 }
 
 async function loadStocktakeHistory() {
@@ -3013,7 +3017,7 @@ async function loadStocktakeHistory() {
       <td>${Number(s.total_shrinkage_qty) < 0 ? `<span class="pill r">${esc(String(s.total_shrinkage_qty))}</span>` : '—'}</td>
       <td><span class="pill ${s.status === 'approved' ? 'g' : s.status === 'draft' ? 'y' : 'r'}">${s.status}</span></td>
       <td class="small">${esc(s.taken_by_name||'')}</td>
-    </tr>`).join('') || `<tr><td colspan="11" class="muted">${t('no_rows')}</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="11"><div class="empty"><div class="empty-t">${t('no_rows')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   document.querySelectorAll('#stk-rows tr[data-stk]').forEach((tr) => { tr.onclick = () => { STK_OPEN = Number(tr.dataset.stk); renderStocktake(STK_OPEN); }; });
 }
 
@@ -3033,14 +3037,14 @@ async function loadShrinkage() {
   if (!r || r.error) { $('#shr-msg').textContent = r?.error || 'failed'; return; }
   $('#shr-msg').textContent = `from ${r.from.slice(0,10)} to ${r.to.slice(0,10)} — ${r.totals.occurrences} events`;
   $('#shr-totals').innerHTML = `<span class="pill r">Qty lost: ${esc(String(Math.round(r.totals.qty_lost*100)/100))}</span> <span class="pill r">Value lost: ${fmt(r.totals.value_lost)}</span> <span class="pill">${r.totals.occurrences} events</span>`;
-  $('#shr-variant').innerHTML = (r.by_variant||[]).map((v) => `<tr><td>${esc(v.product_name)}${v.variant_name && v.variant_name!=='(base)'?` · ${esc(v.variant_name)}`:''}</td><td>${esc(String(Math.round(v.qty_lost*100)/100))}</td><td>${fmt(v.value_lost)}</td><td>${v.occurrences}</td><td class="small muted">${(v.reasons||[]).map(esc).join(', ')||'—'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">no shrinkage</td></tr>';
-  $('#shr-reason').innerHTML = (r.by_reason||[]).map((v) => `<tr><td><span class="pill">${esc(v.reason)}</span></td><td>${esc(String(Math.round(v.qty_lost*100)/100))}</td><td>${fmt(v.value_lost)}</td><td>${v.occurrences}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">—</td></tr>';
-  $('#shr-branch-tbl').innerHTML = (r.by_branch||[]).map((v) => `<tr><td>${esc(v.branch_name||String(v.branch_id))}</td><td>${esc(String(Math.round(v.qty_lost*100)/100))}</td><td>${fmt(v.value_lost)}</td><td>${v.occurrences}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">—</td></tr>';
-  $('#shr-loc').innerHTML = (r.by_location||[]).map((v) => `<tr><td>${esc(v.location_name||'unknown')}</td><td>${esc(String(Math.round(v.qty_lost*100)/100))}</td><td>${fmt(v.value_lost)}</td><td>${v.occurrences}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">—</td></tr>';
+  $('#shr-variant').innerHTML = (r.by_variant||[]).map((v) => `<tr><td>${esc(v.product_name)}${v.variant_name && v.variant_name!=='(base)'?` · ${esc(v.variant_name)}`:''}</td><td>${esc(String(Math.round(v.qty_lost*100)/100))}</td><td>${fmt(v.value_lost)}</td><td>${v.occurrences}</td><td class="small muted">${(v.reasons||[]).map(esc).join(', ')||'—'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty"><div class="empty-t">no shrinkage</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
+  $('#shr-reason').innerHTML = (r.by_reason||[]).map((v) => `<tr><td><span class="pill">${esc(v.reason)}</span></td><td>${esc(String(Math.round(v.qty_lost*100)/100))}</td><td>${fmt(v.value_lost)}</td><td>${v.occurrences}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty"><div class="empty-t">—</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
+  $('#shr-branch-tbl').innerHTML = (r.by_branch||[]).map((v) => `<tr><td>${esc(v.branch_name||String(v.branch_id))}</td><td>${esc(String(Math.round(v.qty_lost*100)/100))}</td><td>${fmt(v.value_lost)}</td><td>${v.occurrences}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty"><div class="empty-t">—</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
+  $('#shr-loc').innerHTML = (r.by_location||[]).map((v) => `<tr><td>${esc(v.location_name||'unknown')}</td><td>${esc(String(Math.round(v.qty_lost*100)/100))}</td><td>${fmt(v.value_lost)}</td><td>${v.occurrences}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty"><div class="empty-t">—</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   const per = r.per_branch_top || {};
   $('#shr-per-branch').innerHTML = Object.entries(per).map(([bid, top]) => {
     const bname = (r.by_branch||[]).find((b)=>String(b.branch_id)===String(bid))?.branch_name || `Branch ${bid}`;
-    return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#f8fafc"><b>${esc(bname)}</b> — Top 10 disappearing<table style="margin-top:6px"><thead><tr><th>SKU</th><th>Qty</th><th>Value</th></tr></thead><tbody>${top.map((t)=>`<tr><td class="small">${esc(t.product_name)}${t.variant_name?' · '+esc(t.variant_name):''}</td><td>${esc(String(Math.round(t.qty_lost*100)/100))}</td><td>${fmt(t.value_lost)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">clean</td></tr>'}</tbody></table></div>`;
+    return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#f8fafc"><b>${esc(bname)}</b> — Top 10 disappearing<table style="margin-top:6px"><thead><tr><th>SKU</th><th>Qty</th><th>Value</th></tr></thead><tbody>${top.map((t)=>`<tr><td class="small">${esc(t.product_name)}${t.variant_name?' · '+esc(t.variant_name):''}</td><td>${esc(String(Math.round(t.qty_lost*100)/100))}</td><td>${fmt(t.value_lost)}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty"><div class="empty-t">clean</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>'}</tbody></table></div>`;
   }).join('') || '<div class="muted">no data</div>';
 }
 
@@ -3083,7 +3087,7 @@ $('#stk-new').onclick = async () => {
     STK_OPEN = r.id;
     renderStocktake(STK_OPEN);
     loadStocktakeHistory();
-  } catch (e) { toast(msg, e.message, false); }
+  } catch (e) { toast(msg, errText(e), false); }
 };
 
 $('#stk-new-50').onclick = async () => {
@@ -3120,7 +3124,7 @@ $('#stk-new-50').onclick = async () => {
     renderStocktake(STK_OPEN);
     loadStocktakeHistory();
     toast(msg, `Blind 50 created with ${vIds.length} variants`, true);
-  } catch (e) { toast(msg, e.message, false); }
+  } catch (e) { toast(msg, errText(e), false); }
 };
 
 async function renderStocktake(id) {
@@ -3231,7 +3235,7 @@ async function renderStocktake(id) {
       $('#stk-active').innerHTML = '';
       toast($('#stk-msg'), 'Stocktake approved — variances written as moves with reasons. Integrity clean.', true);
       loadStock();
-    } catch (e) { toast($('#stk-msg'), e.message, false); }
+    } catch (e) { toast($('#stk-msg'), errText(e), false); }
   };
   const close = $('#stk-close');
   if (close) close.onclick = async () => {
@@ -3241,7 +3245,7 @@ async function renderStocktake(id) {
       STK_OPEN = null;
       box.innerHTML = '';
       loadStocktakeHistory();
-    } catch (e) { toast($('#stk-msg'), e.message, false); }
+    } catch (e) { toast($('#stk-msg'), errText(e), false); }
   };
   const addLine = $('#stk-add-line');
   if (addLine) addLine.onclick = async () => {
@@ -3275,7 +3279,7 @@ async function loadCategories() {
       <td>${esc(c.name)}</td><td>${esc(c.name_sw || '')}</td>
       <td>${c.age_restricted ? '<span class="pill r">Age</span> ' : ''}${c.requires_rx ? '<span class="pill">Rx</span>' : ''}</td>
       <td><button class="btn danger" data-del="${c.id}" data-name="${esc(c.name)}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="4" class="muted">Nothing here yet.</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="4"><div class="empty"><div class="empty-t">Nothing here yet.</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   document.querySelectorAll('#c-rows tr[data-id]').forEach((tr) => {
     tr.onclick = () => {
       const c = rows.find((r) => r.id === Number(tr.dataset.id));
@@ -3317,7 +3321,7 @@ $('#c-save').onclick = async () => {
     toast($('#c-msg'), t('save_ok'), true);
     $('#c-clear').onclick();
     loadCategories();
-  } catch (e) { toast($('#c-msg'), e.message, false); }
+  } catch (e) { toast($('#c-msg'), errText(e), false); }
 };
 
 // ---------- tills ----------
@@ -3331,7 +3335,7 @@ async function loadTills() {
       <td>${r.printer_width}mm</td>
       <td>${r.drawer ? '✓' : ''}</td>
       <td><button class="btn danger" data-del="${r.id}" data-name="${esc(r.name)}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="6" class="muted">No tills yet.</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="6"><div class="empty"><div class="empty-t">No tills yet.</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   document.querySelectorAll('#t-rows tr[data-id]').forEach((tr) => {
     tr.onclick = () => {
       const r = rows.find((x) => x.id === Number(tr.dataset.id));
@@ -3379,7 +3383,7 @@ $('#t-save').onclick = async () => {
     toast($('#t-msg'), t('save_ok'), true);
     $('#t-clear').onclick();
     loadTills();
-  } catch (e) { toast($('#t-msg'), e.message, false); }
+  } catch (e) { toast($('#t-msg'), errText(e), false); }
 };
 
 // ---------- staff ----------
@@ -3448,7 +3452,7 @@ async function openPermEditor(userId, userName) {
         });
       }
       toast($('#s-perm-msg'), t('save_ok'), true);
-    } catch (e) { toast($('#s-perm-msg'), e.message, false); }
+    } catch (e) { toast($('#s-perm-msg'), errText(e), false); }
   };
   card.scrollIntoView({ behavior: 'smooth' });
 }
@@ -3480,7 +3484,7 @@ $('#s-save').onclick = async () => {
     toast($('#s-msg'), t('save_ok'), true);
     $('#s-clear').onclick();
     loadStaff();
-  } catch (e) { toast($('#s-msg'), e.message, false); }
+  } catch (e) { toast($('#s-msg'), errText(e), false); }
 };
 
 // ---------- layout: locations + branches ----------
@@ -3577,7 +3581,7 @@ $('#l-save').onclick = async () => {
     toast($('#l-msg'), t('save_ok'), true);
     $('#l-clear').onclick();
     loadLayout();
-  } catch (e) { toast($('#l-msg'), e.message, false); }
+  } catch (e) { toast($('#l-msg'), errText(e), false); }
 };
 
 $('#b-clear').onclick = () => {
@@ -3600,7 +3604,7 @@ $('#b-save').onclick = async () => {
     toast($('#b-msg'), t('save_ok'), true);
     $('#b-clear').onclick();
     loadLayout();
-  } catch (e) { toast($('#b-msg'), e.message, false); }
+  } catch (e) { toast($('#b-msg'), errText(e), false); }
 };
 
 async function loadStoreSettings() {
@@ -3633,7 +3637,7 @@ async function saveStoreSettings() {
     });
     toast($('#st-store-msg'), 'store details saved', true);
   } catch (e) {
-    toast($('#st-store-msg'), e.message, false);
+    toast($('#st-store-msg'), errText(e), false);
   }
 }
 
@@ -3675,7 +3679,7 @@ async function loadInsights() {
     $('#ins-cash').innerHTML = cash.items.slice(0, 8).map((i) => `
       <tr><td>${esc(i.name)}</td><td class="mono">${i.qty}</td><td class="mono">${KES2(i.value)}</td>
       <td class="mono">${i.stale ? `${i.age_days}d` : '—'}</td></tr>`).join('')
-      || '<tr><td colspan="4" class="muted">nothing on the shelf</td></tr>';
+      || '<tr><td colspan="4"><div class="empty"><div class="empty-t">nothing on the shelf</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   }
   if (reorder) {
     $('#ins-reorder-line').textContent = reorder.sentence;
@@ -3683,7 +3687,7 @@ async function loadInsights() {
       <tr><td>${esc(i.name)}${i.urgency === 'now' ? ' <span class="pill r">now</span>' : ''}</td>
       <td class="mono">${i.qty}</td><td class="mono">${i.days_left >= 999 ? '—' : i.days_left + 'd'}</td>
       <td class="mono">${i.order_qty}</td></tr>`).join('')
-      || '<tr><td colspan="4" class="muted">nothing is at its reorder level</td></tr>';
+      || '<tr><td colspan="4"><div class="empty"><div class="empty-t">nothing is at its reorder level</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   }
   if (profit) {
     $('#ins-profit-line').textContent = profit.sentence;
@@ -3709,13 +3713,13 @@ async function loadInsights() {
       <tr><td>${esc(b.name)}</td><td class="mono">${KES2(b.revenue)}</td><td class="mono">${KES2(b.prev_revenue)}</td>
       <td class="mono">${b.change_pct === null ? '—' : `${b.change_pct > 0 ? '+' : ''}${b.change_pct}%`}
         ${b.flag === 'down' ? '<span class="pill r">down</span>' : ''}</td></tr>`).join('')
-      || '<tr><td colspan="4" class="muted">one branch, one book</td></tr>';
+      || '<tr><td colspan="4"><div class="empty"><div class="empty-t">one branch, one book</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   }
   if (disc) {
     $('#ins-disc').innerHTML = disc.items.map((d) => `
       <tr><td>${esc(d.name)}</td><td class="mono">${KES2(d.gross)}</td><td class="mono">${KES2(d.discount)}</td>
       <td class="mono">${d.discount_pct}%</td></tr>`).join('')
-      || '<tr><td colspan="4" class="muted">no sales yet</td></tr>';
+      || '<tr><td colspan="4"><div class="empty"><div class="empty-t">no sales yet</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   }
 }
 
@@ -3753,7 +3757,7 @@ async function loadEvidence() {
       <td class="small muted">${new Date(l.created_at).toLocaleString()}</td>
       <td>${esc(l.name || 'unknown')}</td>
       <td>${l.ok ? '<span class="pill g">signed in</span>' : `<span class="pill r">${esc(l.reason || 'refused')}</span>`}</td>
-    </tr>`).join('') || '<tr><td colspan="3" class="muted">no sign-ins recorded yet</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="3"><div class="empty"><div class="empty-t">no sign-ins recorded yet</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
 
   const locks = await api('/api/security/locks').catch(() => []);
   $('#ev-locks').innerHTML = locks.map((l) => `
@@ -3761,7 +3765,7 @@ async function loadEvidence() {
       <td>${esc(l.who || l.kind)}</td>
       <td class="mono">${l.fails}</td>
       <td>${l.locked_for_ms > 0 ? `${Math.ceil(l.locked_for_ms / 60000)} min` : '—'}</td>
-    </tr>`).join('') || '<tr><td colspan="3" class="muted">nobody is locked out</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="3"><div class="empty"><div class="empty-t">nobody is locked out</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
 
   const sessions = await api('/api/security/sessions').catch(() => []);
   $('#ev-sessions').innerHTML = sessions.map((s2) => `
@@ -3771,14 +3775,14 @@ async function loadEvidence() {
       <td class="small muted">${new Date(s2.created_at).toLocaleString()}</td>
       <td class="small muted">${new Date(s2.expires_at).toLocaleString()}${s2.expired ? ' <span class="pill r">expired</span>' : ''}</td>
       <td><button class="btn ghost small" data-revoke="${esc(s2.token_hint.replace('\u2026', ''))}">Revoke</button></td>
-    </tr>`).join('') || '<tr><td colspan="5" class="muted">no open sessions</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="5"><div class="empty"><div class="empty-t">no open sessions</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   $('#ev-sessions').querySelectorAll('[data-revoke]').forEach((b) => {
     b.onclick = async () => {
       try {
         await api(`/api/security/sessions/${b.dataset.revoke}/revoke`, { method: 'POST', body: {} });
         toast($('#ev-msg'), 'session revoked', true);
         await loadEvidence();
-      } catch (e) { toast($('#ev-msg'), e.message, false); }
+      } catch (e) { toast($('#ev-msg'), errText(e), false); }
     };
   });
 
@@ -3816,7 +3820,7 @@ async function loadBusinesses() {
       <td>${esc((b.billing || {}).plan_name || b.plan || '—')}</td>
       <td class="small">${esc((b.billing || {}).sentence || '—')}</td>
       <td class="small muted">${b.db_exists ? `${(b.db_bytes / 1024).toFixed(0)} KB` : 'missing'}</td>
-    </tr>`).join('') || '<tr><td colspan="5" class="muted">no businesses registered yet</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="5"><div class="empty"><div class="empty-t">no businesses registered yet</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
 }
 
 // ---------- devices (Phase 27) ----------
@@ -3844,7 +3848,7 @@ async function loadDevices() {
         <button class="btn ghost small" data-dev-default="${r.id}">Make default</button>
         <button class="btn ghost small" data-dev-toggle="${r.id}">${r.active ? 'Disable' : 'Enable'}</button>
       </td>
-    </tr>`).join('') || '<tr><td colspan="6" class="muted">no devices yet — add the printer you already own</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="6"><div class="empty"><div class="empty-t">no devices yet — add the printer you already own</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>';
   $('#dev-rows').querySelectorAll('[data-dev-test]').forEach((b) => { b.onclick = () => devTest(b.dataset.devTest); });
   $('#dev-rows').querySelectorAll('[data-dev-default]').forEach((b) => { b.onclick = () => devDefault(b.dataset.devDefault); });
   $('#dev-rows').querySelectorAll('[data-dev-toggle]').forEach((b) => { b.onclick = () => devToggle(b.dataset.devToggle); });
@@ -3858,19 +3862,19 @@ async function devTest(id) {
     toast($('#dev-msg'), `${r.summary} — saved so you can send it to the printer`, true);
     await loadDevices();
   } catch (e) {
-    toast($('#dev-msg'), e.message, false);
+    toast($('#dev-msg'), errText(e), false);
   }
 }
 
 async function devDefault(id) {
-  await api(`/api/devices/${id}`, { method: 'PUT', body: { is_default: true } }).catch((e) => toast($('#dev-msg'), e.message, false));
+  await api(`/api/devices/${id}`, { method: 'PUT', body: { is_default: true } }).catch((e) => toast($('#dev-msg'), errText(e), false));
   await loadDevices();
 }
 
 async function devToggle(id) {
   const row = (await api('/api/devices').catch(() => [])).find((r) => String(r.id) === String(id));
   if (!row) return;
-  await api(`/api/devices/${id}`, { method: 'PUT', body: { active: !row.active } }).catch((e) => toast($('#dev-msg'), e.message, false));
+  await api(`/api/devices/${id}`, { method: 'PUT', body: { active: !row.active } }).catch((e) => toast($('#dev-msg'), errText(e), false));
   await loadDevices();
 }
 
@@ -3939,7 +3943,7 @@ $('#ins-send').onclick = async () => {
   try {
     const r = await api('/api/intelligence/digest/send', { method: 'POST', body: {} });
     toast($('#ins-msg'), `digest sent (${r.digest.alerts.length} alert(s))`, true);
-  } catch (e) { toast($('#ins-msg'), e.message, false); }
+  } catch (e) { toast($('#ins-msg'), errText(e), false); }
 };
 $('#sys-backup').onclick = async () => {
   try {
@@ -3947,14 +3951,14 @@ $('#sys-backup').onclick = async () => {
     toast($('#ev-msg'), `backup saved: ${r.file} (${Math.round(r.bytes / 1024)} KB)`, true);
     const drill = await api('/api/admin/dr-drill');
     $('#sys-out').textContent = drill.sentence;
-  } catch (e) { toast($('#ev-msg'), e.message, false); }
+  } catch (e) { toast($('#ev-msg'), errText(e), false); }
 };
 $('#sys-drill').onclick = async () => {
   try {
     const drill = await api('/api/admin/dr-drill');
     $('#sys-out').textContent = drill.sentence;
     toast($('#ev-msg'), drill.pass ? 'restore drill passed' : 'the drill found a problem', drill.pass);
-  } catch (e) { toast($('#ev-msg'), e.message, false); }
+  } catch (e) { toast($('#ev-msg'), errText(e), false); }
 };
 $('#sub-refresh').onclick = async () => {
   try {
@@ -3963,17 +3967,17 @@ $('#sub-refresh').onclick = async () => {
     $('#sub-status').textContent = b.status || '\u2014';
     $('#sub-out').textContent = b.sentence || '';
     $('#sub-usage').textContent = b.usage ? b.usage.sentence : '';
-  } catch (e) { toast($('#ev-msg'), e.message, false); }
+  } catch (e) { toast($('#ev-msg'), errText(e), false); }
 };
 $('#biz-refresh').onclick = async () => {
-  try { await loadBusinesses(); } catch (e) { toast($('#ev-msg'), e.message, false); }
+  try { await loadBusinesses(); } catch (e) { toast($('#ev-msg'), errText(e), false); }
 };
 $('#biz-check').onclick = async () => {
   try {
     const r = await api('/api/admin/isolation-check', { method: 'POST', body: {} });
     $('#biz-out').textContent = r.sentence;
     toast($('#ev-msg'), r.isolated ? 'no data crosses between businesses' : 'LEAK FOUND', r.isolated);
-  } catch (e) { toast($('#ev-msg'), e.message, false); }
+  } catch (e) { toast($('#ev-msg'), errText(e), false); }
 };
 $('#ev-save').onclick = async () => {
   try {
@@ -3988,7 +3992,7 @@ $('#ev-save').onclick = async () => {
     });
     $('#ev-passphrase').value = '';
     toast($('#ev-msg'), 'security saved', true);
-  } catch (e) { toast($('#ev-msg'), e.message, false); }
+  } catch (e) { toast($('#ev-msg'), errText(e), false); }
 };
 $('#dev-add').onclick = async () => {
   try {
@@ -4004,7 +4008,7 @@ $('#dev-add').onclick = async () => {
     toast($('#dev-msg'), 'device added', true);
     await loadDevices();
   } catch (e) {
-    toast($('#dev-msg'), e.message, false);
+    toast($('#dev-msg'), errText(e), false);
   }
 };
 $('#st-save').onclick = async () => {
@@ -4022,7 +4026,7 @@ $('#st-save').onclick = async () => {
       }
     });
     toast($('#st-msg'), t('save_ok'), true);
-  } catch (e) { toast($('#st-msg'), e.message, false); }
+  } catch (e) { toast($('#st-msg'), errText(e), false); }
 };
 
 // ================= FINANCE Day 19 =================
@@ -4097,7 +4101,7 @@ async function loadDailyFinance() {
           <tr><td>Actual closing</td><td class="mono">${fmt(s.closing||0)}</td></tr>
           <tr><td>Variance</td><td class="mono">${s.variance==null?'—':fmt(s.variance)} ${s.reconciles===true?'<span class="pill g">reconciles ✓</span>':s.reconciles===false?'<span class="pill r">diff</span>':''}</td></tr>
         </table>`;
-      $('#fin-cash-rows').innerHTML = (pc.movements||[]).map((m)=>`<tr><td class="mono small">${new Date(m.created_at).toLocaleTimeString()}</td><td><span class="pill">${esc(m.type)}</span></td><td class="mono">${fmt(m.amount)}</td><td class="small">${esc(m.reason||'')}${m.note?` — ${esc(m.note)}`:''}</td></tr>`).join('') || `<tr><td colspan="4" class="muted">no movements</td></tr>`;
+      $('#fin-cash-rows').innerHTML = (pc.movements||[]).map((m)=>`<tr><td class="mono small">${new Date(m.created_at).toLocaleTimeString()}</td><td><span class="pill">${esc(m.type)}</span></td><td class="mono">${fmt(m.amount)}</td><td class="small">${esc(m.reason||'')}${m.note?` — ${esc(m.note)}`:''}</td></tr>`).join('') || `<tr><td colspan="4"><div class="empty"><div class="empty-t">no movements</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
     }
 
     // balances
@@ -4106,7 +4110,7 @@ async function loadDailyFinance() {
     $('#fin-balances').innerHTML = `<div><b>Suppliers (top outstanding)</b><br>${sup}</div><div style="margin-top:10px"><b>Customers outstanding</b><br>${cust}</div>`;
 
     toast($('#fin-msg'), `Daily ${date} ${f.tie?.match?'tie ✓':''}`, true);
-  } catch (e) { toast($('#fin-msg'), e.message, false); }
+  } catch (e) { toast($('#fin-msg'), errText(e), false); }
 }
 
 async function loadPnL() {
@@ -4136,7 +4140,7 @@ async function loadPnL() {
         <td class="mono"><b>${fmt(row.nop||0)}</b></td>
         <td>${row.tie?.match?'<span class="pill g">✓</span>':'<span class="pill r">✗</span>'}</td>
       </tr>`;
-    }).join('') || `<tr><td colspan="7" class="muted">no data</td></tr>`;
+    }).join('') || `<tr><td colspan="7"><div class="empty"><div class="empty-t">no data</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   } catch (e) { /* ignore */ }
 }
 
@@ -4150,7 +4154,7 @@ async function loadExpensesList() {
       <td class="small">${esc(r.payment_method||'cash')}</td>
       <td class="mono">${fmt(r.amount)}</td>
       <td class="small muted">${esc(r.reference||'')}${r.note?` — ${esc(r.note)}`:''}</td>
-    </tr>`).join('') || `<tr><td colspan="6" class="muted">no expenses</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="6"><div class="empty"><div class="empty-t">no expenses</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   } catch {}
 }
 
@@ -4286,7 +4290,7 @@ async function loadSalesReport() {
         <td class="mono">${fmt(row.margin||0)}</td>
         <td><button class="btn small ghost" ${drill}>drill</button></td>
       </tr>`;
-    }).join('') || `<tr><td colspan="6" class="muted">no data</td></tr>`;
+    }).join('') || `<tr><td colspan="6"><div class="empty"><div class="empty-t">no data</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
     document.querySelectorAll('#sales-rows [data-drill-product]').forEach((b)=>{
       b.onclick = async () => {
         const pid = b.dataset.drillProduct;
@@ -4307,7 +4311,7 @@ async function loadMarginReport() {
       <td class="mono">${fmt(row.cogs)}</td>
       <td class="mono ${row.margin<0?'r':''}">${fmt(row.margin)}</td>
       <td class="mono">${(row.margin_pct||0).toFixed(1)}%</td>
-    </tr>`).join('') || `<tr><td colspan="6" class="muted">no data</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="6"><div class="empty"><div class="empty-t">no data</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   } catch {}
 }
 async function loadSlow() {
@@ -4320,7 +4324,7 @@ async function loadSlow() {
       <td class="mono">${row.stock_qty}</td>
       <td class="mono">${fmt(row.stock_value)}</td>
       <td class="mono small">${row.last_sale_at?new Date(row.last_sale_at).toLocaleDateString():'never'}</td>
-    </tr>`).join('') || `<tr><td colspan="4" class="muted">no slow stock</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="4"><div class="empty"><div class="empty-t">no slow stock</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   } catch {}
 }
 async function loadDead() {
@@ -4333,7 +4337,7 @@ async function loadDead() {
       <td class="mono">${row.stock_qty}</td>
       <td class="mono">${fmt(row.stock_value)}</td>
       <td class="mono small">${row.last_consumption_at?new Date(row.last_consumption_at).toLocaleDateString():'never'}</td>
-    </tr>`).join('') || `<tr><td colspan="4" class="muted">no dead stock</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="4"><div class="empty"><div class="empty-t">no dead stock</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   } catch {}
 }
 async function loadStockValue() {
@@ -4353,7 +4357,7 @@ async function loadCashierReport() {
       <td class="mono">${(row.discount_pct||0).toFixed(1)}%</td>
       <td class="mono">${row.voids||0}</td>
       <td class="mono">${row.returns_count||0} / ${fmt(row.refunds||0)}</td>
-    </tr>`).join('') || `<tr><td colspan="6" class="muted">no data</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="6"><div class="empty"><div class="empty-t">no data</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   } catch {}
 }
 async function loadReorder() {
@@ -4368,7 +4372,7 @@ async function loadReorder() {
       <td class="mono">${(row.days_of_cover||0).toFixed(1)}</td>
       <td class="mono"><b>${row.suggested_qty}</b></td>
       <td class="small">${esc(row.supplier_name||'—')}</td>
-    </tr>`).join('') || `<tr><td colspan="6" class="muted">all stocked</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="6"><div class="empty"><div class="empty-t">all stocked</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   } catch {}
 }
 
@@ -4467,7 +4471,7 @@ $('#mp-save').onclick = async () => {
     await api('/api/settings/payments', { method: 'PUT', body });
     toast($('#mp-msg'), 'M-Pesa saved', true);
     $('#mp-cs').value='';
-  } catch (e) { toast($('#mp-msg'), e.message, false); }
+  } catch (e) { toast($('#mp-msg'), errText(e), false); }
 };
 
 $('#et-save').onclick = async () => {
@@ -4484,7 +4488,7 @@ $('#et-save').onclick = async () => {
     await api('/api/settings/etims', { method: 'PUT', body });
     toast($('#et-msg'), 'eTIMS saved', true);
     $('#et-apikey').value='';
-  } catch (e) { toast($('#et-msg'), e.message, false); }
+  } catch (e) { toast($('#et-msg'), errText(e), false); }
 };
 
 async function loadMpesaRecon() {
@@ -4504,7 +4508,7 @@ async function loadMpesaRecon() {
       <td class="mono small">${esc(row.mpesa_ref||row.checkout_request_id||'')}</td>
       <td class="small">${row.matched_sale_id?`#${row.matched_sale_id}`:'—'}</td>
       <td>${row.reconciled?'<span class="pill g">✓</span>':'<span class="pill">no</span>'}</td>
-    </tr>`).join('') || `<tr><td colspan="7" class="muted">no logs</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="7"><div class="empty"><div class="empty-t">no logs</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   } catch {}
 }
 
@@ -4518,7 +4522,7 @@ $('#b2c-send').onclick = async () => {
   try {
     const r = await api('/api/mpesa/b2c-refund', { method: 'POST', body: { phone, amount, remarks } });
     toast($('#b2c-msg'), `B2C ${r.ok?'queued':'failed'} ${r.b2c?'ID '+r.b2c.OriginatorConversationID:''}`, true);
-  } catch (e) { toast($('#b2c-msg'), e.message, false); }
+  } catch (e) { toast($('#b2c-msg'), errText(e), false); }
 };
 
 $('#c2b-send').onclick = async () => {
@@ -4533,7 +4537,7 @@ $('#c2b-send').onclick = async () => {
     const r = await api('/api/webhooks/mpesa/c2b', { method: 'POST', body });
     toast($('#c2b-msg'), `C2B ${r.ok?'accepted':''} autoMatched=${r.autoMatched}`, true);
     loadMpesaRecon();
-  } catch (e) { toast($('#c2b-msg'), e.message, false); }
+  } catch (e) { toast($('#c2b-msg'), errText(e), false); }
 };
 
 async function loadEtimsStatus() {
@@ -4562,7 +4566,7 @@ async function loadEtimsQueue() {
       <td class="small muted">${esc((row.last_error||'').slice(0,80))}</td>
       <td class="mono small">${new Date(row.deadline_at).toLocaleDateString()}</td>
       <td><button class="btn small ghost" data-et="${row.id}">transmit</button></td>
-    </tr>`).join('') || `<tr><td colspan="9" class="muted">no queue</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="9"><div class="empty"><div class="empty-t">no queue</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
     document.querySelectorAll('#et-rows [data-et]').forEach((b)=>{
       b.onclick = async () => {
         try { const r = await api(`/api/etims/transmit/${b.dataset.et}`, { method: 'POST' }); alert(`Transmit: ${r.ok?'ok CUIN '+r.cuin:r.error}`); loadEtimsQueue(); loadEtimsStatus(); } catch (e) { alert(e.message); }
@@ -4577,7 +4581,7 @@ $('#et-process').onclick = async () => {
     const r = await api('/api/etims/process-queue', { method: 'POST', body: { limit: 10 } });
     toast($('#et-msg'), `Processed ${r.processed}`, true);
     loadEtimsQueue(); loadEtimsStatus();
-  } catch (e) { toast($('#et-msg'), e.message, false); }
+  } catch (e) { toast($('#et-msg'), errText(e), false); }
 };
 
 $('#et-offline-sim').onclick = async () => {
@@ -4590,7 +4594,7 @@ $('#et-offline-sim').onclick = async () => {
     }
     toast($('#et-offline-msg'), '2 sales enqueued (simulate offline)', true);
     loadEtimsQueue(); loadEtimsStatus();
-  } catch (e) { toast($('#et-offline-msg'), e.message, false); }
+  } catch (e) { toast($('#et-offline-msg'), errText(e), false); }
 };
 
 
@@ -4612,22 +4616,22 @@ async function loadSync() {
       <div class="kpi ${k.recon?.ok?'g':''}"><div class="kpi-label">Recon</div><div class="kpi-value">${k.recon?.ok?'✓ OK':'check'}</div><div class="muted small">sales ${k.sales?.total||0} offline ${k.sales?.offline||0} pending etims ${k.etims?.pending||0}</div></div>
     `;
     const outbox = await api('/api/sync/outbox').catch(()=>[]);
-    $('#sync-outbox-rows').innerHTML = outbox.map(o=>`<tr><td class="mono small">${esc((o.client_id||'').slice(0,8))}</td><td>${o.branch_id}</td><td><span class="pill ${o.status==='acked'?'g':o.status==='conflict'?'r':''}">${esc(o.status)}</span></td><td>${o.attempts||0}</td><td class="mono small">${new Date(o.created_at).toLocaleString()}</td><td class="small muted">${esc((o.last_error||'').slice(0,80))}</td></tr>`).join('') || `<tr><td colspan="6" class="muted">no outbox</td></tr>`;
+    $('#sync-outbox-rows').innerHTML = outbox.map(o=>`<tr><td class="mono small">${esc((o.client_id||'').slice(0,8))}</td><td>${o.branch_id}</td><td><span class="pill ${o.status==='acked'?'g':o.status==='conflict'?'r':''}">${esc(o.status)}</span></td><td>${o.attempts||0}</td><td class="mono small">${new Date(o.created_at).toLocaleString()}</td><td class="small muted">${esc((o.last_error||'').slice(0,80))}</td></tr>`).join('') || `<tr><td colspan="6"><div class="empty"><div class="empty-t">no outbox</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
     $('#sync-outbox-empty').style.display = outbox.length ? 'none' : '';
 
     const conflicts = await api('/api/sync/conflicts').catch(()=>[]);
-    $('#sync-conflicts-rows').innerHTML = conflicts.map(c=>`<tr><td class="mono small">${new Date(c.created_at).toLocaleString()}</td><td class="mono small">${esc((c.client_id||'').slice(0,8))}</td><td class="small">${esc(c.reason||'')}</td><td class="small">${esc(c.resolved_by||'')}</td></tr>`).join('') || `<tr><td colspan="4" class="muted">no conflicts</td></tr>`;
+    $('#sync-conflicts-rows').innerHTML = conflicts.map(c=>`<tr><td class="mono small">${new Date(c.created_at).toLocaleString()}</td><td class="mono small">${esc((c.client_id||'').slice(0,8))}</td><td class="small">${esc(c.reason||'')}</td><td class="small">${esc(c.resolved_by||'')}</td></tr>`).join('') || `<tr><td colspan="4"><div class="empty"><div class="empty-t">no conflicts</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
     $('#sync-conflicts-empty').style.display = conflicts.length ? 'none' : '';
 
     const slog = await api('/api/sync/log?limit=50').catch(()=>[]);
-    $('#sync-log-rows').innerHTML = slog.map(l=>`<tr><td class="mono small">${new Date(l.created_at).toLocaleString()}</td><td class="mono small">${esc((l.client_id||'').slice(0,8))}</td><td>${l.branch_id}</td><td><span class="pill">${esc(l.action||'')}</span></td><td>${l.sale_id||'—'}</td></tr>`).join('') || `<tr><td colspan="5" class="muted">no log</td></tr>`;
+    $('#sync-log-rows').innerHTML = slog.map(l=>`<tr><td class="mono small">${new Date(l.created_at).toLocaleString()}</td><td class="mono small">${esc((l.client_id||'').slice(0,8))}</td><td>${l.branch_id}</td><td><span class="pill">${esc(l.action||'')}</span></td><td>${l.sale_id||'—'}</td></tr>`).join('') || `<tr><td colspan="5"><div class="empty"><div class="empty-t">no log</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
 
     const offline = await api('/api/sync/offline-sales').catch(()=>[]);
     $('#sync-offline-rows').innerHTML = offline.map(o=>{
       const ageH = o.offline_created ? ((Date.now() - new Date(o.offline_created).getTime())/3600000).toFixed(1) : '—';
       const within = o.offline_created ? ((Date.now() - new Date(o.offline_created).getTime())/3600000 <= 48 ? '<span class="pill g">within 48h</span>' : '<span class="pill r">expired</span>') : '';
       return `<tr><td>${o.id}</td><td class="mono small">${esc(o.invoice_no||'')}</td><td class="mono small">${esc((o.client_id||'').slice(0,8))}</td><td class="mono small">${o.offline_created?new Date(o.offline_created).toLocaleString():'—'}</td><td><span class="pill ${o.sync_status==='synced'?'g':''}">${esc(o.sync_status||'')}</span></td><td><span class="pill ${o.etims_status==='transmitted'?'g':o.etims_status==='failed'?'r':''}">${esc(o.etims_status||'')}</span></td><td>${ageH} ${within}</td></tr>`;
-    }).join('') || `<tr><td colspan="7" class="muted">no offline sales</td></tr>`;
+    }).join('') || `<tr><td colspan="7"><div class="empty"><div class="empty-t">no offline sales</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
     $('#sync-offline-empty').style.display = offline.length ? 'none' : '';
 
     // also run matrix if exists
@@ -4671,7 +4675,7 @@ async function loadAudit() {
     <td>${esc(a.userName)}</td><td class="mono small">${esc(a.action)}</td>
     <td class="small">${esc(a.entity)}${a.entity_id ? ' #' + esc(a.entity_id) : ''}</td>
     <td class="small muted">${esc(JSON.stringify(a.detail).slice(0, 100))}</td></tr>`).join('')
-    || `<tr><td colspan="5" class="muted">Nothing here yet.</td></tr>`;
+    || `<tr><td colspan="5"><div class="empty"><div class="empty-t">Nothing here yet.</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
 }
 
 $('#a-verify').onclick = async () => {
@@ -4681,7 +4685,7 @@ $('#a-verify').onclick = async () => {
     const r = await api('/api/audit/verify');
     if (r.ok) toast(el, `Chain verified — ${r.length} entries intact ✓`, true);
     else toast(el, `Chain broken at entry ${r.at}`, false);
-  } catch (e) { toast(el, e.message, false); }
+  } catch (e) { toast(el, errText(e), false); }
 };
 
 function fillCatSelects() {
@@ -4727,7 +4731,7 @@ async function loadPricingHistory() {
       <td class="small">${esc(h.user_name || '—')}</td>
       <td class="small">${h.approver_name ? `<span class="pill g">${esc(h.approver_name)} · ${t('pin_ok')}</span>` : '<span class="muted">—</span>'}</td>
       <td class="small muted">${esc(h.note || '')}</td>
-    </tr>`).join('') || `<tr><td colspan="8" class="muted">${t('no_history')}</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="8"><div class="empty"><div class="empty-t">${t('no_history')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
 }
 
 async function loadPricing() {
@@ -4756,11 +4760,11 @@ async function loadPricing() {
         <td class="small mono muted">${prWindowLabel(r)}</td>
         <td>${r.active ? `<span class="pill g">${t('active')}</span>` : `<span class="pill">${t('cancelled')}</span>`}</td>
         <td><button class="btn small ghost" data-del="${r.id}">${t('delete')}</button></td>
-      </tr>`).join('') || `<tr><td colspan="7" class="muted">${t('no_rows')}</td></tr>`;
+      </tr>`).join('') || `<tr><td colspan="7"><div class="empty"><div class="empty-t">${t('no_rows')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
     document.querySelectorAll('#pr-rows [data-del]').forEach((b) => {
       b.onclick = async () => {
         try { await api(`/api/price-rules/${b.dataset.del}`, { method: 'DELETE' }); loadPricing(); }
-        catch (e) { toast($('#pr-form-msg'), e.message, false); }
+        catch (e) { toast($('#pr-form-msg'), errText(e), false); }
       };
     });
     await loadPricingHistory();
@@ -4820,7 +4824,7 @@ $('#pr-save').onclick = async () => {
     toast($('#pr-form-msg'), t('rule_saved'), true);
     $('#pr-form').classList.add('hidden');
     loadPricing();
-  } catch (e) { toast($('#pr-form-msg'), e.message, false); }
+  } catch (e) { toast($('#pr-form-msg'), errText(e), false); }
 };
 
 $('#pr-margin-save').onclick = async () => {
@@ -4830,7 +4834,7 @@ $('#pr-margin-save').onclick = async () => {
   try {
     await api('/api/settings', { method: 'PUT', body: { pricing } });
     toast($('#pr-margin-msg'), t('save_ok'), true);
-  } catch (e) { toast($('#pr-margin-msg'), e.message, false); }
+  } catch (e) { toast($('#pr-margin-msg'), errText(e), false); }
 };
 
 $('#pr-hist-refresh').onclick = loadPricingHistory;
@@ -4862,7 +4866,7 @@ async function loadSupList() {
       <td class="mono">${bal}</td>
       <td>${ME.role === 'owner' ? `<button class="btn small" data-sup-del="${s.id}">${t('delete')}</button>` : ''}</td>
     </tr>`;
-  }).join('') || `<tr><td colspan="6" class="muted">${t('no_rows')}</td></tr>`;
+  }).join('') || `<tr><td colspan="6"><div class="empty"><div class="empty-t">${t('no_rows')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   const opts = PU.sups.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
   $('#inv-supplier').innerHTML = opts;
   $('#sr-supplier').innerHTML = opts;
@@ -4897,7 +4901,7 @@ async function loadPOs() {
       <td><span class="pill ${p.status === 'received' ? 'g' : p.status === 'cancelled' ? 'r' : ''}">${t(p.status === 'received' ? 'received_st' : p.status)}</span></td>
       <td class="mono">${fmt(p.total)}</td>
       <td class="muted small">${new Date(p.created_at).toLocaleDateString()}</td>
-    </tr>`).join('') || `<tr><td colspan="5" class="muted">${t('no_rows')}</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="5"><div class="empty"><div class="empty-t">${t('no_rows')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   document.querySelectorAll('#po-rows tr[data-po]').forEach((tr) => (tr.onclick = () => showPO(tr.dataset.po)));
 }
 
@@ -4988,7 +4992,7 @@ async function resolveDisc(id, decision) {
     const r = await api(`/api/po-items/${id}/discrepancy`, { method: 'POST', body: { decision } });
     toast($('#po-msg'), t(r.decision === 'approved' ? 'approved' : 'rejected'), true);
     await Promise.all([showPO(PU.curPO.id), loadSupList()]);
-  } catch (e) { toast($('#po-msg'), e.message, false); }
+  } catch (e) { toast($('#po-msg'), errText(e), false); }
 }
 
 // ---- invoices ----
@@ -5010,7 +5014,7 @@ async function loadInvoices() {
           <button class="btn small" data-pay="${v.id}">${t('pay')}</button>
           ${['open', 'partial'].includes(v.status) ? ` <button class="btn small ghost" data-dispute="${v.id}">${t('dispute')}</button>` : ''}`}
       </td>
-    </tr>`).join('') || `<tr><td colspan="8" class="muted">${t('no_rows')}</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="8"><div class="empty"><div class="empty-t">${t('no_rows')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   document.querySelectorAll('#inv-rows [data-pay]').forEach((b) => {
     b.onclick = async () => {
       const id = b.dataset.pay;
@@ -5023,7 +5027,7 @@ async function loadInvoices() {
         const r = await api(`/api/supplier-invoices/${id}/payments`, { method: 'POST', body });
         toast($('#inv-msg'), t('save_ok') + (r.settled ? ` — ${t('settled')}` : ''), true);
         await Promise.all([loadInvoices(), loadSupList()]);
-      } catch (e) { toast($('#inv-msg'), e.message, false); }
+      } catch (e) { toast($('#inv-msg'), errText(e), false); }
     };
   });
   document.querySelectorAll('#inv-rows [data-dispute]').forEach((b) => {
@@ -5031,7 +5035,7 @@ async function loadInvoices() {
       try {
         await api(`/api/supplier-invoices/${b.dataset.dispute}`, { method: 'PUT', body: { status: 'disputed' } });
         await loadInvoices();
-      } catch (e) { toast($('#inv-msg'), e.message, false); }
+      } catch (e) { toast($('#inv-msg'), errText(e), false); }
     };
   });
 }
@@ -5043,7 +5047,7 @@ async function loadReturns() {
     <tr><td class="mono">${esc(r.ref)}</td><td>${esc(r.supplier_name)}</td><td>${esc(r.product_name)}</td>
     <td class="mono">${r.qty}</td><td class="small muted">${esc(r.reason || '')}</td>
     <td class="muted small">${new Date(r.created_at).toLocaleDateString()}</td></tr>`).join('')
-    || `<tr><td colspan="6" class="muted">${t('no_rows')}</td></tr>`;
+    || `<tr><td colspan="6"><div class="empty"><div class="empty-t">${t('no_rows')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   $('#sr-product').innerHTML = PU.products.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
 }
 
@@ -5059,7 +5063,7 @@ async function loadSuggestions() {
       <td class="mono"><b>${s.suggest_qty} ${esc(s.unit || '')}</b></td>
       <td>${esc(s.supplier_name)} <span class="muted small">+${s.lead_days}d</span></td>
       <td><button class="btn small" data-sug="${s.supplier_id}" data-pid="${s.product_id}" data-qty="${s.suggest_qty}" data-cost="${s.current_cost}">${t('new_po')}</button></td>
-    </tr>`).join('') || `<tr><td colspan="7" class="muted">${t('no_suggestions')}</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="7"><div class="empty"><div class="empty-t">${t('no_suggestions')}</div><div class="empty-s" data-i18n="nothing_here_sub"></div></div></td></tr>`;
   document.querySelectorAll('#pu-suggest-rows [data-sug]').forEach((b) => {
     b.onclick = () => openPOForm(Number(b.dataset.sug), Number(b.dataset.pid), Number(b.dataset.qty), Number(b.dataset.cost));
   });
@@ -5083,7 +5087,7 @@ $('#po-save').onclick = async () => {
     toast($('#po-form-msg'), `${r.ref} ✓`, true);
     $('#po-form').classList.add('hidden');
     await Promise.all([loadPOs(), loadSupList()]);
-  } catch (e) { toast($('#po-form-msg'), e.message, false); }
+  } catch (e) { toast($('#po-form-msg'), errText(e), false); }
 };
 $('#po-close-btn').onclick = () => { $('#po-detail').classList.add('hidden'); PU.curPO = null; };
 $('#po-cancel-btn').onclick = async () => {
@@ -5093,7 +5097,7 @@ $('#po-cancel-btn').onclick = async () => {
     toast($('#po-msg'), t('cancelled'), true);
     await Promise.all([loadPOs(), loadSupList()]);
     $('#po-detail').classList.add('hidden'); PU.curPO = null;
-  } catch (e) { toast($('#po-msg'), e.message, false); }
+  } catch (e) { toast($('#po-msg'), errText(e), false); }
 };
 $('#po-receive-btn').onclick = () => {
   const el = $('#po-receive');
@@ -5118,7 +5122,7 @@ $('#gr-save').onclick = async () => {
     const r = await api(`/api/purchase-orders/${PU.curPO.id}/receive`, { method: 'POST', body: { items } });
     toast($('#gr-msg'), `${r.ref} ✓${r.discrepancies.length ? ` — ${r.discrepancies.length} ${t('discrepancy')}` : ''}`, true);
     await Promise.all([showPO(PU.curPO.id), loadSupList()]);
-  } catch (e) { toast($('#gr-msg'), e.message, false); }
+  } catch (e) { toast($('#gr-msg'), errText(e), false); }
 };
 $('#pu-suggest-refresh').onclick = loadSuggestions;
 $('#inv-new-btn').onclick = () => {
@@ -5147,7 +5151,7 @@ $('#inv-save').onclick = async () => {
     toast($('#inv-msg'), `${r.ref} ✓`, true);
     $('#inv-form').classList.add('hidden');
     await Promise.all([loadInvoices(), loadSupList()]);
-  } catch (e) { toast($('#inv-msg'), e.message, false); }
+  } catch (e) { toast($('#inv-msg'), errText(e), false); }
 };
 $('#inv-clear').onclick = () => $('#inv-form').classList.add('hidden');
 $('#sr-new-btn').onclick = () => $('#sr-form').classList.toggle('hidden');
@@ -5164,7 +5168,7 @@ $('#sr-save').onclick = async () => {
     toast($('#sr-msg'), `${r.ref} ✓`, true);
     $('#sr-form').classList.add('hidden');
     await Promise.all([loadReturns(), loadSupList()]);
-  } catch (e) { toast($('#sr-msg'), e.message, false); }
+  } catch (e) { toast($('#sr-msg'), errText(e), false); }
 };
 $('#sup-new-btn').onclick = () => {
   $('#sup-id').value = ''; $('#sup-name').value = ''; $('#sup-kra').value = '';
@@ -5186,7 +5190,7 @@ $('#sup-save').onclick = async () => {
     toast($('#sup-msg'), t('save_ok'), true);
     $('#sup-form').classList.add('hidden');
     await loadSupList();
-  } catch (e) { toast($('#sup-msg'), e.message, false); }
+  } catch (e) { toast($('#sup-msg'), errText(e), false); }
 };
 
 window.addEventListener('hashchange', () => selectTab(location.hash.replace('#', '')));

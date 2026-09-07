@@ -690,12 +690,40 @@ auto-updates, backups.
   40 days overdue → `POST /api/sales` 402 while `/api/products` and CSV export stay 200;
   pay up and the till reopens. 240 API tests, 37 UI steps.
 
-### Phase 34 — Final UX / Product Polish · Days 51–53
+### Phase 34 — Final UX / Product Polish · Days 51–53 — **done**
 Only after functionality works: cashier speed (keyboard-first, shortcuts), responsive +
 tablet, search speed, onboarding v2 polish, empty states, error messages, **receipt design
 per trade**, dashboards, accessibility, full EN/SW coverage (UI + receipts), and a **solo-mode
 audit**: every screen in a solo business walked for ERP leakage (R-C2) — anything that makes a
 one-till owner pause is cut or hidden.
+- **Cashier speed.** The till runs from the keyboard: **F2** scan · **F3** customer ·
+  **F4** tender · **F6** complete sale · **F8** hold · **F9** quote · **↑ ↓** pick a cart
+  line · **+ −** change quantity · **Del** remove · **Esc** clear · **F1** shows every
+  shortcut on screen. The selected line is highlighted so the keys always have a subject.
+- **Empty states & error messages.** One `emptyRow()` helper across **56** tables, each with
+  a heading and a second line. `errText()` turns the server's answer into a sentence —
+  permission, stock, subscription and network failures each get their own EN/SW wording.
+- **EN/SW is complete.** 403 keys, each with a Swahili, zero untranslated; every
+  `data-i18n` key the pages use is asserted to exist; rows drawn after load are translated
+  by a MutationObserver (they used to keep the old language).
+- **Receipt design per trade.** A 10th module hook (`receipt`) lets each industry hand the
+  core its own lines — the chemist's expiry and child-safety warnings, the wines & spirits
+  age and excise notices, the hardware "goods cut to order" rule — in **EN and SW**, printed
+  in the language the shop chose on the settings screen. The core still never asks which
+  trade it is (R-M1).
+- **Solo-mode audit (R-C2), measured not promised.** `lib/uiaudit.js` + `GET /api/solo/audit`
+  read the real `pos.html` and `manager.html`, strip the sections a solo shop can never
+  reach and the `data-cap` elements cut at boot, and count what is left: **19 → 0** ERP
+  words in a one-till shop. Each fix is a capability annotation, not a deletion, so a chain
+  still sees its branches and suppliers.
+- **Responsive & accessible.** Breakpoints at 1100 / 900 / 820 / 600px (tablet and phone),
+  `:focus-visible` rings, `aria-label`s on icon-only buttons, and
+  `prefers-reduced-motion` honoured.
+- **Fixed on the way:** the receipt footer the shop configured was in the payload but never
+  reached the printer.
+- **Proof:** 247 API tests, 44 UI steps, all green. Not done (deferred, no pilot data):
+  onboarding v2 re-write and dashboard redesign — better done against what the five pilots
+  actually look at in Phase 35.
 
 ### Phase 35 — Pilot Release · Days 54–60
 Deploy to **five** real businesses: 1 general shop · 1 wines & spirits · 1 boutique ·

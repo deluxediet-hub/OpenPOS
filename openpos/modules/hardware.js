@@ -159,5 +159,11 @@ module.exports = {
         }
       }
     }
+  ],
+  receipt: [
+    { en: 'Goods cut or mixed to order are not returnable.',
+      sw: 'Bidhaa zilizokatwa au kuchanganywa hazirudishwi.' },
+    { en: 'Check your goods before leaving the shop.',
+      sw: 'Hakikisha bidhaa zako kabla ya kuondoka dukani.' }
   ]
 };

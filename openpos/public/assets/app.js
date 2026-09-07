@@ -131,6 +131,34 @@ const I18N = {
     email: 'Email', balance_l: 'Balance', saved_ok: 'Saved',
     fill_amount: 'enter an amount', repaid: 'Repaid', deposited: 'Deposited',
     phone_required: 'phone number needed',
+    // closing the last HTML/JS gaps (Phase 34)
+    branch: 'Branch', orders: 'Orders', margin: 'Margin', product: 'Product', refund: 'Refund',
+    suppliers_with_balance: 'Suppliers (with balance in branch)',
+    // ---- Phase 34: the till, run from the keyboard ----
+    keyboard_shortcuts: 'Keyboard shortcuts',
+    keys_intro: 'A cashier should never have to reach for the mouse. These keys work anywhere on the till.',
+    keys_search: 'Go to scan / search',
+    keys_customer: 'Go to customer',
+    keys_tender: 'Go to cash tendered',
+    keys_pay: 'Complete the sale',
+    keys_hold: 'Hold (park) the cart',
+    keys_quote: 'Quote the cart',
+    keys_move: 'Move up / down the cart',
+    keys_qty: 'Add / remove one from the selected line',
+    keys_remove: 'Remove the selected line',
+    keys_escape: 'Close this, or clear the search',
+    keys_this_help: 'Show or hide this list',
+    qty: 'Quantity', increase_qty: 'Add one', decrease_qty: 'Remove one',
+    nothing_here: 'Nothing here yet',
+    nothing_here_sub: 'When there is something to show, it will appear here.',
+    no_results: 'Nothing matches that search',
+    something_wrong: 'That did not work',
+    try_again: 'Try again',
+    not_allowed: 'You are not allowed to do that — ask a manager',
+    not_enough_stock: 'There is not enough on the shelf for that',
+    out_of_stock: 'That item is finished — restock it first',
+    sub_ended: 'The subscription has ended — pay to start selling again',
+    no_internet: 'No internet — the sale will be kept and sent later',
   },
   sw: {
     staff_signin: 'Waketi wafanyakazi', select_staff: 'Chagua mfanyakazi', enter_pin: 'Weka PIN',
@@ -256,6 +284,38 @@ const I18N = {
     email: 'Barua pepe', balance_l: 'Salio', saved_ok: 'Imehifadhiwa',
     fill_amount: 'weka kiasi', repaid: 'Imelipwa', deposited: 'Imewekwa',
     phone_required: 'inahitaji nambari ya simu',
+    branch: 'Tawi', orders: 'Oda', margin: 'Faida', product: 'Bidhaa', refund: 'Rudisha',
+    suppliers_with_balance: 'Washirika (wenye salio tawini)',
+    // closing the last EN/SW gaps (Phase 34)
+    variants: 'Aina', variant: 'Aina', packs: 'Pakiti', pack: 'Pakiti',
+    attributes: 'Sifa maalum', serials: 'Namba za seriali', register_serial: 'namba ya seriali',
+    in_stock: 'ipo stoo', export_csv: 'Hamisha CSV', import_csv: 'Ingiza CSV',
+    supplier: 'Muuzaji wa jumla', reorder: 'Kiwango cha kuagiza tena',
+    // ---- Phase 34: the till, run from the keyboard ----
+    keyboard_shortcuts: 'Njia za mkato',
+    keys_intro: 'Mfanyakazi wa kaunta asilazimike kufikia panya. Vifungo hivi vinafanya kazi popote kwenye kaunta.',
+    keys_search: 'Nenda kwenye scan / utafutaji',
+    keys_customer: 'Nenda kwa mteja',
+    keys_tender: 'Nenda kwa pesa zinazolipwa',
+    keys_pay: 'Maliza uuzaji',
+    keys_hold: 'Shikilia kikapu',
+    keys_quote: 'Toa nukuu ya kikapu',
+    keys_move: 'Songa juu / chini kwenye kikapu',
+    keys_qty: 'Ongeza / punguza moja kwenye mstari uliochaguliwa',
+    keys_remove: 'Ondoa mstari uliochaguliwa',
+    keys_escape: 'Funga hiki, au futa utafutaji',
+    keys_this_help: 'Onyesha au ficha orodha hii',
+    qty: 'Idadi', increase_qty: 'Ongeza moja', decrease_qty: 'Punguza moja',
+    nothing_here: 'Bado hakuna kitu hapa',
+    nothing_here_sub: 'Kitakapokuwepo cha kuonyesha, kitaonekana hapa.',
+    no_results: 'Hakuna kinachofanana na utafutaji huo',
+    something_wrong: 'Hilo halikufanikiwa',
+    try_again: 'Jaribu tena',
+    not_allowed: 'Hauruhusiwi kufanya hivyo — muulize meneja',
+    not_enough_stock: 'Rafu haina za kutosha kwa hilo',
+    out_of_stock: 'Bidhaa hiyo imeisha — jaza tena kwanza',
+    sub_ended: 'Usajili umeisha — lipa ili uuze tena',
+    no_internet: 'Hakuna mtandao — uuzaji utahifadhiwa na kutumwa baadaye',
   }
 };
 
@@ -266,14 +326,64 @@ window.OP = (() => {
     return (I18N[lang] && I18N[lang][key]) || I18N.en[key] || key;
   }
 
+  function applyI18n(root) {
+    (root || document).querySelectorAll('[data-i18n]').forEach((el) => {
+      const key = el.getAttribute('data-i18n');
+      const tr = t(key);
+      if (tr !== key || !el.textContent.trim()) el.textContent = tr;
+    });
+    (root || document).querySelectorAll('[data-i18n-ph]').forEach((el) => {
+      el.setAttribute('placeholder', t(el.getAttribute('data-i18n-ph')));
+    });
+    (root || document).querySelectorAll('[data-i18n-title]').forEach((el) => {
+      el.setAttribute('title', t(el.getAttribute('data-i18n-title')));
+    });
+  }
+
   function setLang(l) {
     lang = ['en', 'sw'].includes(l) ? l : 'en';
     localStorage.setItem('op_lang', lang);
-    document.querySelectorAll('[data-i18n]').forEach((el) => {
-      el.textContent = t(el.getAttribute('data-i18n'));
-    });
+    applyI18n(document);
     document.documentElement.lang = lang;
   }
+
+  /**
+   * R-C2 (Phase 34): a one-till shop must never meet the words "branch",
+   * "warehouse", "supplier" or "price level". Anything that only makes sense
+   * once a capability is on carries `data-cap` (or `data-caps` for any-of) and
+   * disappears here — cut for this shop, not hidden behind a setting they have
+   * to hunt for.
+   */
+  function applyCaps(caps, root) {
+    const c = caps || {};
+    const hide = (el) => { el.classList.add('hidden'); el.setAttribute('aria-hidden', 'true'); };
+    const show = (el) => { if (!el.dataset.capHidden) el.classList.remove('hidden'); el.removeAttribute('aria-hidden'); };
+    (root || document).querySelectorAll('[data-cap]').forEach((el) => (c[el.getAttribute('data-cap')] ? show(el) : hide(el)));
+    (root || document).querySelectorAll('[data-caps]').forEach((el) => {
+      const any = String(el.getAttribute('data-caps') || '').split(/[\s,]+/).filter(Boolean).some((k) => c[k]);
+      any ? show(el) : hide(el);
+    });
+  }
+
+  /**
+   * Rows drawn after the page loads used to keep the old language. A row that
+   * appears later is translated the moment it appears (Phase 34).
+   */
+  function watchI18n() {
+    if (typeof MutationObserver === 'undefined' || !document.body) return;
+    const mo = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const node of r.addedNodes) {
+          if (node.nodeType !== 1) continue;
+          if (node.matches && node.matches('[data-i18n],[data-i18n-ph],[data-i18n-title]')) applyI18n(node.parentNode || node);
+          else if (node.querySelector && node.querySelector('[data-i18n],[data-i18n-ph],[data-i18n-title]')) applyI18n(node);
+        }
+      }
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+  }
+  if (document.body) watchI18n();
+  else document.addEventListener('DOMContentLoaded', watchI18n);
 
   async function api(path, opts = {}) {
     const isGet = !opts.method || opts.method === 'GET';
@@ -384,6 +494,31 @@ window.OP = (() => {
     el.className = `msg ${ok ? 'ok' : 'err'}`;
     clearTimeout(el._t);
     el._t = setTimeout(() => { el.textContent = ''; }, 4000);
+  }
+
+  // ---- Phase 34: empty states and plain-language errors --------------------
+  // An empty table should tell you why it is empty, and an error should tell
+  // you what to do next — in the language the shop speaks.
+  function emptyRow(colspan, key, sub) {
+    return `<tr><td colspan="${colspan || 1}"><div class="empty">
+      <div class="empty-t">${esc(t(key || 'nothing_here'))}</div>
+      <div class="empty-s">${esc(sub ? t(sub) : t('nothing_here_sub'))}</div>
+    </div></td></tr>`;
+  }
+
+  const ERR_MAP = [
+    { test: (m) => /permission|not allowed|forbidden/i.test(m), key: 'not_allowed' },
+    { test: (m) => /subscription/i.test(m), key: 'sub_ended' },
+    { test: (m) => /not enough stock|insufficient stock|oversell/i.test(m), key: 'not_enough_stock' },
+    { test: (m) => /out of stock|no stock/i.test(m), key: 'out_of_stock' },
+    { test: (m) => /fetch|network|offline|internet/i.test(m), key: 'no_internet' }
+  ];
+
+  /** Turn whatever the server (or the network) said into a sentence. */
+  function errText(e) {
+    const raw = String((e && e.message) || e || t('something_wrong'));
+    for (const m of ERR_MAP) if (m.test(raw)) return t(m.key);
+    return raw;
   }
 
   function netBadge(container) {
@@ -523,6 +658,7 @@ window.OP = (() => {
 
   return {
     t, setLang, lang: () => lang, api, fmt, esc, pinpad, toast, netBadge, I18N,
+    emptyRow, errText, applyI18n, watchI18n, applyCaps,
     registerPanel, panels, addI18n, loadModules, loadScript, renderPanel,
     reportTable, commandForm, bindForms
   };
