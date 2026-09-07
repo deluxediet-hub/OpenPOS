@@ -619,6 +619,45 @@ function migrate(d) {
     updated_at TEXT NOT NULL
   );
 
+  `);
+
+  // ---- migrate old etims_queue (pre-Phase16 CHECK constraint) to new schema ----
+  try {
+    const sqlRow = d.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='etims_queue'").get();
+    const sql = (sqlRow && sqlRow.sql) || '';
+    if (sql.includes("'pending','sent','failed'") && !sql.includes("'queued'")) {
+      d.exec(`
+        CREATE TABLE etims_queue_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sale_id INTEGER NOT NULL,
+          branch_id INTEGER,
+          type TEXT NOT NULL DEFAULT 'invoice',
+          status TEXT NOT NULL DEFAULT 'queued',
+          payload TEXT NOT NULL DEFAULT '{}',
+          cuin TEXT,
+          qr TEXT,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          transmitted_at TEXT,
+          deadline_at TEXT,
+          next_try INTEGER NOT NULL DEFAULT 0,
+          error TEXT NOT NULL DEFAULT ''
+        );
+        INSERT INTO etims_queue_new (id, sale_id, payload, status, attempts, next_try, cuin, error, created_at, updated_at, branch_id, type, last_error, deadline_at)
+          SELECT id, sale_id, payload,
+                 CASE WHEN status='sent' THEN 'transmitted' ELSE status END,
+                 attempts, next_try, cuin, error, created_at, updated_at,
+                 NULL, 'invoice', error, datetime('now','+48 hours')
+            FROM etims_queue;
+        DROP TABLE etims_queue;
+        ALTER TABLE etims_queue_new RENAME TO etims_queue;
+      `);
+    }
+  } catch (_) { /* best-effort */ }
+
+  d.exec(`
   CREATE TABLE IF NOT EXISTS timeclock (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -1343,6 +1382,86 @@ function migrate(d) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL DEFAULT '{}'
     );
+  `);
+
+  // Phase 17 Day 24-25: Offline-First Architecture — local tx storage → outbox → sync engine
+  // client_id for idempotency (offline sale created with UUID, server dedupes)
+  addCol(d, 'sales', 'client_id', 'TEXT');
+  addCol(d, 'sales', 'sync_status', "TEXT NOT NULL DEFAULT 'synced'");
+  addCol(d, 'sales', 'version', 'INTEGER NOT NULL DEFAULT 1');
+  addCol(d, 'sales', 'offline_created', 'INTEGER NOT NULL DEFAULT 0');
+  addCol(d, 'stock_moves', 'client_id', 'TEXT');
+  addCol(d, 'stock_moves', 'sync_status', "TEXT NOT NULL DEFAULT 'synced'");
+
+  d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_client ON sales(client_id) WHERE client_id IS NOT NULL AND client_id != ''`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_sales_sync ON sales(sync_status, created_at)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_stock_client ON stock_moves(client_id) WHERE client_id IS NOT NULL`);
+
+  // Server-side sync log: every entity change tracked for pull sync + conflict detection
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS sync_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL CHECK(entity_type IN ('sale','stock','product','customer','payment','return','exchange')),
+      entity_id INTEGER NOT NULL,
+      branch_id INTEGER,
+      register_id INTEGER,
+      action TEXT NOT NULL CHECK(action IN ('create','update','delete','conflict')),
+      payload TEXT NOT NULL DEFAULT '{}',
+      client_id TEXT,
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      acked INTEGER NOT NULL DEFAULT 0,
+      conflict INTEGER NOT NULL DEFAULT 0,
+      resolved_at TEXT,
+      resolved_by INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_sync_entity ON sync_log(entity_type, entity_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sync_branch ON sync_log(branch_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sync_client ON sync_log(client_id) WHERE client_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_sync_created ON sync_log(created_at DESC);
+  `);
+
+  // Client outbox persisted server-side for devices that push batch (for audit, not primary)
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS sync_outbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id TEXT NOT NULL UNIQUE,
+      branch_id INTEGER NOT NULL,
+      register_id INTEGER,
+      user_id INTEGER,
+      type TEXT NOT NULL CHECK(type IN ('sale','payment','stock_move','return','exchange')),
+      payload TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processing','acked','failed','conflict')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      acked_at TEXT,
+      server_entity_id INTEGER,
+      version INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS idx_outbox_status ON sync_outbox(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_outbox_branch ON sync_outbox(branch_id, created_at);
+  `);
+
+  // Conflict log for multi-till race (single-writer + first-ack rule R-O4)
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS sync_conflicts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER,
+      client_id TEXT NOT NULL,
+      branch_id INTEGER,
+      register_id INTEGER,
+      attempted_payload TEXT NOT NULL DEFAULT '{}',
+      existing_payload TEXT NOT NULL DEFAULT '{}',
+      reason TEXT NOT NULL DEFAULT '',
+      resolution TEXT NOT NULL DEFAULT 'first_ack_wins' CHECK(resolution IN ('first_ack_wins','client_wins','server_wins','merge','manual')),
+      resolved INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_conflicts_branch ON sync_conflicts(branch_id, created_at);
   `);
 }
 

@@ -1111,7 +1111,44 @@
       </div>
     </section>
 
+
+    <!-- ============ SYNC (Phase 17 Offline-First) ============ -->
+    <section id="tab-sync" class="hidden">
+      <div class="card">
+        <div class="row" style="margin-bottom:10px;align-items:center">
+          <h3 style="margin:0">Offline Sync Dashboard (Phase 17)</h3>
+          <span class="spacer"></span>
+          <button class="btn small" id="sync-reload">Reload</button>
+          <button class="btn small" id="sync-test-matrix">Run test matrix</button>
+          <button class="btn small ghost" id="sync-process">Process eTIMS 10</button>
+        </div>
+        <p class="muted small">Local transaction → outbox → sync engine → conflict detection (single-writer + first-ack R-O4) → retry backoff → ack → reconciliation. Banner on till shows pending. Zero lost/duplicated money or stock.</p>
+        <div class="grid cols-3" id="sync-kpis" style="margin-top:10px"></div>
+        <div id="sync-matrix" style="margin-top:14px"></div>
+      </div>
+      <div class="grid cols-2" style="margin-top:14px">
+        <div class="card">
+          <h4 style="margin:0 0 8px">Outbox (server)</h4>
+          <div style="overflow:auto;max-height:320px"><table><thead><tr><th>Client ID</th><th>Branch</th><th>Status</th><th>Attempts</th><th>Created</th><th>Last error</th></tr></thead><tbody id="sync-outbox-rows"></tbody></table></div>
+          <div class="muted small" id="sync-outbox-empty">No outbox</div>
+        </div>
+        <div class="card">
+          <h4 style="margin:0 0 8px">Conflicts & Sync Log</h4>
+          <div style="overflow:auto;max-height:160px"><table><thead><tr><th>Time</th><th>Client</th><th>Reason</th><th>Resolver</th></tr></thead><tbody id="sync-conflicts-rows"></tbody></table></div>
+          <div class="muted small" id="sync-conflicts-empty" style="margin-top:6px">No conflicts</div>
+          <h4 style="margin:12px 0 6px">Sync Log (recent)</h4>
+          <div style="overflow:auto;max-height:160px"><table><thead><tr><th>Time</th><th>Client</th><th>Branch</th><th>Action</th><th>Sale</th></tr></thead><tbody id="sync-log-rows"></tbody></table></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h4 style="margin:0 0 8px">Offline sales verification (eTIMS 48h window)</h4>
+        <div style="overflow:auto"><table><thead><tr><th>Sale ID</th><th>Invoice</th><th>Client ID</th><th>Offline created</th><th>Sync status</th><th>eTIMS status</th><th>Age (h)</th></tr></thead><tbody id="sync-offline-rows"></tbody></table></div>
+        <div class="muted small" id="sync-offline-empty">No offline sales yet</div>
+      </div>
+    </section>
+
     <!-- ============ SETTINGS ============ -->
+
     <section id="tab-settings" class="hidden">
       <div class="card">
         <h3 data-i18n="settings">Settings</h3>
@@ -1190,6 +1227,7 @@ const TABS = [
   { id: 'finance',    label: 'finance',    always: true },
   { id: 'reports',    label: 'reports',    always: true },
   { id: 'integrations', label: 'kenya', always: true },
+  { id: 'sync', label: 'Sync', always: true },
   { id: 'staff',      label: 'staff',     cap: 'staff_roles' },
   { id: 'layout',     label: 'layout',    cap: ['multi_location', 'multi_branch'] },
   { id: 'settings',   label: 'settings',  always: true },
@@ -1231,6 +1269,7 @@ function selectTab(name) {
   if (name === 'finance') loadFinance();
   if (name === 'reports') loadReports();
   if (name === 'integrations') loadIntegrations();
+  if (name === 'sync') loadSync();
 }
 
 // ---------------- transfers & branch comparison (Phase 12 Day 17) ----------------
@@ -3530,6 +3569,76 @@ $('#et-offline-sim').onclick = async () => {
     loadEtimsQueue(); loadEtimsStatus();
   } catch (e) { toast($('#et-offline-msg'), e.message, false); }
 };
+
+
+async function loadSync() {
+  if (!$('#sync-reload').dataset.wired) {
+    $('#sync-reload').dataset.wired='1';
+    $('#sync-reload').onclick = loadSync;
+    $('#sync-test-matrix').onclick = runSyncTestMatrix;
+    $('#sync-process').onclick = async () => {
+      try { await api('/api/etims/process-queue', { method: 'POST', body: { limit: 10 } }); loadSync(); } catch (e) { alert(e.message); }
+    };
+  }
+  try {
+    const status = await api('/api/sync/status');
+    const k = status || {};
+    $('#sync-kpis').innerHTML = `
+      <div class="kpi"><div class="kpi-label">Outbox total</div><div class="kpi-value">${k.outbox?.total||0}</div><div class="muted small">pending ${k.outbox?.pending||0} acked ${k.outbox?.acked||0} conflict ${k.outbox?.conflict||0}</div></div>
+      <div class="kpi"><div class="kpi-label">Sync log</div><div class="kpi-value">${k.sync_log?.total||0}</div><div class="muted small">last 24h ${k.sync_log?.last24h||0}</div></div>
+      <div class="kpi ${k.recon?.ok?'g':''}"><div class="kpi-label">Recon</div><div class="kpi-value">${k.recon?.ok?'✓ OK':'check'}</div><div class="muted small">sales ${k.sales?.total||0} offline ${k.sales?.offline||0} pending etims ${k.etims?.pending||0}</div></div>
+    `;
+    const outbox = await api('/api/sync/outbox').catch(()=>[]);
+    $('#sync-outbox-rows').innerHTML = outbox.map(o=>`<tr><td class="mono small">${esc((o.client_id||'').slice(0,8))}</td><td>${o.branch_id}</td><td><span class="pill ${o.status==='acked'?'g':o.status==='conflict'?'r':''}">${esc(o.status)}</span></td><td>${o.attempts||0}</td><td class="mono small">${new Date(o.created_at).toLocaleString()}</td><td class="small muted">${esc((o.last_error||'').slice(0,80))}</td></tr>`).join('') || `<tr><td colspan="6" class="muted">no outbox</td></tr>`;
+    $('#sync-outbox-empty').style.display = outbox.length ? 'none' : '';
+
+    const conflicts = await api('/api/sync/conflicts').catch(()=>[]);
+    $('#sync-conflicts-rows').innerHTML = conflicts.map(c=>`<tr><td class="mono small">${new Date(c.created_at).toLocaleString()}</td><td class="mono small">${esc((c.client_id||'').slice(0,8))}</td><td class="small">${esc(c.reason||'')}</td><td class="small">${esc(c.resolved_by||'')}</td></tr>`).join('') || `<tr><td colspan="4" class="muted">no conflicts</td></tr>`;
+    $('#sync-conflicts-empty').style.display = conflicts.length ? 'none' : '';
+
+    const slog = await api('/api/sync/log?limit=50').catch(()=>[]);
+    $('#sync-log-rows').innerHTML = slog.map(l=>`<tr><td class="mono small">${new Date(l.created_at).toLocaleString()}</td><td class="mono small">${esc((l.client_id||'').slice(0,8))}</td><td>${l.branch_id}</td><td><span class="pill">${esc(l.action||'')}</span></td><td>${l.sale_id||'—'}</td></tr>`).join('') || `<tr><td colspan="5" class="muted">no log</td></tr>`;
+
+    const offline = await api('/api/sync/offline-sales').catch(()=>[]);
+    $('#sync-offline-rows').innerHTML = offline.map(o=>{
+      const ageH = o.offline_created ? ((Date.now() - new Date(o.offline_created).getTime())/3600000).toFixed(1) : '—';
+      const within = o.offline_created ? ((Date.now() - new Date(o.offline_created).getTime())/3600000 <= 48 ? '<span class="pill g">within 48h</span>' : '<span class="pill r">expired</span>') : '';
+      return `<tr><td>${o.id}</td><td class="mono small">${esc(o.invoice_no||'')}</td><td class="mono small">${esc((o.client_id||'').slice(0,8))}</td><td class="mono small">${o.offline_created?new Date(o.offline_created).toLocaleString():'—'}</td><td><span class="pill ${o.sync_status==='synced'?'g':''}">${esc(o.sync_status||'')}</span></td><td><span class="pill ${o.etims_status==='transmitted'?'g':o.etims_status==='failed'?'r':''}">${esc(o.etims_status||'')}</span></td><td>${ageH} ${within}</td></tr>`;
+    }).join('') || `<tr><td colspan="7" class="muted">no offline sales</td></tr>`;
+    $('#sync-offline-empty').style.display = offline.length ? 'none' : '';
+
+    // also run matrix if exists
+    try { const matrix = await api('/api/sync/test-matrix'); renderSyncMatrix(matrix); } catch {}
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderSyncMatrix(m) {
+  if (!m) return;
+  const rows = m.cases || [];
+  $('#sync-matrix').innerHTML = `
+    <h4 style="margin:0 0 6px">Test matrix — ${m.ok?' <span class="pill g">GREEN ✓</span>':' <span class="pill r">FAIL</span>'} — ${esc(m.summary||'')}</h4>
+    <div class="muted small">Acceptance: zero lost or duplicated money or stock</div>
+    <table style="margin-top:8px"><thead><tr><th>Case</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td>${esc(r.name)}</td><td><span class="pill ${r.ok?'g':'r'}">${r.ok?'✓':'✗'} ${esc(r.status||'')}</span></td><td class="small muted">${esc(r.detail||'')}</td></tr>`).join('')}</tbody></table>
+    <div style="margin-top:8px" class="grid cols-3">
+      <div class="kpi"><div class="kpi-label">Money check</div><div class="kpi-value">${m.money?.lost===0&&m.money?.duplicated===0?'<span class="pill g">0 lost/duplicated ✓</span>':'<span class="pill r">fail</span>'}</div><div class="muted small">lost ${m.money?.lost} duplicated ${m.money?.duplicated}</div></div>
+      <div class="kpi"><div class="kpi-label">Stock check</div><div class="kpi-value">${m.stock?.lost===0&&m.stock?.duplicated===0?'<span class="pill g">0 lost/duplicated ✓</span>':'<span class="pill r">fail</span>'}</div><div class="muted small">lost ${m.stock?.lost} duplicated ${m.stock?.duplicated}</div></div>
+      <div class="kpi"><div class="kpi-label">eTIMS 48h</div><div class="kpi-value">${m.etims?.within48h?'within ✓':'expired'}</div><div class="muted small">offline ${m.etims?.offline||0} transmitted ${m.etims?.transmitted||0}</div></div>
+    </div>
+  `;
+}
+
+async function runSyncTestMatrix() {
+  try {
+    const m = await api('/api/sync/test-matrix', { method: 'POST' });
+    renderSyncMatrix(m);
+    toast($('#tab-sync'), m.ok?'Matrix GREEN ✓':'Matrix has failures', m.ok);
+    loadSync();
+  } catch (e) { alert(e.message); }
+}
+
 
 // ---------- audit ----------
 async function loadAudit() {

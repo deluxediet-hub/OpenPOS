@@ -276,19 +276,68 @@ window.OP = (() => {
   }
 
   async function api(path, opts = {}) {
-    const res = await fetch(path, {
-      method: opts.method || 'GET',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: opts.body ? JSON.stringify(opts.body) : undefined
-    });
-    if (res.status === 401) {
-      if (!opts.noRedirect) location.href = '/';
-      throw new Error('unauthenticated');
+    const isGet = !opts.method || opts.method === 'GET';
+    try {
+      const res = await fetch(path, {
+        method: opts.method || 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: opts.body ? JSON.stringify(opts.body) : undefined
+      });
+      if (res.status === 401) {
+        if (!opts.noRedirect) location.href = '/';
+        throw new Error('unauthenticated');
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      // cache successful GETs for offline fallback
+      if (isGet) {
+        try {
+          if (path.includes('/api/products')) localStorage.setItem('op_cache_products', JSON.stringify(data));
+          else if (path.includes('/api/categories')) localStorage.setItem('op_cache_cats', JSON.stringify(data));
+          else if (path.includes('/api/customers')) localStorage.setItem('op_cache_customers', JSON.stringify(data));
+          else if (path.includes('/api/bootstrap')) localStorage.setItem('op_cache_bootstrap', JSON.stringify(data));
+          else if (path.includes('/api/payments/methods')) localStorage.setItem('op_cache_paymethods', JSON.stringify(data.methods || data));
+          else if (path.includes('/api/registers')) localStorage.setItem('op_cache_registers', JSON.stringify(data));
+          if (path.startsWith('/api/')) localStorage.setItem('op_cache_'+path.replace(/[^a-z0-9]/gi,'_').slice(0,80), JSON.stringify(data));
+        } catch {}
+      }
+      return data;
+    } catch (e) {
+      // offline fallback for GETs
+      if (isGet) {
+        try {
+          if (path.includes('/api/products')) {
+            const c = localStorage.getItem('op_cache_products');
+            if (c) return JSON.parse(c);
+          }
+          if (path.includes('/api/categories')) {
+            const c = localStorage.getItem('op_cache_cats');
+            if (c) return JSON.parse(c);
+          }
+          if (path.includes('/api/customers')) {
+            const c = localStorage.getItem('op_cache_customers');
+            if (c) return JSON.parse(c);
+          }
+          if (path.includes('/api/bootstrap')) {
+            const c = localStorage.getItem('op_cache_bootstrap');
+            if (c) return JSON.parse(c);
+          }
+          if (path.includes('/api/payments/methods')) {
+            const c = localStorage.getItem('op_cache_paymethods');
+            if (c) { const parsed = JSON.parse(c); return parsed.methods ? parsed : { methods: parsed }; }
+          }
+          if (path.includes('/api/registers')) {
+            const c = localStorage.getItem('op_cache_registers');
+            if (c) return JSON.parse(c);
+          }
+          const key = 'op_cache_'+path.replace(/[^a-z0-9]/gi,'_').slice(0,80);
+          const generic = localStorage.getItem(key);
+          if (generic) return JSON.parse(generic);
+        } catch {}
+      }
+      throw e;
     }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    return data;
   }
 
   function fmt(n) {
@@ -338,11 +387,27 @@ window.OP = (() => {
   function netBadge(container) {
     const update = () => {
       const online = navigator.onLine;
-      container.textContent = online ? '● ' + t('online') : '○ ' + t('offline');
-      container.className = 'net' + (online ? '' : ' offline');
+      let pending = 0, conflicts = 0;
+      try {
+        const outbox = JSON.parse(localStorage.getItem('op_offline_outbox') || '[]');
+        pending = outbox.filter(o=>o.status!=='conflict').length;
+        conflicts = outbox.filter(o=>o.status==='conflict').length;
+      } catch {}
+      const base = online ? '● ' + t('online') : '○ ' + t('offline');
+      if (pending>0 || conflicts>0) {
+        const parts = [base];
+        if (pending>0) parts.push(`${pending} queued`);
+        if (conflicts>0) parts.push(`${conflicts} conflict`);
+        container.textContent = parts.join(' · ');
+      } else {
+        container.textContent = base;
+      }
+      container.className = 'net' + (online ? '' : ' offline') + (pending>0 ? ' has-pending' : '') + (conflicts>0 ? ' has-conflict' : '');
     };
     window.addEventListener('online', update);
     window.addEventListener('offline', update);
+    window.addEventListener('storage', update);
+    setInterval(update, 5000);
     update();
   }
 
