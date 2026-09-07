@@ -3548,6 +3548,21 @@ function createApp(d) {
           discountApprover: discountBy ? 'PIN' : undefined, promo: b.promo_code || undefined
         }
       });
+      // Phase 16: enqueue eTIMS if sale is paid (or will be paid via pending M-Pesa callback)
+      try {
+        const saleRow = d.prepare('SELECT * FROM sales WHERE id = ?').get(id);
+        if (saleRow && (saleRow.status === 'paid' || saleRow.status === 'partial')) {
+          const etims = require('./lib/etims');
+          etims.enqueueSale(d, saleRow, 'invoice');
+          // Try immediate transmit in background (non-blocking)
+          setImmediate(() => {
+            try {
+              const q = d.prepare(`SELECT id FROM etims_queue WHERE sale_id = ? ORDER BY id DESC LIMIT 1`).get(id);
+              if (q) etims.transmitOne(d, q.id).catch(() => {});
+            } catch (_) {}
+          });
+        }
+      } catch (_) {}
       res.json({ ok: true, ...buildSalePayload(d, id), ...(payRes && payRes.mpesa ? { mpesa: payRes.mpesa } : {}) });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message });
@@ -3753,6 +3768,12 @@ function createApp(d) {
         userId: req.user.id, branchId: sale.branch_id, action: 'sale/void',
         entity: 'sale', entityId: String(sale.id), detail: { invoice: sale.invoice_no, note, items: items.length }
       });
+      // Phase 16: eTIMS credit note for void
+      try {
+        const etims = require('./lib/etims');
+        const saleRow = d.prepare('SELECT * FROM sales WHERE id = ?').get(sale.id);
+        if (saleRow) etims.enqueueSale(d, saleRow, 'credit_note');
+      } catch (_) {}
       res.json({ ok: true, ...buildSalePayload(d, sale.id) });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message });
@@ -4021,9 +4042,27 @@ function createApp(d) {
 
   // Provider webhook (Daraja posts here in live mode; the sandbox simulate hook
   // exercises the exact same path). No auth — the idempotency guarantee means
-  // a retry storm is harmless.
+  // a retry storm is harmless. Handles both STK callbacks and C2B confirmations.
   app.post('/api/webhooks/mpesa', (req, res) => {
     const b = req.body || {};
+    // C2B payload detection (TransID, TransAmount, MSISDN)
+    if (b.TransID || b.transId || b.TransAmount) {
+      const transId = b.TransID || b.transId || b.mpesa_ref || '';
+      const amount = b.TransAmount || b.amount || 0;
+      const msisdn = b.MSISDN || b.msisdn || b.phone || '';
+      const billRef = b.BillRefNumber || b.billRef || b.account || '';
+      const shortCode = b.BusinessShortCode || b.shortCode || '';
+      const branchId = numOrNull(b.branch_id) || null;
+      try {
+        const r = d.transaction(() => mpesa.handleC2B(d, {
+          transId, transAmount: amount, msisdn, billRef, businessShortCode: shortCode, branchId
+        }))();
+        return res.json({ ResultCode: 0, ResultDesc: 'Accepted', ...r });
+      } catch (e) {
+        console.error('[mpesa c2b via stk url]', e.message);
+        return res.json({ ResultCode: 0, ResultDesc: 'Accepted (logged)' });
+      }
+    }
     const Body = b.Body && b.Body.stkCallback ? b.Body.stkCallback : b;
     const r = d.transaction(() => {
       const out = mpesa.onCallback(d, {
@@ -4467,6 +4506,12 @@ function createApp(d) {
           store_credit: out.creditAdded || undefined
         }
       });
+      // Phase 16: eTIMS credit note for return
+      try {
+        const etims = require('./lib/etims');
+        const saleRow = d.prepare('SELECT * FROM sales WHERE id = ?').get(sale.id);
+        if (saleRow) etims.enqueueSale(d, saleRow, 'credit_note');
+      } catch (_) {}
       res.json({
         ok: true,
         return: returnPayload(d, out.rid),
@@ -6863,10 +6908,123 @@ function createApp(d) {
     res.json(dbm.verifyAuditChain(d));
   });
 
-  // ---- webhooks (Phase 16) -------------------------------------------------------------------------------
-  app.post('/api/webhooks/mpesa', (req, res) => {
-    res.status(501).json({ error: 'M-Pesa webhook arrives in Phase 16 (real Daraja, Days 22–23)' });
+  // ---- Phase 16: Kenyan Integration — eTIMS VSCU + M-Pesa C2B/B2C/recon ----
+  const etims = require('./lib/etims');
+
+  // eTIMS settings
+  app.get('/api/settings/etims', me, can('settings.manage'), (req, res) => {
+    const cfg = etims.etimsConfig(d);
+    const out = { ...cfg };
+    if (out.apiKey) out.apiKey = out.apiKey ? '••••' : '';
+    res.json(out);
   });
+
+  app.put('/api/settings/etims', me, can('settings.manage'), (req, res) => {
+    const b = req.body || {};
+    if (b.apiKey && b.apiKey === '••••') delete b.apiKey;
+    const next = etims.setEtimsConfig(d, b);
+    dbm.audit(d, { userId: req.user.id, action: 'settings/etims', entity: 'setting', entityId: 'etims', detail: { mode: next.mode } });
+    res.json({ ok: true, config: { ...next, apiKey: next.apiKey ? '••••' : '' } });
+  });
+
+  // eTIMS queue & status
+  app.get('/api/etims/status', me, can('reports.view'), (req, res) => {
+    res.json(etims.getStatus(d));
+  });
+
+  app.get('/api/etims/queue', me, can('reports.view'), (req, res) => {
+    const status = req.query.status ? String(req.query.status) : null;
+    const branchId = numOrNull(req.query.branch_id);
+    const rows = etims.getQueue(d, { status, branch_id: branchId, limit: Math.min(Number(req.query.limit) || 100, 500) });
+    res.json(rows);
+  });
+
+  app.post('/api/etims/transmit/:id', me, can('settings.manage'), async (req, res) => {
+    const id = numOrNull(req.params.id);
+    if (!id) return res.status(400).json({ error: 'id required' });
+    const r = await etims.transmitOne(d, id);
+    res.json(r);
+  });
+
+  app.post('/api/etims/process-queue', me, can('settings.manage'), async (req, res) => {
+    const limit = Math.min(Number(req.body?.limit) || 10, 50);
+    const results = await etims.processQueue(d, limit);
+    res.json({ ok: true, processed: results.length, results });
+  });
+
+  app.post('/api/etims/enqueue/:saleId', me, can('settings.manage'), (req, res) => {
+    const saleId = numOrNull(req.params.saleId);
+    const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
+    if (!sale) return res.status(404).json({ error: 'sale not found' });
+    const type = String(req.body?.type || 'invoice');
+    const r = etims.enqueueSale(d, sale, type);
+    res.json(r);
+  });
+
+  // M-Pesa C2B webhook (Paybill/Till/Pochi) + B2C result + recon
+  app.post('/api/webhooks/mpesa/c2b', (req, res) => {
+    const b = req.body || {};
+    // Daraja C2B validation & confirmation: { TransID, TransAmount, MSISDN, BillRefNumber, BusinessShortCode, ... }
+    const transId = b.TransID || b.transId || b.mpesa_ref || '';
+    const amount = b.TransAmount || b.amount || 0;
+    const msisdn = b.MSISDN || b.msisdn || b.phone || '';
+    const billRef = b.BillRefNumber || b.billRef || b.account || '';
+    const shortCode = b.BusinessShortCode || b.shortCode || '';
+    const branchId = numOrNull(b.branch_id) || null;
+    try {
+      const r = d.transaction(() => mpesa.handleC2B(d, {
+        transId, transAmount: amount, msisdn, billRef, businessShortCode: shortCode, branchId
+      }))();
+      res.json({ ResultCode: 0, ResultDesc: 'Accepted', ...r });
+    } catch (e) {
+      console.error('[mpesa c2b]', e.message);
+      res.json({ ResultCode: 0, ResultDesc: 'Accepted (logged)' });
+    }
+  });
+
+  app.post('/api/webhooks/mpesa/b2c-result', (req, res) => {
+    const b = req.body || {};
+    const result = b.Result || b;
+    const t = new Date().toISOString();
+    // Log B2C result
+    try {
+      d.prepare(`INSERT INTO mpesa_log (sale_id, checkout_request_id, mpesa_ref, phone, amount, status, type, callback, created_at, updated_at) VALUES (NULL, ?, ?, ?, ?, ?, 'b2c', ?, ?, ?)`)
+        .run(String(result.OriginatorConversationID || '').slice(0, 100), String(result.TransactionID || ''), String(result.PartyB || ''), Number(result.Amount || 0), result.ResultCode === 0 ? 'confirmed' : 'failed', JSON.stringify(b), t, t);
+    } catch (_) {}
+    res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+  });
+
+  app.post('/api/mpesa/b2c-refund', me, can('reports.view'), async (req, res) => {
+    const b = req.body || {};
+    const phone = String(b.phone || '').trim();
+    const amount = intShillings(b.amount);
+    if (!phone) return res.status(400).json({ error: 'phone required' });
+    if (amount === null || amount <= 0) return res.status(400).json({ error: 'amount must be >0' });
+    const cfg = mpesa.mpesaConfig(d);
+    if (cfg.mode === 'manual') {
+      return res.json({ ok: true, mode: 'manual', note: 'B2C refund recorded manually — send via M-Pesa app' });
+    }
+    try {
+      const r = await mpesa.pushB2C(cfg, { phone, amount, remarks: b.remarks || 'Refund', occasion: b.occasion || 'Refund' });
+      const t = new Date().toISOString();
+      d.prepare(`INSERT INTO mpesa_log (sale_id, checkout_request_id, mpesa_ref, phone, amount, status, type, callback, created_at, updated_at) VALUES (NULL, ?, '', ?, ?, 'initiated', 'b2c', ?, ?, ?)`)
+        .run(String(r.OriginatorConversationID || ''), phone, amount, JSON.stringify(r), t, t);
+      res.json({ ok: true, b2c: r });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/reports/mpesa-recon', me, can('reports.view'), (req, res) => {
+    const from = req.query.from ? String(req.query.from) : null;
+    const to = req.query.to ? String(req.query.to) : null;
+    const branchId = numOrNull(req.query.branch_id);
+    const report = mpesa.reconciliationReport(d, { from, to, branchId });
+    res.json(report);
+  });
+
+  // Enhance existing STK webhook to also handle C2B payloads that hit same URL (some Daraja configs use one callback)
+  // (The earlier /api/webhooks/mpesa route remains the primary STK handler; we keep it.)
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'not found' }));
 

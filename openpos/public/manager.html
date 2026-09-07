@@ -1034,6 +1034,83 @@
       </div>
     </section>
 
+    <!-- ============ INTEGRATIONS (Day 22-23 Kenya) ============ -->
+    <section id="tab-integrations" class="hidden">
+      <div class="grid cols-2" style="gap:14px">
+        <div class="card">
+          <h3 style="margin:0 0 8px">M-Pesa Daraja</h3>
+          <p class="muted small">STK push, Till/Paybill/Pochi C2B auto-match, B2C refunds, reconciliation. Sandbox shortcode 174379, test phone 254708374149.</p>
+          <div class="grid cols-2">
+            <label class="f"><span>Mode</span><select id="mp-mode"><option value="manual">manual</option><option value="sandbox">sandbox</option><option value="live">live</option></select></label>
+            <label class="f"><span>Shortcode</span><input id="mp-shortcode" placeholder="174379"></label>
+            <label class="f"><span>Passkey</span><input id="mp-passkey" placeholder="sandbox passkey"></label>
+            <label class="f"><span>Paybill/Till</span><input id="mp-paybill"></label>
+            <label class="f"><span>Consumer Key</span><input id="mp-ck"></label>
+            <label class="f"><span>Consumer Secret</span><input id="mp-cs" type="password"></label>
+            <label class="f"><span>Callback URL</span><input id="mp-cb" placeholder="https://your.domain/api/webhooks/mpesa"></label>
+            <label class="f"><span>Transaction Type</span><select id="mp-txtype"><option value="CustomerPayBillOnline">PayBillOnline</option><option value="CustomerBuyGoodsOnline">BuyGoodsOnline (Till)</option></select></label>
+          </div>
+          <div class="row" style="margin-top:8px"><button class="btn small" id="mp-save">Save M-Pesa</button><div class="msg" id="mp-msg" style="margin:0"></div></div>
+
+          <h4 style="margin:16px 0 6px">Reconciliation</h4>
+          <div class="row" style="gap:6px;margin-bottom:8px">
+            <input type="date" id="mp-recon-from" /><input type="date" id="mp-recon-to" />
+            <select id="mp-recon-branch"><option value="">All branches</option></select>
+            <button class="btn small" id="mp-recon-run">Run</button>
+          </div>
+          <div id="mp-recon-summary" class="muted small" style="margin-bottom:8px"></div>
+          <div style="overflow:auto;max-height:220px"><table><thead><tr><th>Time</th><th>Type</th><th>Amount</th><th>Phone</th><th>Ref</th><th>Matched sale</th><th>Recon?</th></tr></thead><tbody id="mp-recon-rows"></tbody></table></div>
+
+          <h4 style="margin:16px 0 6px">B2C Refund (M-Pesa → customer)</h4>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <input id="b2c-phone" placeholder="2547..." style="width:140px" />
+            <input id="b2c-amount" type="number" placeholder="Amount" style="width:100px" />
+            <input id="b2c-remarks" placeholder="Remarks" style="flex:1" />
+            <button class="btn small" id="b2c-send">Send B2C</button>
+          </div>
+          <div class="msg" id="b2c-msg" style="margin:0"></div>
+
+          <h4 style="margin:16px 0 6px">C2B Test (simulate paybill payment)</h4>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <input id="c2b-transid" placeholder="TransID" style="width:120px" />
+            <input id="c2b-amount" type="number" placeholder="Amount" style="width:80px" />
+            <input id="c2b-phone" placeholder="2547..." style="width:120px" />
+            <input id="c2b-billref" placeholder="BillRef / Account" style="width:120px" />
+            <button class="btn small" id="c2b-send">Simulate C2B</button>
+          </div>
+          <div class="msg" id="c2b-msg" style="margin:0"></div>
+        </div>
+
+        <div class="card">
+          <h3 style="margin:0 0 8px">eTIMS VSCU</h3>
+          <p class="muted small">Transmit on sale, CUIN + QR on receipt, KRA item code validation, 48h offline window, B2B PIN >50k, credit notes, dashboard.</p>
+          <div class="grid cols-2">
+            <label class="f"><span>Mode</span><select id="et-mode"><option value="manual">manual — local CUIN</option><option value="sandbox">sandbox — simulated VSCU</option><option value="live">live — real VSCU</option></select></label>
+            <label class="f"><span>KRA PIN (seller)</span><input id="et-pin" placeholder="P..."></label>
+            <label class="f"><span>Branch ID (KRA)</span><input id="et-branch"></label>
+            <label class="f"><span>Device Serial</span><input id="et-serial" placeholder="OPENPOS01"></label>
+            <label class="f"><span>VSCU URL</span><input id="et-url" placeholder="https://etims-api.kra.go.ke"></label>
+            <label class="f"><span>API Key</span><input id="et-apikey" type="password"></label>
+          </div>
+          <div class="row" style="margin-top:8px"><button class="btn small" id="et-save">Save eTIMS</button><div class="msg" id="et-msg" style="margin:0"></div></div>
+
+          <h4 style="margin:16px 0 6px">eTIMS Status</h4>
+          <div id="et-status" class="grid cols-3" style="gap:8px"></div>
+
+          <div class="row" style="gap:6px;margin:12px 0 8px">
+            <select id="et-filter-status"><option value="">All status</option><option value="queued">queued</option><option value="failed">failed</option><option value="transmitted">transmitted</option><option value="pending">pending</option></select>
+            <button class="btn small" id="et-reload">Reload queue</button>
+            <button class="btn small" id="et-process">Process queue (10)</button>
+          </div>
+          <div style="overflow:auto;max-height:360px"><table><thead><tr><th>ID</th><th>Sale</th><th>Type</th><th>Status</th><th>Attempts</th><th>CUIN</th><th>Error</th><th>Deadline</th><th>Action</th></tr></thead><tbody id="et-rows"></tbody></table></div>
+
+          <h4 style="margin:12px 0 6px">Offline test</h4>
+          <p class="muted small">Kill network → 2 offline sales → restore → both transmit inside 48h window. Use Process queue button to resubmit.</p>
+          <div class="row" style="gap:6px"><button class="btn small" id="et-offline-sim">Simulate 2 offline sales in queue</button><div class="msg" id="et-offline-msg" style="margin:0"></div></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ SETTINGS ============ -->
     <section id="tab-settings" class="hidden">
       <div class="card">
@@ -1112,6 +1189,7 @@ const TABS = [
   { id: 'pricing',    label: 'pricing',    always: true },
   { id: 'finance',    label: 'finance',    always: true },
   { id: 'reports',    label: 'reports',    always: true },
+  { id: 'integrations', label: 'kenya', always: true },
   { id: 'staff',      label: 'staff',     cap: 'staff_roles' },
   { id: 'layout',     label: 'layout',    cap: ['multi_location', 'multi_branch'] },
   { id: 'settings',   label: 'settings',  always: true },
@@ -1152,6 +1230,7 @@ function selectTab(name) {
   if (name === 'transfers') loadTransfers();
   if (name === 'finance') loadFinance();
   if (name === 'reports') loadReports();
+  if (name === 'integrations') loadIntegrations();
 }
 
 // ---------------- transfers & branch comparison (Phase 12 Day 17) ----------------
@@ -3276,6 +3355,181 @@ $('#refund-reload').onclick = loadRefundsReport;
 $('#short-reload').onclick = loadShortagesReport;
 $('#sales-csv').onclick = () => { const qs = repRangeQS(); window.open(`/api/reports/export?report=sales${qs.replace('?','&')}&format=csv`, '_blank'); };
 $('#margin-csv').onclick = () => { const qs = repRangeQS(); window.open(`/api/reports/export?report=margin${qs.replace('?','&')}&format=csv`, '_blank'); };
+
+// ================= INTEGRATIONS Day 22-23 Kenya =================
+async function loadIntegrations() {
+  // Fill branch selects
+  const opts = `<option value="">All branches</option>` + (BOOT.branches||[]).map((b)=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  $('#mp-recon-branch').innerHTML = opts;
+  if (!$('#mp-recon-from').value) { const d=new Date(); d.setDate(d.getDate()-7); $('#mp-recon-from').value=d.toISOString().slice(0,10); }
+  if (!$('#mp-recon-to').value) $('#mp-recon-to').value=new Date().toISOString().slice(0,10);
+  await Promise.all([loadMpesaSettings(), loadEtimsSettings(), loadMpesaRecon(), loadEtimsStatus(), loadEtimsQueue()]);
+}
+
+async function loadMpesaSettings() {
+  try {
+    const cfg = await api('/api/settings/payments');
+    $('#mp-mode').value = cfg.mpesa?.mode || 'manual';
+    $('#mp-shortcode').value = cfg.mpesa?.shortcode || '';
+    $('#mp-paybill').value = cfg.mpesa?.paybill || '';
+    $('#mp-ck').value = cfg.mpesa?.consumer_key || '';
+    // secret masked
+    $('#mp-cb').value = cfg.mpesa?.callback_url || '';
+    $('#mp-txtype').value = cfg.mpesa?.transaction_type || 'CustomerPayBillOnline';
+  } catch {}
+}
+async function loadEtimsSettings() {
+  try {
+    const cfg = await api('/api/settings/etims');
+    $('#et-mode').value = cfg.mode || 'manual';
+    $('#et-pin').value = cfg.pin || '';
+    $('#et-branch').value = cfg.branchId || '';
+    $('#et-serial').value = cfg.deviceSerial || '';
+    $('#et-url').value = cfg.vsdcUrl || cfg.sandboxUrl || '';
+  } catch {}
+}
+
+$('#mp-save').onclick = async () => {
+  const body = {
+    mpesa: {
+      mode: $('#mp-mode').value,
+      shortcode: $('#mp-shortcode').value.trim(),
+      paybill: $('#mp-paybill').value.trim(),
+      consumer_key: $('#mp-ck').value.trim(),
+      consumer_secret: $('#mp-cs').value.trim() || undefined,
+      callback_url: $('#mp-cb').value.trim(),
+      transaction_type: $('#mp-txtype').value
+    }
+  };
+  try {
+    await api('/api/settings/payments', { method: 'PUT', body });
+    toast($('#mp-msg'), 'M-Pesa saved', true);
+    $('#mp-cs').value='';
+  } catch (e) { toast($('#mp-msg'), e.message, false); }
+};
+
+$('#et-save').onclick = async () => {
+  const body = {
+    mode: $('#et-mode').value,
+    pin: $('#et-pin').value.trim(),
+    branchId: $('#et-branch').value.trim(),
+    deviceSerial: $('#et-serial').value.trim(),
+    vsdcUrl: $('#et-url').value.trim()
+  };
+  const ak = $('#et-apikey').value.trim();
+  if (ak) body.apiKey = ak;
+  try {
+    await api('/api/settings/etims', { method: 'PUT', body });
+    toast($('#et-msg'), 'eTIMS saved', true);
+    $('#et-apikey').value='';
+  } catch (e) { toast($('#et-msg'), e.message, false); }
+};
+
+async function loadMpesaRecon() {
+  try {
+    const from = $('#mp-recon-from').value;
+    const to = $('#mp-recon-to').value;
+    const branch = $('#mp-recon-branch').value;
+    const q = `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${branch?`&branch_id=${branch}`:''}`;
+    const r = await api('/api/reports/mpesa-recon' + q);
+    const s = r.summary;
+    $('#mp-recon-summary').innerHTML = `Total logs ${s.totalLogs} · matched ${s.totalMatched} · unmatched ${s.totalUnmatched} · amount ${fmt(s.totalAmount)} matched ${fmt(s.matchedAmount)} ${s.recon_ok?'<span class="pill g">recon ✓ zero unmatched</span>':'<span class="pill r">unmatched</span>'}`;
+    $('#mp-recon-rows').innerHTML = (r.all||[]).slice(0,100).map((row)=>`<tr>
+      <td class="mono small">${new Date(row.created_at).toLocaleString()}</td>
+      <td><span class="pill">${esc(row.type||'stk')}</span> ${esc(row.status||'')}</td>
+      <td class="mono">${fmt(row.amount||0)}</td>
+      <td class="small">${esc(row.phone||'')}</td>
+      <td class="mono small">${esc(row.mpesa_ref||row.checkout_request_id||'')}</td>
+      <td class="small">${row.matched_sale_id?`#${row.matched_sale_id}`:'—'}</td>
+      <td>${row.reconciled?'<span class="pill g">✓</span>':'<span class="pill">no</span>'}</td>
+    </tr>`).join('') || `<tr><td colspan="7" class="muted">no logs</td></tr>`;
+  } catch {}
+}
+
+$('#mp-recon-run').onclick = loadMpesaRecon;
+
+$('#b2c-send').onclick = async () => {
+  const phone = $('#b2c-phone').value.trim();
+  const amount = Number($('#b2c-amount').value);
+  const remarks = $('#b2c-remarks').value.trim();
+  if (!phone || !amount) return alert('phone and amount required');
+  try {
+    const r = await api('/api/mpesa/b2c-refund', { method: 'POST', body: { phone, amount, remarks } });
+    toast($('#b2c-msg'), `B2C ${r.ok?'queued':'failed'} ${r.b2c?'ID '+r.b2c.OriginatorConversationID:''}`, true);
+  } catch (e) { toast($('#b2c-msg'), e.message, false); }
+};
+
+$('#c2b-send').onclick = async () => {
+  const body = {
+    TransID: $('#c2b-transid').value.trim() || 'TEST'+Date.now(),
+    TransAmount: Number($('#c2b-amount').value) || 100,
+    MSISDN: $('#c2b-phone').value.trim() || '254708374149',
+    BillRefNumber: $('#c2b-billref').value.trim() || 'OpenPOS',
+    BusinessShortCode: $('#mp-shortcode').value.trim() || '174379'
+  };
+  try {
+    const r = await api('/api/webhooks/mpesa/c2b', { method: 'POST', body });
+    toast($('#c2b-msg'), `C2B ${r.ok?'accepted':''} autoMatched=${r.autoMatched}`, true);
+    loadMpesaRecon();
+  } catch (e) { toast($('#c2b-msg'), e.message, false); }
+};
+
+async function loadEtimsStatus() {
+  try {
+    const r = await api('/api/etims/status');
+    $('#et-status').innerHTML = `
+      <div class="kpi"><div class="kpi-label">Total queued</div><div class="kpi-value">${r.total||0}</div></div>
+      <div class="kpi"><div class="kpi-label">Transmitted</div><div class="kpi-value">${r.transmitted||0}</div></div>
+      <div class="kpi"><div class="kpi-label">Failed / Queued</div><div class="kpi-value">${r.failed||0} / ${r.queued||0}</div><div class="muted small">expired ${r.expired||0} · exempt ${r.exempt||0}</div></div>
+    `;
+  } catch {}
+}
+
+async function loadEtimsQueue() {
+  try {
+    const status = $('#et-filter-status').value;
+    const q = status ? `?status=${encodeURIComponent(status)}&limit=100` : `?limit=100`;
+    const rows = await api('/api/etims/queue' + q);
+    $('#et-rows').innerHTML = rows.map((row)=>`<tr>
+      <td class="mono">${row.id}</td>
+      <td class="mono">#${row.sale_id}</td>
+      <td><span class="pill">${esc(row.type)}</span></td>
+      <td><span class="pill ${row.status==='transmitted'?'g':row.status==='failed'?'r':''}">${esc(row.status)}</span></td>
+      <td class="mono">${row.attempts}</td>
+      <td class="mono small">${esc((row.cuin||'').slice(0,20))}</td>
+      <td class="small muted">${esc((row.last_error||'').slice(0,80))}</td>
+      <td class="mono small">${new Date(row.deadline_at).toLocaleDateString()}</td>
+      <td><button class="btn small ghost" data-et="${row.id}">transmit</button></td>
+    </tr>`).join('') || `<tr><td colspan="9" class="muted">no queue</td></tr>`;
+    document.querySelectorAll('#et-rows [data-et]').forEach((b)=>{
+      b.onclick = async () => {
+        try { const r = await api(`/api/etims/transmit/${b.dataset.et}`, { method: 'POST' }); alert(`Transmit: ${r.ok?'ok CUIN '+r.cuin:r.error}`); loadEtimsQueue(); loadEtimsStatus(); } catch (e) { alert(e.message); }
+      };
+    });
+  } catch {}
+}
+
+$('#et-reload').onclick = () => { loadEtimsStatus(); loadEtimsQueue(); };
+$('#et-process').onclick = async () => {
+  try {
+    const r = await api('/api/etims/process-queue', { method: 'POST', body: { limit: 10 } });
+    toast($('#et-msg'), `Processed ${r.processed}`, true);
+    loadEtimsQueue(); loadEtimsStatus();
+  } catch (e) { toast($('#et-msg'), e.message, false); }
+};
+
+$('#et-offline-sim').onclick = async () => {
+  // Simulate 2 offline sales by creating queued entries with old created_at but within 48h
+  try {
+    const sales = await api('/api/sales?limit=2').catch(()=>[]);
+    if (!sales.length) { toast($('#et-offline-msg'), 'no sales to simulate', false); return; }
+    for (const s of sales.slice(0,2)) {
+      await api(`/api/etims/enqueue/${s.id}`, { method: 'POST', body: { type: 'invoice' } }).catch(()=>{});
+    }
+    toast($('#et-offline-msg'), '2 sales enqueued (simulate offline)', true);
+    loadEtimsQueue(); loadEtimsStatus();
+  } catch (e) { toast($('#et-offline-msg'), e.message, false); }
+};
 
 // ---------- audit ----------
 async function loadAudit() {

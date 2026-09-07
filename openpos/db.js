@@ -29,7 +29,9 @@ function tableExists(d, name) {
 }
 
 function colExists(d, table, col) {
-  return d.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col);
+  // node:sqlite requires table name as string literal in PRAGMA
+  const safe = String(table).replace(/'/g, "''");
+  return d.prepare(`PRAGMA table_info('${safe}')`).all().some((c) => c.name === col);
 }
 
 function addCol(d, table, col, def) {
@@ -1281,6 +1283,67 @@ function migrate(d) {
   d.exec(`CREATE INDEX IF NOT EXISTS idx_shifts_cashier ON shifts(cashier_id, opened_at)`);
   d.exec(`CREATE INDEX IF NOT EXISTS idx_stock_moves_branch_type ON stock_moves(branch_id, type, created_at)`);
   d.exec(`CREATE INDEX IF NOT EXISTS idx_stock_product ON stock(variant_id, location_id)`);
+
+  // Phase 16 Day 22-23: Kenyan integration — eTIMS VSCU queue + M-Pesa C2B/B2C enhancements
+  addCol(d, 'sales', 'cuin', 'TEXT');
+  addCol(d, 'sales', 'qr', 'TEXT');
+  addCol(d, 'sales', 'etims_status', "TEXT NOT NULL DEFAULT 'pending'");
+  addCol(d, 'sales', 'etims_error', 'TEXT');
+  addCol(d, 'sales', 'etims_transmitted_at', 'TEXT');
+  addCol(d, 'sales', 'buyer_pin', 'TEXT');
+
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS etims_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sale_id INTEGER NOT NULL REFERENCES sales(id),
+      branch_id INTEGER NOT NULL REFERENCES branches(id),
+      type TEXT NOT NULL DEFAULT 'invoice',
+      status TEXT NOT NULL DEFAULT 'queued',
+      payload TEXT NOT NULL DEFAULT '{}',
+      cuin TEXT,
+      qr TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      transmitted_at TEXT,
+      deadline_at TEXT NOT NULL
+    );
+  `);
+  // Ensure columns exist for DBs that had earlier version without CHECK constraints or missing cols
+  addCol(d, 'etims_queue', 'sale_id', 'INTEGER');
+  addCol(d, 'etims_queue', 'branch_id', 'INTEGER');
+  addCol(d, 'etims_queue', 'type', "TEXT NOT NULL DEFAULT 'invoice'");
+  addCol(d, 'etims_queue', 'status', "TEXT NOT NULL DEFAULT 'queued'");
+  addCol(d, 'etims_queue', 'payload', "TEXT NOT NULL DEFAULT '{}'");
+  addCol(d, 'etims_queue', 'cuin', 'TEXT');
+  addCol(d, 'etims_queue', 'qr', 'TEXT');
+  addCol(d, 'etims_queue', 'attempts', 'INTEGER NOT NULL DEFAULT 0');
+  addCol(d, 'etims_queue', 'last_error', "TEXT NOT NULL DEFAULT ''");
+  addCol(d, 'etims_queue', 'created_at', 'TEXT');
+  addCol(d, 'etims_queue', 'updated_at', 'TEXT');
+  addCol(d, 'etims_queue', 'transmitted_at', 'TEXT');
+  addCol(d, 'etims_queue', 'deadline_at', 'TEXT');
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_etims_sale ON etims_queue(sale_id)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_etims_status ON etims_queue(status, deadline_at)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_etims_branch ON etims_queue(branch_id, created_at)`);
+
+  // M-Pesa C2B + B2C + reconciliation enhancements
+  addCol(d, 'mpesa_log', 'type', "TEXT NOT NULL DEFAULT 'stk' CHECK(type IN ('stk','c2b','b2c','reversal','balance'))");
+  addCol(d, 'mpesa_log', 'branch_id', 'INTEGER');
+  addCol(d, 'mpesa_log', 'matched_sale_id', 'INTEGER');
+  addCol(d, 'mpesa_log', 'reconciled', 'INTEGER NOT NULL DEFAULT 0');
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_mpesa_type ON mpesa_log(type, status, created_at)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_mpesa_matched ON mpesa_log(matched_sale_id)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_mpesa_branch ON mpesa_log(branch_id, created_at)`);
+
+  // eTIMS settings extension: KRA PIN, VSCU URL, etc stored in business settings already, but ensure table for KRA item codes validation cache
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS etims_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '{}'
+    );
+  `);
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------
