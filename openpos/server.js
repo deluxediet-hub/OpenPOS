@@ -3513,12 +3513,12 @@ function createApp(d) {
       const run = d.transaction(() => {
         const id = d
           .prepare(
-            `INSERT INTO sales (branch_id, location_id, register_id, terminal, order_no, invoice_no, customer_id, user_id, status,
+            `INSERT INTO sales (branch_id, location_id, register_id, terminal, order_no, invoice_no, customer_id, user_id, cashier_id, status,
                subtotal, discount, net, tax, gross, tender, note, etims_status, discount_by, kind, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)`
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)`
           )
           .run(ctx.branchId, ctx.locationId, ctx.register ? ctx.register.id : null, ctx.register ? ctx.register.name : '',
-            orderNo, invoiceNo, customer ? customer.id : null, req.user.id, hold ? 'suspended' : 'open',
+            orderNo, invoiceNo, customer ? customer.id : null, req.user.id, req.user.id, hold ? 'suspended' : 'open',
             totals.subtotal, totals.discount, totals.net, totals.tax, totals.gross,
             String(b.note || '').trim(), biz.kraPin ? 'pending' : 'exempt', discountBy, kind, t)
           .lastInsertRowid;
@@ -4172,9 +4172,9 @@ function createApp(d) {
       if (float === null) throw httpError(400, 'float_open must be whole shillings (0 is allowed)');
       const t = new Date().toISOString();
       const id = d.prepare(
-        `INSERT INTO shifts (branch_id, terminal, register_id, user_id, status, opened_at, float_open, expected_cash, note)
-         VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?)`
-      ).run(register.branch_id, register.name, register.id, req.user.id, t, float, String(b.note || '').trim()).lastInsertRowid;
+        `INSERT INTO shifts (branch_id, terminal, register_id, user_id, cashier_id, status, opened_at, float_open, expected_cash, note)
+         VALUES (?, ?, ?, ?, ?, 'open', ?, ?, 0, ?)`
+      ).run(register.branch_id, register.name, register.id, req.user.id, req.user.id, t, float, String(b.note || '').trim()).lastInsertRowid;
       d.prepare(`INSERT INTO timeclock (user_id, branch_id, event, at) VALUES (?, ?, 'in', ?)`).run(req.user.id, register.branch_id, t);
       dbm.audit(d, {
         userId: req.user.id, branchId: register.branch_id, action: 'shift/open',
@@ -4621,11 +4621,11 @@ function createApp(d) {
         const orderNo = nextOrderNo(d, ctx.branchId);
         const invoiceNo = `${ctx.branch.code || 'BR'}-${String(orderNo).padStart(6, '0')}`;
         const newSaleId = d.prepare(
-          `INSERT INTO sales (branch_id, location_id, register_id, terminal, order_no, invoice_no, customer_id, user_id, status,
+          `INSERT INTO sales (branch_id, location_id, register_id, terminal, order_no, invoice_no, customer_id, user_id, cashier_id, status,
              subtotal, discount, net, tax, gross, tender, note, etims_status, discount_by, kind, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, '[]', ?, ?, ?, 'sale', ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, '[]', ?, ?, ?, 'sale', ?)`
         ).run(ctx.branchId, ctx.locationId, ctx.register ? ctx.register.id : null, ctx.register ? ctx.register.name : '',
-          orderNo, invoiceNo, prepared.customer ? prepared.customer.id : null, req.user.id,
+          orderNo, invoiceNo, prepared.customer ? prepared.customer.id : null, req.user.id, req.user.id,
           totals.subtotal, totals.discount, totals.net, totals.tax, totals.gross,
           `exchange for return ${returnNo}`, biz.kraPin ? 'pending' : 'exempt', approver.id, t).lastInsertRowid;
         moveStockForSale(d, { user: req.user, ctx, lines: prepared.lines, ref: invoiceNo, allowOversell: false });
@@ -6516,6 +6516,45 @@ function createApp(d) {
     res.json({ cashier_id: user.id, today: mySales, voids: myVoids, returns: myReturns, open_shift: openShift, expected_cash: expected });
   });
 
+  // Minimal PDF builder (no external deps) for CSV+PDF export acceptance
+  function buildSimplePdf(title, columns, rows) {
+    // Very small PDF 1.4 with one page, Helvetica, text lines
+    const escapePdf = (s) => String(s).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+    const lines = [];
+    lines.push(`BT /F1 14 Tf 50 800 Td (${escapePdf(title)}) Tj ET`);
+    let y = 780;
+    const header = columns.join(' | ');
+    lines.push(`BT /F1 9 Tf 50 ${y} Td (${escapePdf(header.slice(0, 200))}) Tj ET`);
+    y -= 14;
+    for (let i = 0; i < Math.min(rows.length, 80); i++) {
+      const r = rows[i];
+      const txt = columns.map((c) => String(r[c] ?? '')).join(' | ').slice(0, 180);
+      if (y < 40) break;
+      lines.push(`BT /F1 8 Tf 50 ${y} Td (${escapePdf(txt)}) Tj ET`);
+      y -= 10;
+    }
+    const content = lines.join('\n');
+    const stream = `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`;
+    const objs = [];
+    objs.push(`1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj`);
+    objs.push(`2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj`);
+    objs.push(`3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >> endobj`);
+    objs.push(`4 0 obj ${stream} endobj`);
+    let pdf = `%PDF-1.4\n`;
+    const offsets = [];
+    for (const o of objs) {
+      offsets.push(pdf.length);
+      pdf += o + '\n';
+    }
+    const xrefPos = pdf.length;
+    pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+    for (const off of offsets) {
+      pdf += String(off).padStart(10, '0') + ` 00000 n \n`;
+    }
+    pdf += `trailer << /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`;
+    return Buffer.from(pdf, 'binary');
+  }
+
   app.get('/api/reports/export', me, can('reports.view'), (req, res) => {
     const report = String(req.query.report || 'sales');
     const format = String(req.query.format || 'csv');
@@ -6558,14 +6597,53 @@ function createApp(d) {
         GROUP BY s.cashier_id ORDER BY gross DESC
       `).all(...branches, from, to);
       rows = raw.map((r)=> ({ ...r, avg_basket: r.orders ? r.gross / r.orders : 0 }));
+    } else if (report === 'slow') {
+      columns = ['product_id','product_name','stock_qty','stock_value','last_sale_at'];
+      const days = Math.max(Number(req.query.days) || 30, 1);
+      const cutoff = new Date(Date.now() - days*86400000).toISOString();
+      const locIds = d.prepare(`SELECT id FROM locations WHERE branch_id IN (${ph})`).all(...branches).map((r)=>r.id);
+      const locIn = locIds.length ? locIds.map(() => '?').join(',') : 'SELECT 0 WHERE 0';
+      rows = d.prepare(`
+        SELECT p.id AS product_id, p.name AS product_name,
+               COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
+               COALESCE((SELECT SUM(st.qty * COALESCE(v.cost, p.cost,0)) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_value,
+               (SELECT MAX(s.created_at) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id AND s.branch_id IN (${ph}) ) AS last_sale_at
+        FROM products p WHERE p.active = 1
+        HAVING stock_qty > 0 AND (SELECT COALESCE(SUM(si.qty),0) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id AND s.branch_id IN (${ph}) AND s.created_at >= ?) = 0
+        ORDER BY stock_value DESC LIMIT 500
+      `).all(...locIds, ...locIds, ...branches, ...branches, cutoff);
+    } else if (report === 'reorder') {
+      columns = ['product_id','product_name','stock_qty','velocity_per_day','days_of_cover','suggested_qty','supplier_name'];
+      const daysCover = Math.max(Number(req.query.days_cover) || 14, 1);
+      const locIds = d.prepare(`SELECT id FROM locations WHERE branch_id IN (${ph})`).all(...branches).map((r)=>r.id);
+      const locIn = locIds.length ? locIds.map(() => '?').join(',') : 'SELECT 0 WHERE 0';
+      const from30 = new Date(Date.now() - 30*86400000).toISOString();
+      const raw = d.prepare(`
+        SELECT p.id AS product_id, p.name AS product_name, p.reorder_level, s.name AS supplier_name,
+               COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
+               COALESCE((SELECT SUM(si.qty) FROM sale_items si JOIN sales sa ON sa.id = si.sale_id WHERE si.product_id = p.id AND sa.branch_id IN (${ph}) AND sa.created_at >= ?),0) / 30.0 AS velocity_per_day
+        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
+        WHERE p.active = 1
+        ORDER BY velocity_per_day DESC LIMIT 200
+      `).all(...locIds, ...branches, from30);
+      rows = raw.map((r) => ({
+        ...r,
+        days_of_cover: r.velocity_per_day > 0 ? r.stock_qty / r.velocity_per_day : 999,
+        suggested_qty: Math.max(0, Math.ceil(r.velocity_per_day * daysCover - r.stock_qty))
+      })).filter((r) => r.suggested_qty > 0);
     } else {
-      return res.status(400).json({ error: 'unknown report, use sales|margin|cashiers' });
+      return res.status(400).json({ error: 'unknown report, use sales|margin|cashiers|slow|reorder' });
     }
     if (format === 'csv') {
       const csv = require('./lib/csv').toCsv(columns, rows);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename=\"${report}-${from.slice(0,10)}-${to.slice(0,10)}.csv\"`);
       return res.send(csv);
+    } else if (format === 'pdf') {
+      const pdf = buildSimplePdf(`${report} ${from.slice(0,10)} to ${to.slice(0,10)}`, columns, rows);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=\"${report}-${from.slice(0,10)}-${to.slice(0,10)}.pdf\"`);
+      return res.send(pdf);
     }
     res.json({ report, from, to, branches, columns, rows });
   });

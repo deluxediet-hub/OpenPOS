@@ -1269,6 +1269,18 @@ function migrate(d) {
   // Enhance deposits with payment_method if needed (already has branch/register)
   addCol(d, 'deposits', 'payment_method', "TEXT NOT NULL DEFAULT 'cash'");
   addCol(d, 'deposits', 'category', "TEXT NOT NULL DEFAULT ''");
+
+  // Phase 15 Day 21: reporting & BI performance — indexes for 100k rows dashboards <1s
+  addCol(d, 'sales', 'cashier_id', 'INTEGER');
+  addCol(d, 'shifts', 'cashier_id', 'INTEGER');
+  try { d.exec(`UPDATE sales SET cashier_id = user_id WHERE cashier_id IS NULL AND user_id IS NOT NULL`); } catch (_) {}
+  try { d.exec(`UPDATE shifts SET cashier_id = user_id WHERE cashier_id IS NULL AND user_id IS NOT NULL`); } catch (_) {}
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_sales_cashier ON sales(cashier_id, created_at)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_sale_items_product ON sale_items(product_id)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_sale_items_variant ON sale_items(variant_id)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_shifts_cashier ON shifts(cashier_id, opened_at)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_stock_moves_branch_type ON stock_moves(branch_id, type, created_at)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_stock_product ON stock(variant_id, location_id)`);
 }
 
 // ---- settings (JSON-encoded key/value) --------------------------------------
