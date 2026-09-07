@@ -57,6 +57,9 @@ const CAPABILITIES = [
   { id: 'stocktake_pro',   label: 'Advanced stock counts',  sw: 'Kuhesabu bidhaa kwa kina',
     desc: 'Blind counts, shrinkage analysis, recounts.',
     swDesc: 'Kuhesabu gizani, uchambuzi wa upotevu, kuhesabu tena.' },
+  { id: 'store',           label: 'Online store',           sw: 'Duka la mtandaoni',
+    desc: 'A web storefront on the same stock, prices and customers as the till.',
+    swDesc: 'Duka la mtandaoni linalotumia bidhaa, bei na wateja wa taa.' },
   { id: 'comms',           label: 'WhatsApp & SMS',         sw: 'WhatsApp na SMS',
     desc: 'Digital receipts, statements and notifications.',
     swDesc: 'Risiti za kidijitali, riporti na arifa.' }

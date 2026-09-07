@@ -1497,6 +1497,25 @@ function migrate(d) {
     CREATE INDEX IF NOT EXISTS idx_sale_promos_promo ON sale_promos(promo_id);
   `);
 
+  // ---- Phase 26 Day 37-38: online store — one catalogue, one inventory -----
+  // A web cart HOLDS stock instead of taking it: the row is the promise, and it
+  // expires, so an abandoned cart cannot hide stock from the shop forever.
+  d.exec(`CREATE TABLE IF NOT EXISTS store_reservations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
+    sale_id INTEGER,
+    token TEXT NOT NULL,
+    variant_id INTEGER NOT NULL,
+    location_id INTEGER NOT NULL,
+    qty REAL NOT NULL,
+    expires_at TEXT NOT NULL,
+    released_at TEXT,
+    created_at TEXT NOT NULL
+  )`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_res_token ON store_reservations(token);`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_res_live ON store_reservations(variant_id, location_id, released_at, expires_at);`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_res_expiry ON store_reservations(expires_at);`);
+
   // ---- Phase 25: WhatsApp & customer commerce --------------------------------
   // Every sale knows the door it came in by (R-CH): the till, an offline queue,
   // a WhatsApp order or the web store. Same engine, one inventory, one book.

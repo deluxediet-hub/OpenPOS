@@ -491,7 +491,21 @@ future marketplaces → **same sales & inventory engine**; simple PWA storefront
 reservation window.
 - **Acceptance:** web order + POS sale for the last unit — one wins, the other fails
   gracefully; one customer profile across channels.
+### Phase 26 — Online Store / Omni-Channel · Days 37–38 (architecture-first, optional)
+One catalogue, one inventory, one customer; orders from POS / website / WhatsApp / manual /
+future marketplaces → **same sales & inventory engine**; simple PWA storefront; stock
+reservation window.
+- **Acceptance:** web order + POS sale for the last unit — one wins, the other fails
+  gracefully; one customer profile across channels.
 
+
+**Status (2026-09-07): done.** The storefront has no sales engine of its own. A web cart *is* a held sale (`channel='web'`), and checkout *is* the till's resume step: re-priced, stock moved, modules run, money taken by the same code. The only new idea is a **reservation** — `store_reservations` holds stock for **15 minutes** instead of taking it, because money has not moved yet but the customer has been shown a number and must not be embarrassed at the counter. Expired reservations release themselves the next time anyone looks at the catalogue.
+
+Both directions of the last-unit race are asserted: a cart holding 2 of 3 means the till is refused with "1 free right now — 2 is in an online basket"; and when the till sells first, the web cart gets a 409 ("only 0 of … is free") rather than a silent failure. A basket is never blocked by its own reservation, so a customer can rebuild their cart and check out.
+
+Identity is a **phone number**: `upsertCustomerByPhone` treats `0722…`, `+254722…` and `254722…` as one person, so a customer who buys at the till, texts an order and orders online has one profile, one deni balance and one loyalty record.
+
+Shipped: `public/store.html` — a PWA (service worker + manifest, no build step, phone-first) with search, basket in `localStorage`, M-Pesa or pay-on-collection checkout and an order confirmation; the shop configures paybill, till, delivery and a customer note in Manager → Settings → Online store, and `/api/store/orders` lists web and WhatsApp orders together. 195 API tests, 21 UI steps.
 ### Phase 27 — Hardware & Peripheral Layer · Day 39
 Barcode scanners, thermal printers (58/80mm ESC/POS, QR, drawer kick), cash drawers, customer
 displays, label/price-tag printers, **scales** (serial protocol), POS terminals — per-register

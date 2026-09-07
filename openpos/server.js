@@ -730,6 +730,206 @@ function createApp(d) {
     next();
   };
 
+  // ================= Phase 26 — online store / omni-channel =================
+  // One catalogue, one inventory, one customer (R-CH). The storefront has no
+  // sales engine of its own: its cart is a held sale, its checkout is a
+  // payment, and its stock honesty comes from reservations.
+
+  const store = require('./lib/store');
+
+  /**
+   * One customer across every door. A phone number is the identity — it is what
+   * M-Pesa shows, what a WhatsApp message arrives from and what the shop texts.
+   */
+  function upsertCustomerByPhone(d, { phone, name, email }) {
+    const p = String(phone || '').trim();
+    if (!p) throw httpError(400, 'a phone number is needed to know the customer');
+    const alt = p.startsWith('+254') ? `0${p.slice(4)}` : (p.startsWith('0') ? `+254${p.slice(1)}` : p);
+    let c = d.prepare('SELECT * FROM customers WHERE phone = ? OR phone = ? ORDER BY id LIMIT 1').get(p, alt);
+    if (!c) {
+      const now = new Date().toISOString();
+      const id = d.prepare('INSERT INTO customers (name, phone, email, created_at) VALUES (?, ?, ?, ?)')
+        .run(String(name || '').trim() || p, p, String(email || '').trim(), now).lastInsertRowid;
+      c = d.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+    } else if (name && !c.name) {
+      d.prepare('UPDATE customers SET name = ? WHERE id = ?').run(String(name).trim(), c.id);
+    }
+    return c;
+  }
+
+  function requireStore(req, res, next) {
+    if (!(caps.getCapabilityMap(d) || {}).store) {
+      return res.status(403).json({ error: 'the online store is switched off' });
+    }
+    next();
+  }
+
+  // ---- the public shopfront (no login: a phone number is the identity) -----
+  app.get('/api/store', requireStore, (req, res) => {
+    const biz = dbm.getSetting(d, 'business', {}) || {};
+    const cfg = dbm.getSetting(d, 'store', {}) || {};
+    res.json({
+      name: biz.name || 'Shop', branch: biz.branch || '', phone: biz.phone || '',
+      currency: 'KES', window_minutes: store.WINDOW_MINUTES,
+      paybill: cfg.paybill || '', till: cfg.till || '',
+      collection: cfg.collection !== false, delivery: cfg.delivery !== false,
+      delivery_fee: Number(cfg.delivery_fee || 0),
+      note: cfg.note || ''
+    });
+  });
+
+  app.get('/api/store/catalogue', requireStore, (req, res) => {
+    try {
+      res.json(store.catalogue(d, dbm, { search: (req.query || {}).search || '', limit: (req.query || {}).limit || 60 }));
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /**
+   * PUT a cart together. Stock is HELD, not taken: the customer sees a real
+   * promise ("2 left") and the till sees the same promise, and neither can
+   * quietly take what the other was promised — whoever pays first wins.
+   */
+  app.post('/api/store/cart', requireStore, (req, res) => {
+    try {
+      const b = req.body || {};
+      const items = Array.isArray(b.items) ? b.items : [];
+      if (!items.length) throw httpError(400, 'a cart needs at least one item');
+      const phone = String(b.phone || '').trim();
+      if (!phone) throw httpError(400, 'a phone number is how we know you — and how we send the receipt');
+      const token = String(b.token || '').trim() || store.newToken();
+      const loc = store.sellingLocation(d);
+      const checked = items.map((it) => {
+        const vid = numOrNull(it.variant_id);
+        const pid = numOrNull(it.product_id);
+        const v = vid
+          ? d.prepare('SELECT * FROM variants WHERE id = ? AND active = 1').get(vid)
+          : d.prepare("SELECT * FROM variants WHERE product_id = ? AND COALESCE(axes_key, '{}') = '{}' AND active = 1").get(pid);
+        if (!v) throw httpError(400, `we do not sell that (${it.variant_id || it.product_id})`);
+        const p = d.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(v.product_id);
+        if (!p) throw httpError(400, 'that item is no longer on the shelf');
+        const qty = Number(it.qty);
+        if (!Number.isFinite(qty) || qty <= 0) throw httpError(400, `${p.name}: qty must be positive`);
+        const s = store.sellableQty(d, dbm, v.id, loc, token);
+        if (s.available + 1e-9 < qty) {
+          throw httpError(409, s.onHand > 0
+            ? `only ${s.available} of ${p.name} is free right now — ${s.held} is in someone's basket`
+            : `${p.name} is out of stock`);
+        }
+        return { variant_id: v.id, qty, name: p.name };
+      });
+      // A customer is one person across every door: the phone IS the profile.
+      const cust = upsertCustomerByPhone(d, { phone, name: b.name, email: b.email });
+      const user = shopUser();
+      if (!user) throw httpError(400, 'no user to book this order against');
+      const r = createSaleNow(d, {
+        user, channel: 'web',
+        body: {
+          items: checked.map((i) => ({ variant_id: i.variant_id, qty: i.qty })),
+          customer_id: cust.id, hold: true, client_id: token,
+          note: `web order from ${phone}`
+        }
+      });
+      const run = d.transaction(() => {
+        for (const i of checked) store.reserve(d, { saleId: r.id, token, variantId: i.variant_id, locationId: loc, qty: i.qty });
+      });
+      run();
+      const state = store.cartState(d, dbm, token);
+      res.json({ ok: true, token, sale: state.sale, items: state.items, gross: state.gross, expires_at: state.expires_at });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/store/cart/:token', requireStore, (req, res) => {
+    try {
+      res.json(store.cartState(d, dbm, req.params.token));
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/store/cart/:token/cancel', requireStore, (req, res) => {
+    try {
+      const token = String(req.params.token || '');
+      const sale = store.cartByToken(d, token);
+      if (!['suspended', 'open'].includes(sale.status)) return res.status(400).json({ error: `a ${sale.status} order cannot be cancelled` });
+      const run = d.transaction(() => {
+        store.release(d, { token });
+        d.prepare("UPDATE sales SET status = 'voided', note = COALESCE(note, '') || ' — cancelled by the customer' WHERE id = ?").run(sale.id);
+      });
+      run();
+      dbm.audit(d, { userId: null, action: 'store/cancel', entity: 'sale', entityId: String(sale.id), detail: { token, invoice: sale.invoice_no } });
+      res.json({ ok: true, released: true });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /**
+   * Checkout. M-Pesa stays 'open' until the callback lands (nothing is
+   * promised before the money); "pay on collection" stays suspended until the
+   * shop takes the money at the counter.
+   */
+  app.post('/api/store/checkout', requireStore, (req, res) => {
+    try {
+      const b = req.body || {};
+      const state = store.cartState(d, dbm, b.token);
+      if (state.expired) throw httpError(409, 'this cart expired — put it together again');
+      const method = String(b.method || 'mpesa').trim();
+      const allowed = pme.enabledMethods(d).map((m) => m.key);
+      if (!allowed.includes(method)) throw httpError(400, `${method} is not a way this shop takes money`);
+      const user = shopUser();
+      // Not applyPayment directly: resuming a held sale is the step that takes
+      // the stock, re-prices, runs the modules and THEN takes the money. The
+      // website gets exactly the engine the till gets.
+      const payRes = resumeHeldSale(d, {
+        sale: state.sale, user,
+        b: { payment: { method, amount: Number(b.amount || state.sale.gross), phone: b.phone || state.sale.customer_id ? (d.prepare('SELECT phone FROM customers WHERE id = ?').get(state.sale.customer_id) || {}).phone : null } }
+      });
+      // The stock is taken by the sale now; the promise can go.
+      store.release(d, { token: b.token });
+      const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(state.sale.id);
+      dbm.audit(d, { userId: user ? user.id : null, action: 'store/checkout', entity: 'sale', entityId: String(sale.id), detail: { token: b.token, method, invoice: sale.invoice_no, status: sale.status } });
+      res.json({
+        ok: true, sale, payment: (payRes.payments || [])[0] || payRes.payment || null,
+        payments: payRes.payments || [],
+        mpesa: payRes.mpesa || null,
+        message: sale.status === 'paid'
+          ? 'Thank you — your order is paid.'
+          : (method === 'mpesa' ? 'Check your phone to approve the M-Pesa prompt.' : 'We will take the money when you collect.')
+      });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  // ---- the shop's side ------------------------------------------------------
+  app.get('/api/store/orders', me, can('sales.view'), (req, res) => {
+    res.json(store.orders(d, { status: (req.query || {}).status || 'all', limit: (req.query || {}).limit || 50 }));
+  });
+
+  app.get('/api/settings/store', me, can('settings.manage'), (req, res) => {
+    res.json(dbm.getSetting(d, 'store', { paybill: '', till: '', collection: true, delivery: false, delivery_fee: 0, note: '' }) || {});
+  });
+
+  app.put('/api/settings/store', me, can('settings.manage'), (req, res) => {
+    const b = req.body || {};
+    const cur = dbm.getSetting(d, 'store', {}) || {};
+    const next = {
+      paybill: b.paybill !== undefined ? String(b.paybill).trim() : cur.paybill,
+      till: b.till !== undefined ? String(b.till).trim() : cur.till,
+      collection: b.collection !== undefined ? !!b.collection : cur.collection !== false,
+      delivery: b.delivery !== undefined ? !!b.delivery : !!cur.delivery,
+      delivery_fee: b.delivery_fee !== undefined ? Number(b.delivery_fee) || 0 : Number(cur.delivery_fee || 0),
+      note: b.note !== undefined ? String(b.note).trim() : cur.note || ''
+    };
+    dbm.setSetting(d, 'store', next);
+    dbm.audit(d, { userId: req.user.id, action: 'settings/store', entity: 'setting', entityId: 'store', detail: next });
+    res.json(next);
+  });
+
   // ================= Phase 25 — WhatsApp & customer commerce =================
   // One inventory, one book: an order that arrives by message becomes the same
   // sale the till would have made (R-CH). The provider is replaceable; the
@@ -4326,6 +4526,25 @@ function createApp(d) {
   }
 
   // The single stock-mutating step of a sale: FEFO per line, ref = invoice no (R-S2 trace).
+  // Phase 26 (R-CH): stock promised to an online basket is not on the shelf.
+  // The till can still oversell when a manager says so — but silently selling
+  // the unit a customer is walking in for is the failure this prevents.
+  function checkReservations(d, ctx, lines, allowOversell, sale = null) {
+    if (!(caps.getCapabilityMap(d) || {}).store) return;
+    if (allowOversell) return;
+    releaseExpiredReservations(d);
+    const own = sale && sale.channel === 'web' ? sale.client_id : null;
+    for (const L of lines) {
+      const s = store.sellableQty(d, dbm, L.variant.id, ctx.locationId, own);
+      if (s.available + 1e-9 < L.qty) {
+        throw httpError(409, `${L.product.name}: ${s.available} free right now — ${s.held} is in an online basket`);
+      }
+    }
+  }
+  function releaseExpiredReservations(d) {
+    try { store.releaseExpired(d); } catch (_) {}
+  }
+
   function moveStockForSale(d, { user, ctx, lines, ref, allowOversell, client_id }) {
     for (const L of lines) {
       const out = writeMove(d, {
@@ -4458,6 +4677,7 @@ function createApp(d) {
         promoCode: b.promo_code ? String(b.promo_code).trim() : (Array.isArray(b.promo_codes) ? b.promo_codes : null),
         items: b.items, approver, allowOversell: b.oversell === true
       });
+      checkReservations(d, ctx, lines, b.oversell === true, null);
       const totals = saleTotals(lines);
       const t = new Date().toISOString();
       const biz = dbm.getSetting(d, 'business', {}) || {};
@@ -4602,6 +4822,7 @@ function createApp(d) {
     if (ctx.branchId !== sale.branch_id) throw httpError(400, 'held sales can only be paid at the same branch');
     let payRes = null;
     const run = d.transaction(() => {
+      checkReservations(d, ctx, lines, false, sale);
       moveStockForSale(d, { user, ctx, lines, ref: sale.invoice_no, allowOversell: b.oversell === true });
       const fresh = d.prepare('SELECT * FROM sales WHERE id = ?').get(sale.id);
       payRes = applyPayment(d, { user, saleId: sale.id, sale: fresh, payment: b.payment, discountBy: approver ? approver.id : null, allowQuote: markInvoice === true });
@@ -4911,7 +5132,10 @@ function createApp(d) {
       // really paid — that is when its receipt goes out.
       try {
         const fresh = d.prepare('SELECT status FROM sales WHERE id = ?').get(p.sale_id);
-        if (fresh && fresh.status === 'paid') setImmediate(() => queueReceipt(d, p.sale_id));
+        if (fresh && fresh.status === 'paid') {
+          store.release(d, { saleId: p.sale_id }); // Phase 26: the stock is taken now, so the promise can go
+          setImmediate(() => queueReceipt(d, p.sale_id));
+        }
       } catch (_) {}
       res.json({ ok: true, already: !!r.already, ...buildSalePayload(d, p.sale_id), ...(r.mpesa ? { mpesa: r.mpesa } : {}) });
     } catch (e) {

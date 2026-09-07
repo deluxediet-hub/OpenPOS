@@ -1170,6 +1170,26 @@
         <div class="row"><button class="btn" id="st-save" data-i18n="save">Save</button>
           <div class="msg" id="st-msg" style="margin:0"></div></div>
       </div>
+      <div class="card hidden" id="st-store-card" style="margin-top:14px">
+        <h3>Online store</h3>
+        <p class="muted small" style="margin:0 0 10px">The storefront sells the same stock at the same prices to the same customers —
+          a web cart <em>holds</em> stock for 15 minutes instead of taking it, so nobody is sold the last unit twice.</p>
+        <div class="grid cols-3">
+          <label class="f"><span>Paybill</span><input id="st-paybill" inputmode="numeric"></label>
+          <label class="f"><span>Till / account</span><input id="st-store-till"></label>
+          <label class="f"><span>Delivery fee (Ksh)</span><input id="st-delivery-fee" type="number" min="0"></label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label class="check"><input type="checkbox" id="st-collection"> <span>Collect in shop</span></label>
+          <label class="check"><input type="checkbox" id="st-delivery"> <span>Delivery</span></label>
+          <label class="f" style="flex:1"><span>Note for customers</span><input id="st-store-note" placeholder="Open 8am – 9pm, Buru Buru"></label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="st-store-save">Save store details</button>
+          <a class="btn ghost" id="st-store-open" href="/store.html" target="_blank" rel="noopener">Open the storefront</a>
+          <div class="msg" id="st-store-msg" style="margin:0"></div>
+        </div>
+      </div>
       <div class="card hidden" id="st-feat-card" style="margin-top:14px">
         <h3 data-i18n="features">Features</h3>
         <p class="muted small">Turn on the parts of OpenPOS your business uses. Turning one on is instant — no setup, no new system.</p>
@@ -3384,8 +3404,43 @@ $('#b-save').onclick = async () => {
   } catch (e) { toast($('#b-msg'), e.message, false); }
 };
 
+async function loadStoreSettings() {
+  const card = $('#st-store-card');
+  if (!card) return;
+  const on = !!(BOOT && BOOT.caps && BOOT.caps.store);
+  card.classList.toggle('hidden', !on);
+  if (!on) return;
+  const cfg = await api('/api/settings/store').catch(() => ({}));
+  $('#st-paybill').value = cfg.paybill || '';
+  $('#st-store-till').value = cfg.till || '';
+  $('#st-delivery-fee').value = cfg.delivery_fee || 0;
+  $('#st-collection').checked = cfg.collection !== false;
+  $('#st-delivery').checked = !!cfg.delivery;
+  $('#st-store-note').value = cfg.note || '';
+}
+
+async function saveStoreSettings() {
+  try {
+    await api('/api/settings/store', {
+      method: 'PUT',
+      body: {
+        paybill: $('#st-paybill').value.trim(),
+        till: $('#st-store-till').value.trim(),
+        delivery_fee: Number($('#st-delivery-fee').value) || 0,
+        collection: $('#st-collection').checked,
+        delivery: $('#st-delivery').checked,
+        note: $('#st-store-note').value.trim()
+      }
+    });
+    toast($('#st-store-msg'), 'store details saved', true);
+  } catch (e) {
+    toast($('#st-store-msg'), e.message, false);
+  }
+}
+
 // ---------- settings + features ----------
 async function loadSettings() {
+  await loadStoreSettings().catch(() => {});
   const s = await api('/api/settings');
   const b = s.business || {}, tx = s.tax || {}, rc = s.receipt || {};
   $('#st-name').value = b.name || ''; $('#st-phone').value = b.phone || '';
@@ -3422,6 +3477,7 @@ async function loadSettings() {
   }
 }
 
+$('#st-store-save').onclick = saveStoreSettings;
 $('#st-save').onclick = async () => {
   try {
     await api('/api/settings', {

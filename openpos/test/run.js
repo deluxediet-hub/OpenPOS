@@ -85,12 +85,12 @@ const commsLib = require('../lib/comms');
   await new Promise((r) => server.once('listening', r));
   const BASE = `http://127.0.0.1:${server.address().port}`;
 
-  const J = (opts) => fetch(BASE + opts.path, {
+  const J = (a, b, c) => { const opts = typeof a === 'string' ? { path: a, method: b, body: c } : (a || {}); return fetch(BASE + opts.path, {
     method: opts.method || 'GET',
     headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
     redirect: 'manual'
-  }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})), headers: r.headers }));
+  }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})), headers: r.headers })); };
 
   const cookieOf = (r) => (r.headers.get('set-cookie') || '').split(';')[0];
 
@@ -164,7 +164,7 @@ const commsLib = require('../lib/comms');
   await test('solo defaults: duka seeds deni; multi_* & staff_roles OFF', async () => {
     const r = await authJ('/api/capabilities');
     assert.strictEqual(r.status, 200);
-    assert.strictEqual(r.body.length, 18, '18-capability registry');
+    assert.strictEqual(r.body.length, 19, '19-capability registry');
     const m = Object.fromEntries(r.body.map((c) => [c.id, c.enabled]));
     assert.strictEqual(m.deni, true, 'duka template seeds deni');
     assert.strictEqual(m.multi_branch, false);
@@ -3902,6 +3902,154 @@ const commsLib = require('../lib/comms');
     assert.strictEqual(alerts.body.length, 1, JSON.stringify(alerts.body.map((m) => m.body)));
     assert.ok(/P25 Low is down to/.test(alerts.body[0].body), alerts.body[0].body);
     assert.strictEqual(d.prepare('SELECT * FROM messages WHERE kind = ?').get('low_stock').to_number, '+254700000002');
+  });
+
+
+  // ================= Phase 26 — online store / omni-channel =================
+  // Acceptance: a web order and a till sale fight over the LAST unit — one
+  // wins, the other fails gracefully. One customer profile across every door.
+  section('Phase 26 — online store: the same shelf, another door');
+
+  const p26 = {};
+
+  await test('the storefront is off until the shop switches it on', async () => {
+    const off = await J('/api/store/catalogue');
+    assert.strictEqual(off.status, 403, JSON.stringify(off.body));
+    const on = await cap('store', true);
+    assert.strictEqual(on.status, 200, JSON.stringify(on.body));
+    const shop = await J('/api/store');
+    assert.strictEqual(shop.status, 200, JSON.stringify(shop.body));
+    assert.strictEqual(shop.body.currency, 'KES');
+    assert.strictEqual(shop.body.window_minutes, 15, 'a cart holds stock for a quarter of an hour');
+  });
+
+  await test('the catalogue is the shop\'s own stock, priced the same, honest about what is free', async () => {
+    p26.tea = await mkP({ name: 'P26 Chai', sku: 'P26-CHAI', cost: 100, price: 150 }, 3);
+    p26.cat = await J('/api/store/catalogue');
+    assert.strictEqual(p26.cat.status, 200, JSON.stringify(p26.cat.body));
+    const row = p26.cat.body.find((r) => r.sku === 'P26-CHAI');
+    assert.ok(row, 'the web shop sells what the till sells');
+    assert.strictEqual(row.price, 150, 'the same price as the shelf');
+    assert.strictEqual(row.available, 3, 'nothing is promised to anyone yet');
+  });
+
+  await test('a web cart holds stock without taking it — and the till can see the promise', async () => {
+    const cart = await J({ path: '/api/store/cart', method: 'POST', body: {
+      phone: '0722000111', name: 'P26 Kamau',
+      items: [{ variant_id: p26.tea.vid, qty: 2 }]
+    } });
+    assert.strictEqual(cart.status, 200, JSON.stringify(cart.body));
+    p26.token = cart.body.token;
+    assert.strictEqual(cart.body.sale.status, 'suspended', 'an unpaid cart is a held sale');
+    assert.strictEqual(cart.body.sale.channel, 'web');
+    assert.strictEqual(cart.body.gross, 300);
+    assert.ok(cart.body.expires_at);
+    // stock has not moved; the promise has
+    const stock = d.prepare('SELECT qty FROM stock WHERE variant_id = ? ORDER BY qty DESC LIMIT 1').get(p26.tea.vid).qty;
+    assert.strictEqual(stock, 3, 'money has not moved, so neither has the stock');
+    const cat = await J('/api/store/catalogue');
+    assert.strictEqual(cat.body.find((r) => r.sku === 'P26-CHAI').available, 1, 'the shopfront tells the truth about what is left');
+    p26.loc = d.prepare('SELECT location_id FROM stock WHERE variant_id = ? ORDER BY qty DESC LIMIT 1').get(p26.tea.vid).location_id;
+  });
+
+  await test('THE RACE: the last unit — the till sells it, the web cart fails gracefully', async () => {
+    // one unit is free; the till sells it
+    const till = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p26.tea.vid, qty: 1 }], payment: { method: 'cash', amount: 150 }
+    } });
+    assert.strictEqual(till.status, 200, JSON.stringify(till.body));
+    // and now the cart that still holds two is told, not deceived
+    const second = await J({ path: '/api/store/cart', method: 'POST', body: {
+      phone: '0722000222', items: [{ variant_id: p26.tea.vid, qty: 2 }]
+    } });
+    assert.strictEqual(second.status, 409, JSON.stringify(second.body));
+    assert.match(second.body.error, /out of stock|only 0 of/, second.body.error);
+    // the held cart can still be read and cancelled — it never broke anything
+    const read = await J(`/api/store/cart/${p26.token}`);
+    assert.strictEqual(read.status, 200, JSON.stringify(read.body));
+    const cancel = await J({ path: `/api/store/cart/${p26.token}/cancel`, method: 'POST', body: {} });
+    assert.strictEqual(cancel.status, 200, JSON.stringify(cancel.body));
+    assert.strictEqual(d.prepare('SELECT COUNT(*) AS n FROM store_reservations WHERE released_at IS NULL').get().n, 0,
+      'cancelling gives the shelf its stock back');
+  });
+
+  await test('THE RACE, the other way: the web cart holds it, the till is refused', async () => {
+    const restock = await authJ({ path: '/api/stock/moves', method: 'POST', body: { variant_id: p26.tea.vid, qty: 1, type: 'opening', reason: 'opening', unit_cost: 100 } });
+    assert.strictEqual(restock.status, 200, JSON.stringify(restock.body));
+    const cart = await J({ path: '/api/store/cart', method: 'POST', body: {
+      phone: '0722000333', items: [{ variant_id: p26.tea.vid, qty: 2 }]
+    } });
+    assert.strictEqual(cart.status, 200, JSON.stringify(cart.body));
+    p26.token2 = cart.body.token;
+    const denied = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p26.tea.vid, qty: 2 }], payment: { method: 'cash', amount: 300 }
+    } });
+    assert.strictEqual(denied.status, 409, JSON.stringify(denied.body));
+    assert.match(denied.body.error, /online basket/, denied.body.error);
+    // one unit is genuinely free, and that one sells
+    const ok = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p26.tea.vid, qty: 1 }], payment: { method: 'cash', amount: 150 }
+    } });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+  });
+
+  await test('checkout pays the held sale, moves the stock once and releases the promise', async () => {
+    const before = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(p26.tea.vid, p26.loc).qty;
+    const pay = await J({ path: '/api/store/checkout', method: 'POST', body: { token: p26.token2, method: 'cash', amount: 300 } });
+    assert.strictEqual(pay.status, 200, JSON.stringify(pay.body));
+    assert.strictEqual(pay.body.sale.status, 'paid');
+    const after = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(p26.tea.vid, p26.loc).qty;
+    assert.strictEqual(after, before - 2, 'the web order took the same stock a till sale would');
+    assert.strictEqual(d.prepare('SELECT COUNT(*) AS n FROM store_reservations WHERE token = ? AND released_at IS NULL').get(p26.token2).n, 0,
+      'a paid order stops holding what it bought');
+    const moves = d.prepare("SELECT COUNT(*) AS n FROM stock_moves WHERE type = 'sale' AND ref = ?").get(pay.body.sale.invoice_no).n;
+    assert.strictEqual(moves, 1, 'one line, one move — the web sale is a sale');
+  });
+
+  await test('one customer across every door: the phone is the profile', async () => {
+    const restock = await authJ({ path: '/api/stock/moves', method: 'POST', body: { variant_id: p26.tea.vid, qty: 4, type: 'opening', reason: 'opening', unit_cost: 100 } });
+    assert.strictEqual(restock.status, 200, JSON.stringify(restock.body));
+    const a = await J({ path: '/api/store/cart', method: 'POST', body: { phone: '0722000111', name: 'Kamau (again)', items: [{ variant_id: p26.tea.vid, qty: 1 }] } });
+    assert.strictEqual(a.status, 200, JSON.stringify(a.body));
+    const b = await J({ path: '/api/store/cart', method: 'POST', body: { phone: '+254722000111', items: [{ variant_id: p26.tea.vid, qty: 1 }] } });
+    assert.strictEqual(b.status, 200, JSON.stringify(b.body));
+    const one = d.prepare('SELECT id, name FROM customers WHERE phone = ?').get('0722000111');
+    const rows = d.prepare("SELECT COUNT(*) AS n FROM customers WHERE phone IN ('0722000111', '+254722000111')").get().n;
+    assert.strictEqual(rows, 1, '0722… and +254722… are one person, once');
+    assert.strictEqual(one.name, 'P26 Kamau', 'the first visit named them; a later one does not rename them');
+    const sales = d.prepare('SELECT customer_id FROM sales WHERE client_id IN (?, ?)').all(a.body.token, b.body.token);
+    assert.strictEqual(sales.length, 2);
+    assert.strictEqual(sales[0].customer_id, sales[1].customer_id, 'both carts belong to the same customer');
+    await J({ path: `/api/store/cart/${a.body.token}/cancel`, method: 'POST', body: {} });
+    await J({ path: `/api/store/cart/${b.body.token}/cancel`, method: 'POST', body: {} });
+  });
+
+  await test('an abandoned cart gives the shelf its stock back when it expires', async () => {
+    const restock = await authJ({ path: '/api/stock/moves', method: 'POST', body: { variant_id: p26.tea.vid, qty: 2, type: 'opening', reason: 'opening', unit_cost: 100 } });
+    assert.strictEqual(restock.status, 200, JSON.stringify(restock.body));
+    const cart = await J({ path: '/api/store/cart', method: 'POST', body: { phone: '0722000444', items: [{ variant_id: p26.tea.vid, qty: 1 }] } });
+    assert.strictEqual(cart.status, 200, JSON.stringify(cart.body));
+    assert.strictEqual(d.prepare('SELECT COUNT(*) AS n FROM store_reservations WHERE token = ? AND released_at IS NULL').get(cart.body.token).n, 1);
+    // the window is 15 minutes; time-travel it and let the shopfront clean up
+    d.prepare('UPDATE store_reservations SET expires_at = ? WHERE token = ?')
+      .run(new Date(Date.now() - 1000).toISOString(), cart.body.token);
+    const cat = await J('/api/store/catalogue');
+    assert.strictEqual(cat.status, 200);
+    assert.strictEqual(d.prepare('SELECT COUNT(*) AS n FROM store_reservations WHERE token = ? AND released_at IS NULL').get(cart.body.token).n, 0,
+      'an expired promise holds nothing');
+    const expired = await J({ path: '/api/store/checkout', method: 'POST', body: { token: cart.body.token, method: 'cash' } });
+    assert.strictEqual(expired.status, 409, JSON.stringify(expired.body));
+    assert.match(expired.body.error, /expired/, expired.body.error);
+  });
+
+  await test('the shop sees web and WhatsApp orders in one list', async () => {
+    const list = await authJ('/api/store/orders?status=all');
+    assert.strictEqual(list.status, 200, JSON.stringify(list.body));
+    assert.ok(list.body.length >= 4, JSON.stringify(list.body.map((s) => [s.id, s.channel, s.status])));
+    assert.ok(list.body.every((s) => ['web', 'whatsapp'].includes(s.channel)), 'only orders from other doors');
+    assert.ok(list.body.some((s) => s.channel === 'whatsapp'), 'the WhatsApp order from Phase 25 is in the same list');
+    const unpaid = await authJ('/api/store/orders?status=unpaid');
+    assert.ok(unpaid.body.every((s) => s.status === 'suspended'));
   });
 
   server.close();

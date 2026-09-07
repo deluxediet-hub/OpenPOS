@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Shop · OpenPOS</title>
+<link rel="stylesheet" href="/assets/styles.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0f8a4f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  /* The storefront is a phone page first: the whole shop is one thumb away. */
+  body { background: #f6f7f9; }
+  .store-top { position: sticky; top: 0; z-index: 5; background: #fff; border-bottom: 1px solid var(--line); padding: 12px 14px; }
+  .store-top h1 { font-size: 18px; margin: 0; }
+  .store-top .sub { font-size: 12px; color: var(--muted); }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 12px 14px 120px; }
+  #search { width: 100%; margin-top: 10px; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 12px; }
+  .item { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 6px; }
+  .item .nm { font-weight: 600; font-size: 14px; min-height: 34px; }
+  .item .pr { font-weight: 700; color: var(--green-dark, #0f8a4f); }
+  .item .st { font-size: 12px; color: var(--muted); }
+  .item .st.out { color: var(--red, #c0392b); font-weight: 600; }
+  .item button { margin-top: auto; }
+  .bar { position: fixed; left: 0; right: 0; bottom: 0; background: #fff; border-top: 1px solid var(--line); padding: 10px 14px; display: flex; gap: 10px; align-items: center; justify-content: space-between; z-index: 6; }
+  .bar .tot { font-weight: 700; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-top: 12px; box-shadow: var(--shadow); }
+  .cline { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .qty { display: flex; gap: 6px; align-items: center; }
+  .qty button { width: 28px; height: 28px; padding: 0; line-height: 1; }
+  .muted { color: var(--muted); }
+  .hidden { display: none !important; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #eef2f5; font-size: 12px; }
+  .pill.g { background: #e6f4ec; color: #0f8a4f; }
+  .pill.r { background: #fdecea; color: #c0392b; }
+  @media (max-width: 520px) { #grid { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<div class="store-top">
+  <h1 id="shop-name">Shop</h1>
+  <div class="sub" id="shop-sub">loading…</div>
+  <input id="search" class="inp" placeholder="Search the shop…" autocomplete="off">
+</div>
+
+<div class="wrap">
+  <div id="offline" class="panel hidden">You are offline — showing the last catalogue we saved. Prices are as at that time.</div>
+  <div id="grid"></div>
+  <div class="panel hidden" id="cart-panel">
+    <h3 style="margin-top:0">Your basket</h3>
+    <div id="cart-lines"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+      <strong>Total</strong><strong id="cart-total">Ksh 0</strong>
+    </div>
+    <div class="grid cols-2" style="margin-top:12px">
+      <label class="f"><span>Phone (M-Pesa)</span><input id="phone" class="inp" placeholder="0712 345 678" inputmode="tel" autocomplete="tel"></label>
+      <label class="f"><span>Your name</span><input id="cname" class="inp" placeholder="Optional"></label>
+    </div>
+    <div id="pay-note" class="muted small" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="checkout">Order &amp; pay by M-Pesa</button>
+      <button class="btn ghost" id="cod">Order &amp; pay on collection</button>
+    </div>
+    <div class="msg" id="cart-msg" style="margin-top:8px"></div>
+  </div>
+  <div class="panel hidden" id="order-panel">
+    <h3 style="margin-top:0" id="order-title">Order</h3>
+    <div id="order-body"></div>
+  </div>
+</div>
+
+<div class="bar">
+  <span class="muted small" id="bar-note">Basket empty</span>
+  <span class="tot" id="bar-total">Ksh 0</span>
+  <button class="btn ghost" id="toggle-cart">View basket</button>
+</div>
+
+<script>
+'use strict';
+// ---------------------------------------------------------------------------
+// The storefront. It keeps its own basket in the browser (so a lost connection
+// does not lose the shopping) but asks the shop for the truth before it takes
+// anyone's money: prices, stock and the order all come from the till's engine.
+// ---------------------------------------------------------------------------
+const $ = (s) => document.querySelector(s);
+const KES = (n) => 'Ksh ' + Number(n || 0).toLocaleString('en-KE');
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+let SHOP = {};
+let CAT = [];
+let BASKET = load();
+let TOKEN = localStorage.getItem('openpos.store.token') || '';
+
+function load() { try { return JSON.parse(localStorage.getItem('openpos.store.basket') || '{}'); } catch (_) { return {}; } }
+function save() { localStorage.setItem('openpos.store.basket', JSON.stringify(BASKET)); }
+
+async function api(path, opts) {
+  const r = await fetch(path, {
+    method: (opts && opts.method) || 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    body: opts && opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `request failed (${r.status})`);
+  return data;
+}
+
+async function boot() {
+  try {
+    SHOP = await api('/api/store');
+  } catch (e) {
+    $('#shop-sub').textContent = 'this shop has not switched its online store on yet';
+    return;
+  }
+  $('#shop-name').textContent = SHOP.name || 'Shop';
+  document.title = (SHOP.name || 'Shop') + ' · order online';
+  const bits = [];
+  if (SHOP.branch) bits.push(SHOP.branch);
+  if (SHOP.collection) bits.push('collect in shop');
+  if (SHOP.delivery) bits.push(SHOP.delivery_fee ? `delivery ${KES(SHOP.delivery_fee)}` : 'delivery');
+  if (SHOP.phone) bits.push(SHOP.phone);
+  $('#shop-sub').textContent = bits.join(' · ');
+  if (SHOP.note) $('#pay-note').textContent = SHOP.paybill
+    ? `${SHOP.note} — or pay straight to Paybill ${SHOP.paybill}${SHOP.till ? ', account ' + SHOP.till : ''}.`
+    : SHOP.note;
+  else if (SHOP.paybill) $('#pay-note').textContent = `You can also pay straight to Paybill ${SHOP.paybill}${SHOP.till ? ', account ' + SHOP.till : ''}.`;
+  await refresh();
+}
+
+async function refresh() {
+  try {
+    CAT = await api('/api/store/catalogue?limit=120');
+    $('#offline').classList.toggle('hidden', !navigator.onLine === false || true);
+  } catch (e) {
+    $('#offline').classList.remove('hidden');
+    return;
+  }
+  draw();
+}
+
+function draw() {
+  const q = String($('#search').value || '').trim().toLowerCase();
+  const rows = q ? CAT.filter((r) => (r.name + ' ' + (r.sku || '') + ' ' + (r.brand || '')).toLowerCase().includes(q)) : CAT;
+  $('#grid').innerHTML = rows.map((r) => `
+    <div class="item">
+      <div class="nm">${esc(r.name)}</div>
+      <div class="pr">${KES(r.price)}</div>
+      <div class="st ${r.available <= 0 ? 'out' : ''}">${r.available > 0 ? `${r.available} available` : 'out of stock'}</div>
+      <button class="btn ${r.available > 0 ? '' : 'ghost'}" data-add="${r.variant_id}" ${r.available > 0 ? '' : 'disabled'}>Add</button>
+    </div>`).join('') || '<p class="muted">Nothing matches that. Try another word.</p>';
+  $('#grid').querySelectorAll('[data-add]').forEach((b) => {
+    b.onclick = () => {
+      const id = b.dataset.add;
+      const row = CAT.find((r) => String(r.variant_id) === String(id));
+      const have = Number(BASKET[id] || 0);
+      if (have + 1 > (row ? row.available : 0)) return say('cart-msg', `only ${row ? row.available : 0} of ${row ? row.name : 'that'} is available`, false);
+      BASKET[id] = have + 1; save(); drawCart(); draw();
+    };
+  });
+}
+
+function basketLines() {
+  return Object.keys(BASKET).filter((k) => Number(BASKET[k]) > 0).map((k) => {
+    const row = CAT.find((r) => String(r.variant_id) === String(k)) || { name: 'an item no longer sold', price: 0, available: 0 };
+    return { variant_id: Number(k), qty: Number(BASKET[k]), row };
+  });
+}
+
+function drawCart() {
+  const lines = basketLines();
+  const total = lines.reduce((s, l) => s + l.qty * Number(l.row.price || 0), 0);
+  $('#cart-lines').innerHTML = lines.map((l) => `
+    <div class="cline">
+      <div><div style="font-weight:600">${esc(l.row.name)}</div><div class="muted small">${KES(l.row.price)} each</div></div>
+      <div class="qty">
+        <button class="btn ghost small" data-dec="${l.variant_id}">−</button>
+        <span>${l.qty}</span>
+        <button class="btn ghost small" data-inc="${l.variant_id}">+</button>
+      </div>
+      <div><strong>${KES(l.qty * Number(l.row.price || 0))}</strong></div>
+    </div>`).join('') || '<p class="muted">Your basket is empty.</p>';
+  $('#cart-lines').querySelectorAll('[data-inc]').forEach((b) => { b.onclick = () => bump(b.dataset.inc, 1); });
+  $('#cart-lines').querySelectorAll('[data-dec]').forEach((b) => { b.onclick = () => bump(b.dataset.dec, -1); });
+  $('#cart-total').textContent = KES(total);
+  $('#bar-total').textContent = KES(total);
+  $('#bar-note').textContent = lines.length ? `${lines.reduce((s, l) => s + l.qty, 0)} item(s)` : 'Basket empty';
+  $('#cart-panel').classList.toggle('hidden', !lines.length);
+  $('#toggle-cart').textContent = $('#cart-panel').classList.contains('hidden') ? 'View basket' : 'Hide basket';
+}
+
+function bump(id, by) {
+  const have = Number(BASKET[id] || 0);
+  const row = CAT.find((r) => String(r.variant_id) === String(id));
+  const next = have + by;
+  if (next <= 0) delete BASKET[id];
+  else if (row && next > row.available) return say('cart-msg', `only ${row.available} of ${row.name} is available`, false);
+  else BASKET[id] = next;
+  save(); drawCart(); draw();
+}
+
+function say(id, msg, ok) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.style.color = ok === false ? 'var(--red, #c0392b)' : 'var(--green-dark, #0f8a4f)';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.textContent = ''; }, 6000);
+}
+
+async function order(method) {
+  const phone = String($('#phone').value || '').trim();
+  if (!phone) return say('cart-msg', 'we need your phone number — it is how we send your receipt', false);
+  const items = basketLines().map((l) => ({ variant_id: l.variant_id, qty: l.qty }));
+  if (!items.length) return;
+  try {
+    say('cart-msg', 'putting your order together…', true);
+    const cart = await api('/api/store/cart', {
+      method: 'POST',
+      body: { phone, name: String($('#cname').value || '').trim() || undefined, items, token: TOKEN || undefined }
+    });
+    TOKEN = cart.token;
+    localStorage.setItem('openpos.store.token', TOKEN);
+    const paid = await api('/api/store/checkout', { method: 'POST', body: { token: TOKEN, method, phone } });
+    showOrder(paid.sale, method, paid.message);
+    BASKET = {}; save(); drawCart(); draw();
+    await refresh();
+  } catch (e) {
+    say('cart-msg', e.message, false);
+  }
+}
+
+function showOrder(sale, method, message) {
+  $('#order-panel').classList.remove('hidden');
+  $('#order-title').textContent = `${sale.invoice_no} — ${sale.status === 'paid' ? 'paid' : 'awaiting payment'}`;
+  $('#order-body').innerHTML = `
+    <p>${esc(message || '')}</p>
+    <p class="muted small">${esc(sale.invoice_no)} · ${KES(sale.gross)} · ${esc(method === 'mpesa' ? 'M-Pesa' : 'pay on collection')}</p>
+    <p class="muted small">Keep this page: we will also text your receipt to your phone.</p>`;
+  $('#order-panel').scrollIntoView({ behavior: 'smooth' });
+}
+
+$('#search').oninput = draw;
+$('#toggle-cart').onclick = () => {
+  const hidden = $('#cart-panel').classList.contains('hidden');
+  if (hidden && !basketLines().length) return say('cart-msg', 'nothing in the basket yet', true);
+  $('#cart-panel').classList.toggle('hidden', !hidden);
+  $('#toggle-cart').textContent = hidden ? 'Hide basket' : 'View basket';
+  if (hidden) $('#cart-panel').scrollIntoView({ behavior: 'smooth' });
+};
+$('#checkout').onclick = () => order('mpesa');
+$('#cod').onclick = () => order('cash');
+window.addEventListener('online', refresh);
+
+drawCart();
+boot();
+
+// Make it installable: a shopkeeper's customers can add this to their home
+// screen like any app, with no app store in the way.
+let deferred = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferred = e; });
+</script>
+</body>
+</html>

@@ -59,7 +59,21 @@ async function waitFor(fn, label, timeout = 8000) {
 
   // Phase 24: the shop switches promotions + loyalty on, so the Marketing tab
   // appears the way it would for a shop that asked for it.
-  for (const capability of ['promotions', 'loyalty', 'comms']) {
+  // Phase 26: the shopfront needs an item that is unmistakably its own.
+  for (const body of [
+    { name: 'P26 Store Tea', sku: 'P26TEA', cost: 100, price: 150 }
+  ]) {
+    const r = await fetch(BASE + '/api/products', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', cookie }, body: JSON.stringify(body)
+    });
+    const p = await r.json();
+    await fetch(BASE + '/api/stock/moves', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({ product_id: p.id, qty: 4, type: 'opening', reason: 'opening', unit_cost: 100 })
+    });
+  }
+
+  for (const capability of ['promotions', 'loyalty', 'comms', 'store']) {
     const r = await fetch(BASE + '/api/capabilities', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', cookie },
@@ -193,6 +207,26 @@ async function waitFor(fn, label, timeout = 8000) {
       // the till shows the offer and the customer's points
       ck('the till has a place for offers and points',
         !!pos0.w.document.querySelector('#p-offers') && !!pos0.w.document.querySelector('#p-points'));
+
+      // ---------------- Phase 26: the storefront is a real page ----------------
+      const store = await bootPage('store.html', 'store');
+      await waitFor(() => /P26 Store|Shop/.test(store.w.document.querySelector('#shop-name').textContent),
+        'the storefront named the shop');
+      ck('the storefront boots without script errors', store.errs.length === 0, store.errs.join(' | '));
+      await waitFor(() => store.w.document.querySelector('#grid').textContent.trim(), 'the storefront catalogue', 15000);
+      ck('the storefront lists what the shop sells',
+        /P26 Store Tea/.test(store.w.document.querySelector('#grid').textContent),
+        store.w.document.querySelector('#grid').textContent.slice(0, 120));
+      ck('the storefront says how much is left',
+        /available/.test(store.w.document.querySelector('#grid').textContent),
+        store.w.document.querySelector('#grid').textContent.slice(0, 120));
+      const addBtn = store.w.document.querySelector('#grid [data-add]');
+      click(store.w, addBtn);
+      await waitFor(() => /Ksh/.test(store.w.document.querySelector('#bar-total').textContent)
+        && store.w.document.querySelector('#bar-total').textContent.trim() !== 'Ksh 0', 'the basket total', 8000);
+      ck('adding an item shows a total in the basket bar', true,
+        store.w.document.querySelector('#bar-total').textContent);
+      store.w.close();
 
       // ---------------- Phase 25: messages from the same screen ----------------
       await waitFor(() => mw.document.querySelector('#mk-msg-rows'), 'the messages table');
