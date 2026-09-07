@@ -1538,6 +1538,23 @@ function migrate(d) {
   )`);
   d.exec(`CREATE INDEX IF NOT EXISTS idx_devices_scope ON devices(location_id, type, active);`);
 
+  // ---- Phase 28 Day 40: security, audit & fraud controls --------------------
+  // Every sign-in, good or bad, is a fact the owner may need: who tried, when,
+  // from where, and whether they got in.
+  d.exec(`CREATE TABLE IF NOT EXISTS login_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
+    user_id INTEGER,
+    name TEXT NOT NULL DEFAULT '',
+    ok INTEGER NOT NULL DEFAULT 0,
+    reason TEXT NOT NULL DEFAULT '',
+    ip TEXT NOT NULL DEFAULT '',
+    user_agent TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  )`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_login_events_time ON login_events(created_at DESC);`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_login_events_user ON login_events(user_id, created_at DESC);`);
+
   // ---- Phase 25: WhatsApp & customer commerce --------------------------------
   // Every sale knows the door it came in by (R-CH): the till, an offline queue,
   // a WhatsApp order or the web store. Same engine, one inventory, one book.

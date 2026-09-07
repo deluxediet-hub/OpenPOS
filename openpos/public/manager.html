@@ -1234,6 +1234,65 @@
       </div>
     </section>
 
+    <!-- ============ EVIDENCE (Phase 28) ============ -->
+    <section id="tab-evidence" class="hidden">
+      <div class="card">
+        <div class="row" style="margin-bottom:8px">
+          <h3 style="margin:0">Evidence — does every shilling leave a trail?</h3>
+          <span class="spacer"></span>
+          <button class="btn ghost small" id="ev-reload">Reload</button>
+        </div>
+        <p class="muted small" style="margin:0 0 10px">Not "we log things" — reconciled. The shop counts what really happened
+          (voids, adjustments, refunds, discounts, credit…) and checks each one has an audit row to answer for it.</p>
+        <div id="ev-trail"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h3>Sign-ins &amp; locks</h3>
+        <div class="grid cols-2">
+          <div>
+            <table>
+              <thead><tr><th>When</th><th>Who</th><th>Result</th></tr></thead>
+              <tbody id="ev-logins"></tbody>
+            </table>
+          </div>
+          <div>
+            <table>
+              <thead><tr><th>Locked</th><th>Tries</th><th>Free in</th></tr></thead>
+              <tbody id="ev-locks"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h3>Open sessions</h3>
+        <p class="muted small" style="margin:0 0 8px">A till left signed in is a till anyone can use. Revoke the ones you do not recognise.</p>
+        <table>
+          <thead><tr><th>Who</th><th>Role</th><th>Signed in</th><th>Expires</th><th></th></tr></thead>
+          <tbody id="ev-sessions"></tbody>
+        </table>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h3>Security settings</h3>
+        <div class="grid cols-3">
+          <label class="f"><span>Lock after (wrong PINs)</span><input id="ev-max-fails" type="number" min="2" max="20"></label>
+          <label class="f"><span>Locked for (minutes)</span><input id="ev-lock-mins" type="number" min="1" max="120"></label>
+          <label class="f"><span>Session lasts (hours)</span><input id="ev-session-hours" type="number" min="1" max="72"></label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label class="check"><input type="checkbox" id="ev-secure-cookies"> <span>HTTPS-only cookies (when the till is served over HTTPS)</span></label>
+          <label class="f" style="flex:1"><span>Backup passphrase</span><input id="ev-passphrase" type="password" placeholder="leave blank to keep the current one"></label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="ev-save">Save security</button>
+          <a class="btn ghost" href="/api/admin/backup.bin" target="_blank" rel="noopener">Download backup</a>
+          <div class="msg" id="ev-msg" style="margin:0"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ AUDIT ============ -->
     <!-- ============ MODULE PANELS (Phase 18) ============ -->
     <!-- Industry modules mount themselves here. No page edit per industry. -->
@@ -1405,6 +1464,7 @@ const TABS = [
   { id: 'marketing',  label: 'marketing',  cap: ['promotions', 'loyalty'] },
   { id: 'finance',    label: 'finance',    always: true },
   { id: 'reports',    label: 'reports',    always: true },
+  { id: 'evidence', label: 'evidence', always: true },
   { id: 'integrations', label: 'kenya', always: true },
   { id: 'sync', label: 'Sync', always: true },
   { id: 'staff',      label: 'staff',     cap: 'staff_roles' },
@@ -1462,6 +1522,7 @@ function selectTab(name) {
     if (sec) sec.classList.toggle('hidden', tb.id !== name);
   });
   if (name === 'settings') loadSettings();
+  if (name === 'evidence') loadEvidence();
   if (name === 'audit') loadAudit();
   if (name === 'staff') loadStaff();
   if (name === 'layout') loadLayout();
@@ -3475,6 +3536,76 @@ async function saveStoreSettings() {
   }
 }
 
+// ---------- evidence & security (Phase 28) ----------
+async function loadEvidence() {
+  const trail = await api('/api/audit/trail').catch(() => null);
+  const ev = $('#ev-trail');
+  if (trail) {
+    const pill = (ok) => (ok ? '<span class="pill g">trailed</span>' : '<span class="pill r">MISSING</span>');
+    ev.innerHTML = `
+      <p class="small ${trail.ok ? '' : 'muted'}" style="margin:0 0 8px">
+        <b>${trail.ok ? 'Everything that moved money left a trail.' : `${trail.untrailed.length} thing(s) happened with no trail.`}</b>
+        · ${trail.checks.filter((c) => c.trailed > 0).length} of ${trail.checks.length} checks have evidence in this window
+        ${trail.anonymous_rows ? ` · ${trail.anonymous_rows} row(s) with nobody named on them` : ''}
+      </p>
+      <table>
+        <thead><tr><th>What happened</th><th class="mono">In the books</th><th class="mono">With a trail</th><th></th></tr></thead>
+        <tbody>
+          ${trail.checks.map((c) => `
+            <tr>
+              <td>${esc(c.label)}</td>
+              <td class="mono">${c.expected}</td>
+              <td class="mono">${c.trailed}</td>
+              <td>${pill(c.ok)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } else {
+    ev.innerHTML = '<p class="muted">the trail report is not available to this user</p>';
+  }
+
+  const logins = await api('/api/security/logins?limit=25').catch(() => []);
+  $('#ev-logins').innerHTML = logins.map((l) => `
+    <tr>
+      <td class="small muted">${new Date(l.created_at).toLocaleString()}</td>
+      <td>${esc(l.name || 'unknown')}</td>
+      <td>${l.ok ? '<span class="pill g">signed in</span>' : `<span class="pill r">${esc(l.reason || 'refused')}</span>`}</td>
+    </tr>`).join('') || '<tr><td colspan="3" class="muted">no sign-ins recorded yet</td></tr>';
+
+  const locks = await api('/api/security/locks').catch(() => []);
+  $('#ev-locks').innerHTML = locks.map((l) => `
+    <tr>
+      <td>${esc(l.who || l.kind)}</td>
+      <td class="mono">${l.fails}</td>
+      <td>${l.locked_for_ms > 0 ? `${Math.ceil(l.locked_for_ms / 60000)} min` : '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="3" class="muted">nobody is locked out</td></tr>';
+
+  const sessions = await api('/api/security/sessions').catch(() => []);
+  $('#ev-sessions').innerHTML = sessions.map((s2) => `
+    <tr>
+      <td>${esc(s2.user)}</td>
+      <td class="small muted">${esc(s2.role)}</td>
+      <td class="small muted">${new Date(s2.created_at).toLocaleString()}</td>
+      <td class="small muted">${new Date(s2.expires_at).toLocaleString()}${s2.expired ? ' <span class="pill r">expired</span>' : ''}</td>
+      <td><button class="btn ghost small" data-revoke="${esc(s2.token_hint.replace('\u2026', ''))}">Revoke</button></td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">no open sessions</td></tr>';
+  $('#ev-sessions').querySelectorAll('[data-revoke]').forEach((b) => {
+    b.onclick = async () => {
+      try {
+        await api(`/api/security/sessions/${b.dataset.revoke}/revoke`, { method: 'POST', body: {} });
+        toast($('#ev-msg'), 'session revoked', true);
+        await loadEvidence();
+      } catch (e) { toast($('#ev-msg'), e.message, false); }
+    };
+  });
+
+  const cfg = await api('/api/settings/security').catch(() => ({}));
+  $('#ev-max-fails').value = (cfg.lockout || {}).max_fails || 5;
+  $('#ev-lock-mins').value = (cfg.lockout || {}).lock_minutes || 5;
+  $('#ev-session-hours').value = cfg.session_hours || 12;
+  $('#ev-secure-cookies').checked = !!cfg.secure_cookies;
+}
+
 // ---------- devices (Phase 27) ----------
 function devProfileText(p) {
   const bits = [];
@@ -3589,6 +3720,22 @@ async function loadSettings() {
 
 $('#st-store-save').onclick = saveStoreSettings;
 $('#dev-reload').onclick = loadDevices;
+$('#ev-reload').onclick = loadEvidence;
+$('#ev-save').onclick = async () => {
+  try {
+    await api('/api/settings/security', {
+      method: 'PUT',
+      body: {
+        lockout: { max_fails: Number($('#ev-max-fails').value) || 5, lock_minutes: Number($('#ev-lock-mins').value) || 5 },
+        session_hours: Number($('#ev-session-hours').value) || 12,
+        secure_cookies: $('#ev-secure-cookies').checked,
+        backup: { encrypt: !!$('#ev-passphrase').value }
+      }
+    });
+    $('#ev-passphrase').value = '';
+    toast($('#ev-msg'), 'security saved', true);
+  } catch (e) { toast($('#ev-msg'), e.message, false); }
+};
 $('#dev-add').onclick = async () => {
   try {
     await api('/api/devices', {

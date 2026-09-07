@@ -4159,6 +4159,144 @@ const commsLib = require('../lib/comms');
     assert.strictEqual(back.body.last_error, null);
   });
 
+
+  // ================= Phase 28 — security, audit & fraud controls ============
+  // Acceptance: every financially important action leaves a trail — reconciled
+  // against the books, not merely recorded when we remembered to.
+  section('Phase 28 — evidence: anything that moves money leaves a trail');
+
+  await test('sign-ins are history: good, bad and locked-out', async () => {
+    const ok = await J({ path: '/api/login', method: 'POST', body: { name: 'Owner One', pin: '1234' } });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const bad = await J({ path: '/api/login', method: 'POST', body: { name: 'Owner One', pin: '0000' } });
+    assert.strictEqual(bad.status, 401, JSON.stringify(bad.body));
+    assert.ok(bad.body.fails >= 1, 'the shop counts the tries');
+    const hist = await authJ('/api/security/logins?limit=50');
+    assert.strictEqual(hist.status, 200, JSON.stringify(hist.body));
+    assert.ok(hist.body.some((e) => e.ok === 1 && e.name === 'Owner One'), 'a good sign-in is remembered');
+    assert.ok(hist.body.some((e) => e.ok === 0 && /wrong PIN/.test(e.reason)), 'and so is a wrong PIN');
+    const fails = await authJ('/api/security/logins?ok=false&limit=50');
+    assert.ok(fails.body.every((e) => e.ok === 0));
+  });
+
+  await test('a thief hammering the PIN is locked out — and the shop can see it', async () => {
+    for (let i = 0; i < 6; i++) {
+      await J({ path: '/api/login', method: 'POST', body: { name: 'Thief', pin: '0000' } });
+    }
+    const locked = await J({ path: '/api/login', method: 'POST', body: { name: 'Thief', pin: '0000' } });
+    assert.strictEqual(locked.status, 429, JSON.stringify(locked.body));
+    const locks = await authJ('/api/security/locks');
+    assert.strictEqual(locks.status, 200, JSON.stringify(locks.body));
+    assert.ok(locks.body.some((l) => l.locked_for_ms > 0), `nothing is locked: ${JSON.stringify(locks.body)}`);
+    assert.ok(locks.body.some((l) => l.kind === 'name' && l.who === 'thief' && l.fails >= 3),
+      `the thief's name is not marked: ${JSON.stringify(locks.body)}`);
+    const ev = await authJ('/api/security/logins?ok=false&limit=20');
+    assert.ok(ev.body.some((e) => /locked/.test(e.reason)), JSON.stringify(ev.body.slice(0, 3)));
+  });
+
+  await test('financial acts are reconciled: 7 things happen, 7 trails exist', async () => {
+    const from = new Date(Date.now() - 3600e3).toISOString();
+    // 1. a discounted sale
+    const p = await mkP({ name: 'P28 Item', sku: 'P28A', cost: 100, price: 200 }, 8);
+    const sale = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p.vid, qty: 1, discount: 20 }], payment: { method: 'cash', amount: 180 }
+    } });
+    assert.strictEqual(sale.status, 200, JSON.stringify(sale.body));
+    // 2. a stock adjustment by hand
+    const adj = await authJ({ path: '/api/stock/moves', method: 'POST', body: { variant_id: p.vid, qty: -1, type: 'adjustment', reason: 'damage', note: 'spillage' } });
+    assert.strictEqual(adj.status, 200, JSON.stringify(adj.body));
+    // 3. a voided sale
+    const s2 = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: p.vid, qty: 1 }], payment: { method: 'cash', amount: 200 } } });
+    const voided = await authJ({ path: `/api/sales/${s2.body.sale.id}/void`, method: 'POST', body: { note: 'customer changed mind' } });
+    assert.strictEqual(voided.status, 200, JSON.stringify(voided.body));
+    // 4. staff created
+    const staff = await authJ({ path: '/api/staff', method: 'POST', body: { name: 'P28 Cashier', pin: '4321', role: 'cashier' } });
+    assert.strictEqual(staff.status, 200, JSON.stringify(staff.body));
+    // 5. a setting changed
+    const setting = await authJ({ path: '/api/settings', method: 'PUT', body: { business: { name: 'Test Traders' } } });
+    assert.strictEqual(setting.status, 200, JSON.stringify(setting.body));
+    // 6. a refund
+    const refund = await authJ({ path: `/api/payments/${sale.body.payments[0].id}/refund`, method: 'POST', body: { amount: 20, reason: 'overcharge' } });
+    assert.ok([200, 404].includes(refund.status), JSON.stringify(refund.body));
+    // 7. credit (deni) — a customer owes the shop
+    const cust = await authJ({ path: '/api/customers', method: 'POST', body: { name: 'P28 Deni', phone: '0733000111' } });
+    const credit = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p.vid, qty: 1 }], customer_id: cust.body.customer.id, credit: true
+    } });
+    assert.ok([200, 400].includes(credit.status), JSON.stringify(credit.body));
+
+    const trail = await authJ(`/api/audit/trail?from=${encodeURIComponent(from)}`);
+    assert.strictEqual(trail.status, 200, JSON.stringify(trail.body));
+    const gaps = trail.body.checks.filter((c) => !c.ok);
+    assert.strictEqual(trail.body.ok, true, `untrailed: ${JSON.stringify(gaps)}`);
+    // the specific ones this test performed must all be trailed
+    for (const id of ['sale_voided', 'stock_adjusted', 'discount_given', 'staff_changed', 'settings_changed']) {
+      const c = trail.body.checks.find((x) => x.id === id);
+      assert.ok(c && c.ok, `${id}: ${JSON.stringify(c)}`);
+      assert.ok(c.trailed > 0, `${id} has evidence: ${JSON.stringify(c)}`);
+    }
+  });
+
+  await test('the trail report names what it looked at, and flags anonymous rows', async () => {
+    const trail = await authJ('/api/audit/trail');
+    assert.strictEqual(trail.status, 200, JSON.stringify(trail.body));
+    assert.ok(trail.body.classes.length >= 10, 'the report groups the book by what matters');
+    assert.ok(trail.body.checks.length >= 8, 'and reconciles each one');
+    assert.ok('anonymous_rows' in trail.body, 'rows with nobody attached are counted');
+    assert.ok(trail.body.window.from && trail.body.window.to);
+    const classes = await authJ('/api/audit/classes');
+    assert.strictEqual(classes.status, 200);
+    assert.ok(classes.body.some((c) => c.id === 'void' && c.events > 0), 'voids are visible as their own class');
+  });
+
+  await test('sessions are visible and revocable', async () => {
+    const s = await authJ('/api/security/sessions');
+    assert.strictEqual(s.status, 200, JSON.stringify(s.body));
+    assert.ok(s.body.length >= 1, 'the owner is signed in somewhere');
+    assert.ok(s.body.every((x) => x.token_hint && !x.token), 'the token itself is never shown');
+    const victim = s.body[0];
+    const revoke = await authJ({ path: `/api/security/sessions/${victim.token_hint.replace('…', '')}/revoke`, method: 'POST', body: {} });
+    assert.strictEqual(revoke.status, 200, JSON.stringify(revoke.body));
+    assert.strictEqual(revoke.body.revoked, 1, 'one session, revoked');
+  });
+
+  await test('the permission re-audit lists every hand on the till', async () => {
+    const r = await authJ('/api/security/permissions');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.length >= 2, JSON.stringify(r.body));
+    assert.ok(r.body.some((u) => u.role === 'owner'), 'the owner is on the list');
+    assert.ok('overrides' in r.body[0], 'and any permission granted outside the role is named');
+    const cashier = r.body.find((u) => u.name === 'P28 Cashier');
+    assert.ok(cashier, `the cashier we added is on the list: ${JSON.stringify(r.body.map((u) => [u.id, u.name, u.role]))}`);
+  });
+
+  await test('security settings: lockout, session length, encrypted backup', async () => {
+    const put = await authJ({ path: '/api/settings/security', method: 'PUT', body: {
+      lockout: { max_fails: 3, lock_minutes: 10 },
+      session_hours: 8,
+      secure_cookies: true,
+      backup: { encrypt: true, passphrase: 'jikoni-mwitu' }
+    } });
+    assert.strictEqual(put.status, 200, JSON.stringify(put.body));
+    assert.strictEqual(put.body.lockout.max_fails, 3);
+    assert.strictEqual(put.body.session_hours, 8);
+    assert.strictEqual(put.body.backup.encrypt, true);
+    assert.strictEqual(put.body.backup.passphrase_set, true);
+    const get = await authJ('/api/settings/security');
+    assert.strictEqual(get.body.secure_cookies, true);
+    // the backup really is encrypted, and only opens with the passphrase
+    const secLib = require('../lib/security');
+    const original = Buffer.from('a shop database');
+    const sealed = secLib.encrypt(original, 'jikoni-mwitu');
+    assert.ok(sealed.slice(0, 5).toString() === 'OPBK1', 'the file says it is sealed');
+    assert.ok(!sealed.includes('a shop database'), 'the contents are not readable');
+    assert.strictEqual(secLib.decrypt(sealed, 'jikoni-mwitu').toString(), 'a shop database');
+    assert.throws(() => secLib.decrypt(sealed, 'wrong'), /passphrase/);
+    assert.throws(() => secLib.decrypt(sealed, ''), /encrypted/);
+    const bin = await J('/api/admin/backup.bin');
+    assert.strictEqual(bin.status, 401, 'the backup needs a signed-in owner');
+  });
+
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 

@@ -236,6 +236,27 @@ async function waitFor(fn, label, timeout = 8000) {
         /rendered \d+ bytes/.test(mw.document.querySelector('#dev-msg').textContent),
         mw.document.querySelector('#dev-msg').textContent.slice(0, 120));
 
+      // ---------------- Phase 28: the owner can read the evidence -------------
+      const evTab = [...mw.document.querySelectorAll('#tabs button')].find((b) => /evidence/i.test(b.textContent));
+      ck('an Evidence tab appears — the trail belongs to the owner', !!evTab,
+        [...mw.document.querySelectorAll('#tabs button')].map((b) => b.textContent.trim()).join(' | '));
+      if (evTab) {
+        click(mw, evTab);
+        await waitFor(() => mw.document.querySelector('#ev-trail') && mw.document.querySelector('#ev-trail').textContent.trim(),
+          'the trail report', 15000);
+        ck('the trail report says whether every shilling left a trail',
+          /left a trail|no trail/.test(mw.document.querySelector('#ev-trail').textContent),
+          mw.document.querySelector('#ev-trail').textContent.slice(0, 120));
+        await waitFor(() => mw.document.querySelector('#ev-logins').textContent.trim(), 'the sign-in history', 15000);
+        ck('sign-ins are listed with who and what happened',
+          /signed in|refused|wrong PIN/.test(mw.document.querySelector('#ev-logins').textContent),
+          mw.document.querySelector('#ev-logins').textContent.slice(0, 120));
+        await waitFor(() => mw.document.querySelector('#ev-sessions').textContent.trim(), 'the sessions table', 15000);
+        ck('open sessions are listed so a lost till can be revoked',
+          /Revoke/.test(mw.document.querySelector('#ev-sessions').textContent),
+          mw.document.querySelector('#ev-sessions').textContent.slice(0, 120));
+      }
+
       // ---------------- Phase 26: the storefront is a real page ----------------
       const store = await bootPage('store.html', 'store');
       await waitFor(() => /P26 Store|Shop/.test(store.w.document.querySelector('#shop-name').textContent),

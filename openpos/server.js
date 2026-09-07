@@ -730,6 +730,94 @@ function createApp(d) {
     next();
   };
 
+  // ================= Phase 28 — security, audit & fraud controls ============
+  // Philosophy: anything financially important leaves evidence. These routes
+  // are how an owner reads that evidence — and how the shop locks itself.
+
+  const sec = require('./lib/security');
+
+  // Every sign-in attempt is recorded, good or bad, with where it came from.
+  const origLogin = app._router ? null : null; // (the login route is patched below)
+
+  app.get('/api/audit/classes', me, can('audit.view'), (req, res) => {
+    res.json(sec.trailCheck(d, { from: (req.query || {}).from, to: (req.query || {}).to }).classes);
+  });
+
+  /**
+   * The trail report: for every financially important thing that happened in
+   * the window, is there an audit row to answer for it? Reconciled, not hoped.
+   */
+  app.get('/api/audit/trail', me, can('audit.view'), (req, res) => {
+    res.json(sec.trailCheck(d, { from: (req.query || {}).from, to: (req.query || {}).to }));
+  });
+
+  app.get('/api/security/logins', me, can('audit.view'), (req, res) => {
+    const q = req.query || {};
+    res.json(sec.loginEvents(d, {
+      limit: Number(q.limit) || 100,
+      ok: q.ok === undefined ? null : String(q.ok) !== 'false',
+      userId: numOrNull(q.user_id),
+      since: q.since || null
+    }));
+  });
+
+  app.get('/api/security/locks', me, can('audit.view'), (req, res) => {
+    res.json(sec.lockState(d).filter((l) => l.locked_for_ms > 0 || l.fails > 0));
+  });
+
+  app.get('/api/security/sessions', me, can('audit.view'), (req, res) => {
+    res.json(sec.sessions(d, { userId: numOrNull((req.query || {}).user_id) }));
+  });
+
+  app.post('/api/security/sessions/:token/revoke', me, can('staff.manage'), (req, res) => {
+    const n = sec.revokeSession(d, req.params.token);
+    dbm.audit(d, { userId: req.user.id, action: 'auth/revoke', entity: 'session', entityId: String(req.params.token).slice(0, 6), detail: { revoked: n } });
+    res.json({ ok: true, revoked: n });
+  });
+
+  /** The permission re-audit: every hand on the till, and what it can do. */
+  app.get('/api/security/permissions', me, can('staff.permissions'), (req, res) => {
+    res.json(sec.permissionAudit(d, perms.PERMISSIONS));
+  });
+
+  app.get('/api/settings/security', me, can('settings.manage'), (req, res) => {
+    res.json(sec.settings(d, dbm));
+  });
+
+  app.put('/api/settings/security', me, can('settings.manage'), (req, res) => {
+    const b = req.body || {};
+    const next = sec.saveSettings(d, dbm, {
+      session_hours: b.session_hours !== undefined ? Math.max(1, Math.min(72, Number(b.session_hours) || 12)) : undefined,
+      secure_cookies: b.secure_cookies !== undefined ? !!b.secure_cookies : undefined,
+      require_reason_on_adjust: b.require_reason_on_adjust !== undefined ? !!b.require_reason_on_adjust : undefined,
+      branch_scope_enforced: b.branch_scope_enforced !== undefined ? !!b.branch_scope_enforced : undefined,
+      lockout: b.lockout ? { max_fails: Number(b.lockout.max_fails) || 5, lock_minutes: Number(b.lockout.lock_minutes) || 5 } : undefined,
+      https: b.https ? { enabled: !!b.https.enabled, cert: String(b.https.cert || ''), key: String(b.https.key || ''), port: Number(b.https.port) || 443 } : undefined,
+      backup: b.backup && b.backup.passphrase ? { encrypt: true, passphrase_set: true } : (b.backup ? { encrypt: !!b.backup.encrypt, passphrase_set: !!b.backup.passphrase_set } : undefined)
+    });
+    if (b.backup && b.backup.passphrase) dbm.setSetting(d, 'backup_passphrase', String(b.backup.passphrase));
+    dbm.audit(d, {
+      userId: req.user.id, action: 'settings/security', entity: 'setting', entityId: 'security',
+      detail: { secure_cookies: next.secure_cookies, session_hours: next.session_hours, backup_encrypt: next.backup.encrypt }
+    });
+    res.json(next);
+  });
+
+  /** An encrypted backup: a copy on a borrowed laptop is useless to a thief. */
+  app.get('/api/admin/backup.bin', me, can('settings.manage'), (req, res) => {
+    try {
+      const cfg = sec.settings(d, dbm);
+      const pass = dbm.getSetting(d, 'backup_passphrase', null);
+      const raw = fs.readFileSync(dbm.DB_PATH);
+      const out = cfg.backup.encrypt ? sec.encrypt(raw, pass) : raw;
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${new Date().toISOString().slice(0, 10)}-openpos${cfg.backup.encrypt ? '.opbk' : '.db'}"`);
+      res.send(out);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ================= Phase 27 — devices & peripherals =======================
   // Peripherals are replaceable, not proprietary: a register points at a device
   // ROW, and swapping the row swaps the kit. Nothing above this block knows a
@@ -1776,6 +1864,8 @@ function createApp(d) {
 
     const { ownerId } = run();
     const token = auth.createSession(d, ownerId);
+    // Phase 28: the shop's very first sign-in is a sign-in like any other.
+    sec.recordLogin(d, { userId: ownerId, name: owner.name, ok: true, reason: 'first sign-in at setup', ip: auth.clientIp(req), agent: String((req.headers || {})['user-agent'] || '').slice(0, 200) });
     res.setHeader('Set-Cookie', auth.sessionCookie(token, auth.SESSION_HOURS * 3600e3));
     const user = d.prepare('SELECT * FROM users WHERE id = ?').get(ownerId);
     res.json({ ok: true, user: publicUser(user) });
@@ -1789,6 +1879,7 @@ function createApp(d) {
 
   app.post('/api/login', (req, res) => {
     const ip = auth.clientIp(req);
+    const agent = String((req.headers || {})['user-agent'] || '').slice(0, 200);
     const name = String((req.body && req.body.name) || '').trim();
     const pin = String((req.body && req.body.pin) || '');
     if (!name) return res.status(400).json({ error: 'select staff member' });
@@ -1797,6 +1888,8 @@ function createApp(d) {
     const byIp = auth.isLocked(d, 'ip', ip);
     if (byName || byIp) {
       const ms = Math.max(byName || 0, byIp || 0);
+      // Phase 28: a refused attempt is a fact the owner may need later.
+      sec.recordLogin(d, { name, ok: false, reason: 'locked out', ip, agent });
       return res.status(429).json({ error: `locked — try again in ${Math.ceil(ms / 60000)} min` });
     }
 
@@ -1805,6 +1898,8 @@ function createApp(d) {
       const r1 = auth.recordFail(d, 'name', name);
       const r2 = auth.recordFail(d, 'ip', ip);
       const locked = r1.locked || r2.locked;
+      sec.recordLogin(d, { userId: user ? user.id : null, name, ok: false, reason: locked ? 'locked after too many tries' : 'wrong PIN', ip, agent });
+      if (locked) dbm.audit(d, { userId: user ? user.id : null, action: 'auth/lockout', entity: 'user', entityId: name, detail: { ip, fails: Math.max(r1.fails, r2.fails) } });
       return res.status(401).json({
         error: locked ? 'locked — too many attempts, try again in 5 min' : 'wrong PIN',
         fails: Math.max(r1.fails, r2.fails), max: auth.MAX_FAILS
@@ -1815,7 +1910,8 @@ function createApp(d) {
     auth.clearFails(d, 'ip', ip);
     const token = auth.createSession(d, user.id);
     d.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), user.id);
-    dbm.audit(d, { userId: user.id, action: 'auth/login', entity: 'user', entityId: String(user.id) });
+    sec.recordLogin(d, { userId: user.id, name: user.name, ok: true, reason: '', ip, agent });
+    dbm.audit(d, { userId: user.id, action: 'auth/login', entity: 'user', entityId: String(user.id), detail: { ip } });
     res.setHeader('Set-Cookie', auth.sessionCookie(token, auth.SESSION_HOURS * 3600e3));
     res.json({ user: publicUser(user) });
   });

@@ -532,7 +532,33 @@ refunds, stock adjustments, voids/deletions, cash variance), branch restrictions
 option, backup encryption.
 **Philosophy: anything financially important leaves evidence.**
 - **Acceptance:** 50-scenario financial-action audit finds no action without a trail.
+### Phase 28 — Security, Audit & Fraud Controls · Day 40
+Deep pass: audit log review, login history + failed-login detection, device sessions,
+permission re-audit, approval workflows, **dedicated logs** (price overrides, discounts,
+refunds, stock adjustments, voids/deletions, cash variance), branch restrictions, HTTPS
+option, backup encryption.
+**Philosophy: anything financially important leaves evidence.**
+- **Acceptance:** 50-scenario financial-action audit finds no action without a trail.
 
+
+**Status (2026-09-07): done.** *Anything financially important leaves evidence* — and the evidence is **reconciled**, not assumed. `GET /api/audit/trail` does not ask whether we remembered to write an audit row; it counts what actually happened in the window and checks each thing has a row to answer for it:
+
+| what happened | counted in | must have a trail |
+|---|---|---|
+| a sale was voided | `sales.status='voided'` | `sale/void` |
+| stock was adjusted by hand | `stock_moves.type='adjustment'` | `stock/adjust` |
+| money was handed back | `payments.refunded` | `payment/refund` \| `return/` |
+| a sale was discounted | `sales.discount > 0` | `sale/create` \| `sale/discount` |
+| goods left on credit | `customer_ledger` | `credit/` \| `deni/` |
+| staff added or changed | `users` | `staff/` \| `user/` |
+| a shift was closed | `shifts.closed_at` | `shift/close` |
+| a setting was changed · a module toggled · an order arrived from another door | audit | its own row |
+
+The report answers in one sentence — "Everything that moved money left a trail" — or names the gap. Rows with nobody attached are counted too, because an anonymous financial act is the one you cannot ask about later.
+
+Sign-ins: `login_events` records every attempt — good, wrong-PIN or locked-out — with IP and user agent, including the shop's very first sign-in at setup; `/api/security/locks` shows who is being hammered and for how long. Sessions are listable and revocable (the token itself is never shown, only a hint). The **permission re-audit** names every hand on the till, its role, when it last signed in and any permission granted outside that role. A backup can be sealed with AES-256-GCM, so a copy left on a borrowed laptop is useless without the passphrase.
+
+Lockout threshold and duration, session length, HTTPS-only cookies and backup encryption are **settings, not code**. The Manager's **Evidence** tab shows all of it. 208 API tests, 29 UI steps.
 ### Phase 29 — Owner Intelligence · Days 41–42
 Decision-making layer on real data: what's tying up the most cash (stock × cost × age) ·
 which branch underperforms (vs its own history) · actual profit yesterday · why is variance
