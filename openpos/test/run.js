@@ -4052,6 +4052,113 @@ const commsLib = require('../lib/comms');
     assert.ok(unpaid.body.every((s) => s.status === 'suspended'));
   });
 
+
+  // ================= Phase 27 — devices & peripherals =======================
+  // Acceptance: hardware is replaced by CONFIG, not by code; a shelf label
+  // carries the shelf price.
+  section('Phase 27 — devices: swap the row, keep the shop');
+
+  const p27 = {};
+  const b64 = (s) => Buffer.from(String(s), 'base64').toString('latin1');
+
+  await test('a counter printer is a row of data, with a driver chosen from a list', async () => {
+    const r = await authJ({ path: '/api/devices', method: 'POST', body: { type: 'printer', name: 'Counter 1', driver: 'escpos', profile: { width: 80, drawer: true } } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    p27.printer = r.body.id;
+    assert.strictEqual(r.body.profile.width, 80);
+    assert.strictEqual(r.body.profile.cut, true, 'a sensible default profile is filled in');
+    assert.strictEqual(r.body.status, 'untested');
+    const bad = await authJ({ path: '/api/devices', method: 'POST', body: { type: 'telepathy' } });
+    assert.strictEqual(bad.status, 400);
+    const badDriver = await authJ({ path: '/api/devices', method: 'POST', body: { type: 'printer', driver: 'crystal' } });
+    assert.strictEqual(badDriver.status, 400);
+  });
+
+  await test('a device test proves the profile before a customer is waiting', async () => {
+    const r = await authJ({ path: `/api/devices/${p27.printer}/test`, method: 'POST', body: {} });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.bytes > 100, 'a real payload was rendered');
+    const txt = b64(r.body.base64);
+    assert.ok(txt.includes('Printer test'), 'the test page says what it is');
+    assert.ok(txt.includes('TOTAL'), txt.slice(0, 80));
+    assert.ok(/\x1bp/.test(txt), 'the drawer kick is in the payload');
+    assert.ok(/\x1dV/.test(txt), 'the cut is in the payload');
+    const after = await authJ('/api/devices');
+    assert.strictEqual(after.body.find((x) => x.id === p27.printer).status, 'ok', 'the device remembers that it worked');
+  });
+
+  await test('the same sale prints on whichever printer the counter points at', async () => {
+    const sale = await authJ({ path: '/api/sales', method: 'POST', body: {
+      items: [{ variant_id: p26.tea.vid, qty: 1 }], customer_id: null, payment: { method: 'cash', amount: 150 }
+    } });
+    assert.strictEqual(sale.status, 200, JSON.stringify(sale.body));
+    p27.sale = sale.body.sale.id;
+    const r = await authJ(`/api/sales/${p27.sale}/receipt-bytes`);
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const txt = b64(r.body.base64);
+    assert.ok(txt.includes(sale.body.sale.invoice_no), 'the receipt carries its own invoice');
+    assert.ok(/Ksh 150/.test(txt), 'and the total the customer paid');
+    assert.ok(txt.includes('Asante') || txt.includes('Test Traders'), txt.slice(0, 60));
+    // swap the printer by CONFIG: a 58mm label-class device with no drawer
+    const swapped = await authJ({ path: '/api/devices', method: 'POST', body: { type: 'printer', name: 'Handheld 58', driver: 'log', profile: { width: 58, chars: 32, drawer: false }, is_default: true } });
+    assert.strictEqual(swapped.status, 200, JSON.stringify(swapped.body));
+    const again = await authJ(`/api/sales/${p27.sale}/receipt-bytes`);
+    assert.strictEqual(again.status, 200, JSON.stringify(again.body));
+    assert.strictEqual(again.body.driver, 'log', 'the counter now prints through the new device');
+    const txt2 = b64(again.body.base64);
+    assert.ok(!/\x1bp/.test(txt2), 'and the new profile says: no drawer');
+    assert.ok(again.body.profile.chars === 32);
+    // put the shop back
+    await authJ({ path: `/api/devices/${swapped.body.id}`, method: 'PUT', body: { active: false } });
+  });
+
+  await test('a shelf label carries the price on the shelf — not a remembered one', async () => {
+    const p = await mkP({ name: 'P27 Label Tea', sku: 'P27TEA', barcode: '555111', cost: 120, price: 200 }, 5);
+    const lab = await authJ({ path: '/api/devices', method: 'POST', body: { type: 'label', name: 'Shelf labels', driver: 'escpos', profile: { chars: 32 } } });
+    assert.strictEqual(lab.status, 200, JSON.stringify(lab.body));
+    const r = await authJ(`/api/products/${p.id}/label-bytes`);
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.price, 200, 'the label price is the shelf price');
+    const txt = b64(r.body.base64);
+    assert.ok(txt.includes('Ksh 200'), txt);
+    assert.ok(txt.includes('P27TEA'), 'it names the SKU');
+    assert.ok(txt.includes('555111'), 'and prints the barcode');
+    // change the price and print again: the label follows the shelf
+    await authJ({ path: `/api/products/${p.id}`, method: 'PUT', body: { price: 250 } });
+    const r2 = await authJ(`/api/products/${p.id}/label-bytes`);
+    assert.strictEqual(r2.body.price, 250, JSON.stringify(r2.body));
+    assert.ok(b64(r2.body.base64).includes('Ksh 250'));
+    // a Zebra shop prints ZPL from the same route
+    const zebra = await authJ({ path: `/api/devices/${lab.body.id}`, method: 'PUT', body: { driver: 'zpl' } });
+    assert.strictEqual(zebra.status, 200, JSON.stringify(zebra.body));
+    const z = await authJ(`/api/products/${p.id}/label-bytes`);
+    assert.strictEqual(z.body.driver, 'zpl');
+    assert.ok(b64(z.body.base64).includes('^XA'), 'ZPL, not ESC/POS');
+  });
+
+  await test('a scale reading is parsed, and a reading we cannot trust is refused', async () => {
+    const ok = await authJ({ path: '/api/devices/scale-frame', method: 'POST', body: { frame: 'ST,GS,+001.250kg' } });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.strictEqual(ok.body.weight, 1.25);
+    assert.strictEqual(ok.body.unit, 'kg');
+    assert.strictEqual(ok.body.stable, true);
+    const plain = await authJ({ path: '/api/devices/scale-frame', method: 'POST', body: { frame: '  0.750 kg' } });
+    assert.strictEqual(plain.status, 200, JSON.stringify(plain.body));
+    assert.strictEqual(plain.body.weight, 0.75);
+    const junk = await authJ({ path: '/api/devices/scale-frame', method: 'POST', body: { frame: 'hello there' } });
+    assert.strictEqual(junk.status, 400, JSON.stringify(junk.body));
+  });
+
+  await test('the till can report that a device failed, and the shop can see it', async () => {
+    const r = await authJ({ path: `/api/devices/${p27.printer}/report`, method: 'POST', body: { ok: false, error: 'out of paper' } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.status, 'error');
+    assert.match(r.body.last_error, /out of paper/);
+    const back = await authJ({ path: `/api/devices/${p27.printer}/report`, method: 'POST', body: { ok: true } });
+    assert.strictEqual(back.body.status, 'ok');
+    assert.strictEqual(back.body.last_error, null);
+  });
+
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 

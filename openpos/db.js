@@ -1516,6 +1516,28 @@ function migrate(d) {
   d.exec(`CREATE INDEX IF NOT EXISTS idx_res_live ON store_reservations(variant_id, location_id, released_at, expires_at);`);
   d.exec(`CREATE INDEX IF NOT EXISTS idx_res_expiry ON store_reservations(expires_at);`);
 
+  // ---- Phase 27 Day 39: hardware & peripherals (replaceable, not proprietary)
+  // A register points at a DEVICE ROW. Swap the row, keep the shop: no driver
+  // name is ever hard-coded above this table.
+  d.exec(`CREATE TABLE IF NOT EXISTS devices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL DEFAULT 1,
+    branch_id INTEGER,
+    location_id INTEGER,
+    register_id INTEGER,
+    type TEXT NOT NULL DEFAULT 'printer',
+    name TEXT NOT NULL DEFAULT '',
+    driver TEXT NOT NULL DEFAULT 'escpos',
+    profile TEXT NOT NULL DEFAULT '{}',
+    is_default INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    last_ok_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+  )`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_devices_scope ON devices(location_id, type, active);`);
+
   // ---- Phase 25: WhatsApp & customer commerce --------------------------------
   // Every sale knows the door it came in by (R-CH): the till, an offline queue,
   // a WhatsApp order or the web store. Same engine, one inventory, one book.

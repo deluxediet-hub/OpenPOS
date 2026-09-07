@@ -730,6 +730,210 @@ function createApp(d) {
     next();
   };
 
+  // ================= Phase 27 — devices & peripherals =======================
+  // Peripherals are replaceable, not proprietary: a register points at a device
+  // ROW, and swapping the row swaps the kit. Nothing above this block knows a
+  // brand, a port or a driver.
+
+  const hw = require('./lib/devices');
+
+  const deviceRow = (r) => ({
+    ...r,
+    profile: hw.profileOf(r.type, JSON.parse(r.profile || '{}')),
+    status: r.last_error ? 'error' : (r.last_ok_at ? 'ok' : 'untested')
+  });
+
+  /** The device a request would use, honouring branch → location → register. */
+  function pickDevice(d, { type, registerId = null, locationId = null, branchId = null, deviceId = null }) {
+    if (deviceId) {
+      const byId = d.prepare('SELECT * FROM devices WHERE id = ? AND active = 1').get(Number(deviceId));
+      if (byId) return byId;
+    }
+    const rows = d.prepare('SELECT * FROM devices WHERE type = ? AND active = 1').all(type);
+    if (!rows.length) return null;
+    const score = (r) => {
+      let s = 0;
+      if (branchId && r.branch_id === Number(branchId)) s += 8;
+      if (locationId && r.location_id === Number(locationId)) s += 4;
+      if (registerId && r.register_id === Number(registerId)) s += 2;
+      if (r.is_default) s += 1;
+      // A device assigned elsewhere must not answer for this counter.
+      if (r.register_id && registerId && r.register_id !== Number(registerId)) return -1;
+      if (r.location_id && locationId && r.location_id !== Number(locationId)) return -1;
+      return s;
+    };
+    return rows
+      .map((r) => ({ r, s: score(r) }))
+      .filter((x) => x.s >= 0)
+      .sort((a, b) => b.s - a.s || a.r.id - b.r.id)
+      .map((x) => x.r)[0] || null;
+  }
+
+  function recordDeviceResult(d, device, ok, error) {
+    const now = new Date().toISOString();
+    d.prepare('UPDATE devices SET last_ok_at = ?, last_error = ?, updated_at = ? WHERE id = ?')
+      .run(ok ? now : null, ok ? null : String(error || '').slice(0, 200), now, device.id);
+  }
+
+  app.get('/api/devices', me, can('settings.manage'), (req, res) => {
+    res.json(d.prepare('SELECT * FROM devices ORDER BY type, id').all().map(deviceRow));
+  });
+
+  app.post('/api/devices', me, can('settings.manage'), (req, res) => {
+    try {
+      const b = req.body || {};
+      const type = String(b.type || 'printer');
+      if (!hw.DEVICE_TYPES.some((t) => t.id === type)) throw httpError(400, `unknown device type: ${type}`);
+      const driver = String(b.driver || (hw.DEFAULTS[type] || {}).driver || 'log');
+      if (!hw.DRIVERS[driver]) throw httpError(400, `unknown driver: ${driver}`);
+      const now = new Date().toISOString();
+      const id = d
+        .prepare(
+          `INSERT INTO devices (branch_id, location_id, register_id, type, name, driver, profile, is_default, active, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          numOrNull(b.branch_id), numOrNull(b.location_id), numOrNull(b.register_id),
+          type, String(b.name || '').trim() || `${type} 1`, driver,
+          JSON.stringify(hw.profileOf(type, b.profile || {})),
+          b.is_default ? 1 : 0, 1, now
+        ).lastInsertRowid;
+      dbm.audit(d, { userId: req.user.id, action: 'devices/create', entity: 'device', entityId: String(id), detail: { type, driver } });
+      res.json(deviceRow(d.prepare('SELECT * FROM devices WHERE id = ?').get(id)));
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.put('/api/devices/:id', me, can('settings.manage'), (req, res) => {
+    try {
+      const b = req.body || {};
+      const dev = d.prepare('SELECT * FROM devices WHERE id = ?').get(numOrNull(req.params.id));
+      if (!dev) return res.status(404).json({ error: 'device not found' });
+      const type = b.type && hw.DEVICE_TYPES.some((t) => t.id === b.type) ? b.type : dev.type;
+      const driver = b.driver && hw.DRIVERS[b.driver] ? b.driver : dev.driver;
+      const profile = hw.profileOf(type, { ...JSON.parse(dev.profile || '{}'), ...(b.profile || {}) });
+      const isDefault = b.is_default === undefined ? dev.is_default : (b.is_default ? 1 : 0);
+      if (isDefault) d.prepare('UPDATE devices SET is_default = 0 WHERE type = ? AND id <> ?').run(type, dev.id);
+      d.prepare(
+        `UPDATE devices SET branch_id = ?, location_id = ?, register_id = ?, type = ?, name = ?, driver = ?,
+           profile = ?, is_default = ?, active = ?, updated_at = ? WHERE id = ?`
+      ).run(
+        b.branch_id === undefined ? dev.branch_id : numOrNull(b.branch_id),
+        b.location_id === undefined ? dev.location_id : numOrNull(b.location_id),
+        b.register_id === undefined ? dev.register_id : numOrNull(b.register_id),
+        type,
+        b.name === undefined ? dev.name : String(b.name).trim(),
+        driver,
+        JSON.stringify(profile),
+        isDefault,
+        b.active === undefined ? dev.active : (b.active ? 1 : 0),
+        new Date().toISOString(), dev.id
+      );
+      dbm.audit(d, { userId: req.user.id, action: 'devices/update', entity: 'device', entityId: String(dev.id), detail: { type, driver, active: b.active } });
+      res.json(deviceRow(d.prepare('SELECT * FROM devices WHERE id = ?').get(dev.id)));
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /**
+   * The device test utility: render a real payload for this device and report
+   * what it would do. A shop can prove a printer works before a queue forms.
+   */
+  app.post('/api/devices/:id/test', me, can('settings.manage'), (req, res) => {
+    try {
+      const dev = d.prepare('SELECT * FROM devices WHERE id = ?').get(numOrNull(req.params.id));
+      if (!dev) return res.status(404).json({ error: 'device not found' });
+      const profile = hw.profileOf(dev.type, { ...JSON.parse(dev.profile || '{}'), driver: dev.driver });
+      const bytes = hw.testBytes(dev.type, profile);
+      recordDeviceResult(d, dev, true, null);
+      res.json({
+        ok: true, device: deviceRow(d.prepare('SELECT * FROM devices WHERE id = ?').get(dev.id)),
+        driver: dev.driver, type: dev.type, bytes: bytes.length,
+        base64: hw.toBase64(bytes),
+        summary: dev.driver === 'log'
+          ? `rendered ${bytes.length} bytes — stored in the shop, nothing sent (log driver)`
+          : `rendered ${bytes.length} bytes for the ${dev.driver} driver`
+      });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/devices/:id/report', me, can('sales.view'), (req, res) => {
+    try {
+      const dev = d.prepare('SELECT * FROM devices WHERE id = ?').get(numOrNull(req.params.id));
+      if (!dev) return res.status(404).json({ error: 'device not found' });
+      const ok = !!(req.body || {}).ok;
+      recordDeviceResult(d, dev, ok, ok ? null : String((req.body || {}).error || 'reported by the till'));
+      res.json(deviceRow(d.prepare('SELECT * FROM devices WHERE id = ?').get(dev.id)));
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /** Receipt bytes for a sale, from whichever printer this counter uses. */
+  app.get('/api/sales/:id/receipt-bytes', me, can('sales.view'), (req, res) => {
+    try {
+      const payload = buildSalePayload(d, numOrNull(req.params.id));
+      const dev = pickDevice(d, {
+        type: 'printer', registerId: (req.query || {}).register_id,
+        locationId: payload.sale.location_id, branchId: payload.sale.branch_id,
+        deviceId: (req.query || {}).device_id
+      });
+      if (!dev) return res.status(404).json({ error: 'no printer configured for this counter' });
+      const profile = hw.profileOf(dev.type, { ...JSON.parse(dev.profile || '{}'), driver: dev.driver });
+      const bytes = hw.receiptBytes({
+        business: payload.receipt.business || {}, sale: { ...payload.sale, cashier: payload.sale.cashier },
+        items: payload.items, payments: payload.payments, customer: payload.customer, profile
+      });
+      res.json({
+        ok: true, device: { id: dev.id, name: dev.name, driver: dev.driver },
+        bytes: bytes.length, base64: hw.toBase64(bytes),
+        driver: dev.driver, profile
+      });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /** A shelf label whose price IS the shelf price (acceptance: it must match). */
+  app.get('/api/products/:id/label-bytes', me, can('products.view'), (req, res) => {
+    try {
+      const product = productRow(d, numOrNull(req.params.id));
+      if (!product) return res.status(404).json({ error: 'product not found' });
+      const variantId = numOrNull((req.query || {}).variant_id);
+      const variant = variantId
+        ? d.prepare('SELECT * FROM variants WHERE id = ?').get(variantId)
+        : d.prepare("SELECT * FROM variants WHERE product_id = ? AND COALESCE(axes_key, '{}') = '{}'").get(product.id);
+      if (!variant) return res.status(404).json({ error: 'no variant to label' });
+      const dev = pickDevice(d, {
+        type: 'label', registerId: (req.query || {}).register_id,
+        locationId: numOrNull((req.query || {}).location_id), branchId: product.branch_id,
+        deviceId: (req.query || {}).device_id
+      });
+      if (!dev) return res.status(404).json({ error: 'no label printer configured' });
+      const profile = hw.profileOf(dev.type, { ...JSON.parse(dev.profile || '{}'), driver: dev.driver });
+      const price = Math.round(Number(variant.price != null ? variant.price : product.price));
+      const bytes = hw.labelBytes({ product, variant: { ...variant, price }, price, profile });
+      res.json({
+        ok: true, device: { id: dev.id, name: dev.name, driver: dev.driver },
+        price, bytes: bytes.length, base64: hw.toBase64(bytes), driver: dev.driver
+      });
+    } catch (e) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  /** A scale frame, read by the till (produce, butchery, loose goods). */
+  app.post('/api/devices/scale-frame', me, can('sales.create'), (req, res) => {
+    const frame = String((req.body || {}).frame || '');
+    const parsed = hw.parseScaleFrame(frame);
+    if (!parsed) return res.status(400).json({ error: 'that is not a reading I trust' });
+    res.json(parsed);
+  });
+
   // ================= Phase 26 — online store / omni-channel =================
   // One catalogue, one inventory, one customer (R-CH). The storefront has no
   // sales engine of its own: its cart is a held sale, its checkout is a

@@ -1190,6 +1190,43 @@
           <div class="msg" id="st-store-msg" style="margin:0"></div>
         </div>
       </div>
+      <div class="card" id="st-dev-card" style="margin-top:14px">
+        <div class="row" style="margin-bottom:8px">
+          <h3 style="margin:0">Devices &amp; printers</h3>
+          <span class="spacer"></span>
+          <button class="btn ghost small" id="dev-reload">Reload</button>
+        </div>
+        <p class="muted small" style="margin:0 0 10px">Your kit is replaceable, not proprietary: a counter points at a device row,
+          and swapping the row swaps the printer. Test any device before a queue forms.</p>
+        <div class="grid cols-4">
+          <label class="f"><span>Type</span>
+            <select id="dev-type">
+              <option value="printer">Receipt printer</option>
+              <option value="label">Label printer</option>
+              <option value="scanner">Barcode scanner</option>
+              <option value="drawer">Cash drawer</option>
+              <option value="display">Customer display</option>
+              <option value="scale">Scale</option>
+              <option value="terminal">Card terminal</option>
+            </select></label>
+          <label class="f"><span>Name</span><input id="dev-name" placeholder="Counter 1"></label>
+          <label class="f"><span>Driver</span>
+            <select id="dev-driver">
+              <option value="escpos">ESC/POS thermal</option>
+              <option value="zpl">ZPL label</option>
+              <option value="browser">Browser / USB</option>
+              <option value="keyboard">Keyboard wedge</option>
+              <option value="serial">Serial</option>
+              <option value="log">Local log only</option>
+            </select></label>
+          <label class="f"><span>&nbsp;</span><button class="btn" id="dev-add">Add device</button></label>
+        </div>
+        <table style="margin-top:10px">
+          <thead><tr><th>Device</th><th>Type</th><th>Driver</th><th>Profile</th><th>State</th><th></th></tr></thead>
+          <tbody id="dev-rows"></tbody>
+        </table>
+        <div class="msg" id="dev-msg" style="margin-top:8px"></div>
+      </div>
       <div class="card hidden" id="st-feat-card" style="margin-top:14px">
         <h3 data-i18n="features">Features</h3>
         <p class="muted small">Turn on the parts of OpenPOS your business uses. Turning one on is instant — no setup, no new system.</p>
@@ -3438,9 +3475,82 @@ async function saveStoreSettings() {
   }
 }
 
+// ---------- devices (Phase 27) ----------
+function devProfileText(p) {
+  const bits = [];
+  if (p.width) bits.push(`${p.width}mm`);
+  if (p.chars) bits.push(`${p.chars} cols`);
+  if (p.driver === 'escpos') bits.push(p.drawer ? 'drawer kick' : 'no drawer');
+  if (p.unit) bits.push(p.unit);
+  if (p.copies > 1) bits.push(`${p.copies} copies`);
+  return bits.join(' · ') || 'defaults';
+}
+
+async function loadDevices() {
+  const rows = await api('/api/devices').catch(() => []);
+  $('#dev-rows').innerHTML = rows.map((r) => `
+    <tr>
+      <td><b>${esc(r.name)}</b>${r.is_default ? ' <span class="pill g">default</span>' : ''}</td>
+      <td>${esc(r.type)}</td>
+      <td>${esc(r.driver)}</td>
+      <td class="small muted">${esc(devProfileText(r.profile || {}))}</td>
+      <td>${r.status === 'ok' ? '<span class="pill g">ok</span>' : (r.status === 'error' ? `<span class="pill r">${esc(r.last_error || 'error')}</span>` : '<span class="pill">untested</span>')}</td>
+      <td class="row">
+        <button class="btn ghost small" data-dev-test="${r.id}">Test</button>
+        <button class="btn ghost small" data-dev-default="${r.id}">Make default</button>
+        <button class="btn ghost small" data-dev-toggle="${r.id}">${r.active ? 'Disable' : 'Enable'}</button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="6" class="muted">no devices yet — add the printer you already own</td></tr>';
+  $('#dev-rows').querySelectorAll('[data-dev-test]').forEach((b) => { b.onclick = () => devTest(b.dataset.devTest); });
+  $('#dev-rows').querySelectorAll('[data-dev-default]').forEach((b) => { b.onclick = () => devDefault(b.dataset.devDefault); });
+  $('#dev-rows').querySelectorAll('[data-dev-toggle]').forEach((b) => { b.onclick = () => devToggle(b.dataset.devToggle); });
+}
+
+async function devTest(id) {
+  try {
+    const r = await api(`/api/devices/${id}/test`, { method: 'POST', body: {} });
+    // A test you can hold: the real bytes, ready for the printer.
+    downloadBytes(r.base64, `openpos-device-${id}.bin`);
+    toast($('#dev-msg'), `${r.summary} — saved so you can send it to the printer`, true);
+    await loadDevices();
+  } catch (e) {
+    toast($('#dev-msg'), e.message, false);
+  }
+}
+
+async function devDefault(id) {
+  await api(`/api/devices/${id}`, { method: 'PUT', body: { is_default: true } }).catch((e) => toast($('#dev-msg'), e.message, false));
+  await loadDevices();
+}
+
+async function devToggle(id) {
+  const row = (await api('/api/devices').catch(() => [])).find((r) => String(r.id) === String(id));
+  if (!row) return;
+  await api(`/api/devices/${id}`, { method: 'PUT', body: { active: !row.active } }).catch((e) => toast($('#dev-msg'), e.message, false));
+  await loadDevices();
+}
+
+function downloadBytes(base64, filename) {
+  try {
+  const bin = atob(base64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([arr], { type: 'application/octet-stream' }));
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  } catch (_) {
+    // A browser that cannot save files (or a test runner) simply gets the
+    // message; the bytes were already rendered and sent where they needed to go.
+  }
+}
+
 // ---------- settings + features ----------
 async function loadSettings() {
   await loadStoreSettings().catch(() => {});
+  await loadDevices().catch(() => {});
   const s = await api('/api/settings');
   const b = s.business || {}, tx = s.tax || {}, rc = s.receipt || {};
   $('#st-name').value = b.name || ''; $('#st-phone').value = b.phone || '';
@@ -3478,6 +3588,24 @@ async function loadSettings() {
 }
 
 $('#st-store-save').onclick = saveStoreSettings;
+$('#dev-reload').onclick = loadDevices;
+$('#dev-add').onclick = async () => {
+  try {
+    await api('/api/devices', {
+      method: 'POST',
+      body: {
+        type: $('#dev-type').value,
+        name: $('#dev-name').value.trim(),
+        driver: $('#dev-driver').value
+      }
+    });
+    $('#dev-name').value = '';
+    toast($('#dev-msg'), 'device added', true);
+    await loadDevices();
+  } catch (e) {
+    toast($('#dev-msg'), e.message, false);
+  }
+};
 $('#st-save').onclick = async () => {
   try {
     await api('/api/settings', {

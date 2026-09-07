@@ -1030,6 +1030,7 @@ async function resumeSale() {
 
 // ---------------- receipt ----------------
 function showReceipt(data) {
+  if (data && data.sale) LAST_SALE_ID = data.sale.id;
   const s = data.sale, rc = data.receipt;
   const sym = rc.symbol || 'Ksh';
   const f = (n) => `${sym} ${Number(n || 0).toLocaleString('en-KE')}`;
@@ -1392,7 +1393,81 @@ function wireFollowup(data, pendingPay, balance) {
   }
 }
 
-$('#rc-print').onclick = () => window.print();
+// Phase 27: print through whatever this counter points at. The kit is data —
+// if the shop has a printer row, the till talks to it; if not, the paper
+// receipt the browser can print is still there.
+$('#rc-print').onclick = () => printToDevice();
+
+let LAST_SALE_ID = null;
+
+async function printToDevice() {
+  const id = LAST_SALE_ID;
+  if (!id) return window.print();
+  let job = null;
+  try {
+    job = await api(`/api/sales/${id}/receipt-bytes`);
+  } catch (_) {
+    return window.print(); // no printer configured: the browser receipt it is
+  }
+  const bytes = base64ToBytes(job.base64);
+  try {
+    const sent = await sendToPrinter(bytes);
+    if (sent) {
+      await api(`/api/devices/${job.device.id}/report`, { method: 'POST', body: { ok: true } }).catch(() => {});
+      return;
+    }
+    saveBytes(bytes, `receipt-${id}.bin`);
+  } catch (e) {
+    await api(`/api/devices/${job.device.id}/report`, { method: 'POST', body: { ok: false, error: e.message } }).catch(() => {});
+    saveBytes(bytes, `receipt-${id}.bin`);
+  }
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function saveBytes(bytes, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+/**
+ * Send bytes to a USB thermal printer the shop has already paired. Returns
+ * false when there is nothing paired — the caller then offers the file, so a
+ * receipt is never lost to a missing driver.
+ */
+async function sendToPrinter(bytes) {
+  if (!navigator.usb) return false;
+  try {
+    const devices = await navigator.usb.getDevices();
+    if (!devices.length) return false;
+    const dev = devices[0];
+    await dev.open();
+    if (dev.configuration === null) await dev.selectConfiguration(1);
+    let iface = null, ep = null;
+    for (const c of dev.configurations || []) {
+      for (const i of c.interfaces || []) {
+        for (const alt of i.alternates || []) {
+          const out = (alt.endpoints || []).find((e) => e.direction === 'out');
+          if (out) { iface = i.interfaceNumber; ep = out.endpointNumber; }
+        }
+      }
+    }
+    if (ep === null) { await dev.close(); return false; }
+    await dev.claimInterface(iface);
+    await dev.transferOut(ep, bytes);
+    await dev.close();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 $('#rc-new').onclick = () => { $('#receipt-overlay').classList.add('hidden'); $('#scan').focus(); };
 </script>
 </body>

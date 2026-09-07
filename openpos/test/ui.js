@@ -208,6 +208,34 @@ async function waitFor(fn, label, timeout = 8000) {
       ck('the till has a place for offers and points',
         !!pos0.w.document.querySelector('#p-offers') && !!pos0.w.document.querySelector('#p-points'));
 
+      // ---------------- Phase 27: the kit is data, swapped on screen ----------
+      const settingsTab = [...mw.document.querySelectorAll('#tabs button')].find((b) => /settings/i.test(b.textContent));
+      click(mw, settingsTab);
+      await waitFor(() => {
+        const rows = mw.document.querySelector('#dev-rows');
+        return rows && rows.textContent.trim().length > 0;
+      }, 'the devices card rendered its rows', 15000);
+      ck('the devices card says what it is for',
+        /replaceable, not proprietary/.test(mw.document.querySelector('#st-dev-card').textContent)
+        && mw.document.querySelector('#dev-rows').textContent.trim().length > 0,
+        mw.document.querySelector('#dev-rows').textContent.slice(0, 80));
+      mw.document.querySelector('#dev-name').value = 'Counter printer';
+      mw.document.querySelector('#dev-type').value = 'printer';
+      mw.document.querySelector('#dev-driver').value = 'escpos';
+      click(mw, mw.document.querySelector('#dev-add'));
+      await waitFor(() => /Counter printer/.test(mw.document.querySelector('#dev-rows').textContent), 'the new device row', 15000);
+      ck('a device added on screen joins the list', true);
+      ck('its profile is shown, not just its name',
+        /80mm|48 cols/.test(mw.document.querySelector('#dev-rows').textContent),
+        mw.document.querySelector('#dev-rows').textContent.slice(0, 160));
+      const testBtn = mw.document.querySelector('#dev-rows [data-dev-test]');
+      click(mw, testBtn);
+      await waitFor(() => /ok|rendered/.test(mw.document.querySelector('#dev-msg').textContent)
+        || /untested/.test(mw.document.querySelector('#dev-rows').textContent) === false, 'the device test result', 15000);
+      ck('testing a device reports what it rendered',
+        /rendered \d+ bytes/.test(mw.document.querySelector('#dev-msg').textContent),
+        mw.document.querySelector('#dev-msg').textContent.slice(0, 120));
+
       // ---------------- Phase 26: the storefront is a real page ----------------
       const store = await bootPage('store.html', 'store');
       await waitFor(() => /P26 Store|Shop/.test(store.w.document.querySelector('#shop-name').textContent),

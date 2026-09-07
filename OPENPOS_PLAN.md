@@ -511,7 +511,20 @@ Barcode scanners, thermal printers (58/80mm ESC/POS, QR, drawer kick), cash draw
 displays, label/price-tag printers, **scales** (serial protocol), POS terminals — per-register
 device profiles, device test utility. **Hardware is replaceable, not proprietary.**
 - **Acceptance:** swap printer/drawer/scanner via config only; label print matches shelf price.
+### Phase 27 — Hardware & Peripheral Layer · Day 39
+Barcode scanners, thermal printers (58/80mm ESC/POS, QR, drawer kick), cash drawers, customer
+displays, label/price-tag printers, **scales** (serial protocol), POS terminals — per-register
+device profiles, device test utility. **Hardware is replaceable, not proprietary.**
+- **Acceptance:** swap printer/drawer/scanner via config only; label print matches shelf price.
 
+
+**Status (2026-09-07): done.** The kit is **data**, not a driver baked into the code: every peripheral is a row in `devices` (type · driver · profile · which counter it serves), and swapping the row swaps the hardware — no file above `lib/devices.js` names a brand. (The library is deliberately called `devices`, not `hardware`: `hardware` is one of the eight industry ids, and the core must not name an industry — R-M1, asserted in the suite.)
+
+`lib/devices.js` renders real bytes, which is what "replaceable" means in practice: ESC/POS receipts for 58mm and 80mm (shop header, lines, VAT, totals, payments, QR, drawer kick, cut), ZPL **and** ESC/POS shelf labels whose price *is* the shelf price at the moment of printing, a test page for every device type, and a scale-frame parser that returns nothing rather than a weight it cannot trust.
+
+Routes: device CRUD, `POST /api/devices/:id/test` (prove the profile before a queue forms — the device then remembers that it worked), `POST /api/devices/:id/report` (the till tells the shop when a printer jams, and the shop can see it), `GET /api/sales/:id/receipt-bytes` and `GET /api/products/:id/label-bytes`, both resolved by `pickDevice` (branch → location → register, so a device assigned to another counter never answers for this one).
+
+The till prints through the counter's device: WebUSB straight to a paired thermal printer, the rendered payload saved as a file when the browser cannot reach it, and the paper receipt via browser print when no printer is configured at all. The Manager's **Devices & printers** card lists, adds, tests, defaults and disables devices. Acceptance asserted: swapping the printer row changes the payload (the new profile's "no drawer" is in the bytes), and a label re-printed after a price change carries the new price. 201 API tests, 25 UI steps.
 ### Phase 28 — Security, Audit & Fraud Controls · Day 40
 Deep pass: audit log review, login history + failed-login detection, device sessions,
 permission re-audit, approval workflows, **dedicated logs** (price overrides, discounts,
