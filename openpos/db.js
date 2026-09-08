@@ -80,6 +80,12 @@ const MIGRATIONS = [
     d.exec(`CREATE INDEX IF NOT EXISTS idx_moves_created ON stock_moves(created_at);`);
     d.exec(`CREATE INDEX IF NOT EXISTS idx_products_active ON products(active);`);
     d.exec(`CREATE INDEX IF NOT EXISTS idx_variants_product ON variants(product_id, active);`);
+  } },
+  { id: '0036_void_timestamps', name: 'Phase 36: a sale remembers when (and why) it was voided', apply: (d) => {
+    // The refunds report and the cashier dashboard both ask a voided sale when
+    // it was voided. Before this, the answer lived nowhere, so both answered
+    // 500. Additive: old rows keep NULL and fall back to the sale date.
+    addCol(d, 'sales', 'voided_at', 'TEXT');
   } }
 ];
 

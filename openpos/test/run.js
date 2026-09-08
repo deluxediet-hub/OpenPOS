@@ -5112,6 +5112,128 @@ const commsLib = require('../lib/comms');
   });
 
 
+  // ---------------- reports as PDF ----------------
+  // The shop has no internet the day the owner needs a report, so the file is
+  // drawn in the browser by public/assets/pdf.js — no library, no service.
+  section('reports as PDF (drawn on the page, no internet needed)');
+  const PUBDIR = path.join(__dirname, '..', 'public', 'assets', 'pdf.js');
+  require(PUBDIR);
+  const Pdf = globalThis.OpenPosPdf;
+
+  const readPdf = (bytes) => Buffer.from(bytes).toString('latin1');
+
+  await test('a report becomes a file a phone and an accountant can open', () => {
+    const d = Pdf.doc({ title: 'What sold' });
+    d.heading('What sold', 'Baraka Wines');
+    d.meta([['Period', '1 Aug 2026 to 8 Sep 2026']]);
+    d.table([{ title: 'Product' }, { title: 'Qty', align: 'right' }, { title: 'Gross', align: 'right' }],
+      [['Tusker Lager 500ml', '120', 'Ksh 30,000']],
+      { totals: ['TOTAL', '120', 'Ksh 30,000'] });
+    const pdf = readPdf(d.build());
+    assert.ok(pdf.startsWith('%PDF-1.4'), 'pdf header');
+    assert.ok(pdf.trimEnd().endsWith('%%EOF'), 'pdf trailer');
+    assert.ok(/\/Type \/Page[^s]/.test(pdf), 'has a page object');
+    assert.ok(pdf.includes('/BaseFont /Helvetica'), 'ships its own fonts');
+    // every xref offset must land on the object it claims to
+    const sx = Number(pdf.slice(pdf.lastIndexOf('startxref') + 9).trim().split(/\s/)[0]);
+    assert.strictEqual(pdf.slice(sx, sx + 4), 'xref', 'startxref points at the xref table');
+    const body = pdf.slice(sx);
+    const count = Number(body.match(/^xref\n0 (\d+)/)[1]);
+    const entries = body.split('\n').slice(2, 2 + count);
+    assert.ok(entries.length === count, 'xref entry count');
+    entries.slice(1).forEach((line, i) => {
+      const off = Number(line.slice(0, 10));
+      assert.strictEqual(pdf.slice(off, off + `${i + 1} 0 obj`.length), `${i + 1} 0 obj`,
+        `xref entry ${i + 1} points at object ${i + 1}`);
+    });
+    // and the text the shop typed is in there
+    assert.ok(pdf.includes('Tusker Lager 500ml'), 'the rows are in the file');
+    assert.ok(pdf.includes('Page 1 of 1'), 'the page is numbered');
+  });
+
+  await test('a long report paginates and repeats its header on every page', () => {
+    const rows = [];
+    for (let i = 1; i <= 140; i++) rows.push([`Product ${i}`, String(i), `Ksh ${i * 100}`]);
+    const d = Pdf.doc({ title: 'Stock valuation', landscape: true });
+    d.heading('Stock valuation', 'Everything on the shelf');
+    d.table([{ title: 'Product' }, { title: 'Qty', align: 'right' }, { title: 'Value', align: 'right' }], rows,
+      { totals: ['TOTAL', '9870', 'Ksh 987,000'] });
+    const pdf = readPdf(d.build());
+    const pages = (pdf.match(/\/Type \/Page[^s]/g) || []).length;
+    assert.ok(pages > 2, `expected several pages, got ${pages}`);
+    const headerRows = (pdf.match(/\(Product\) Tj/g) || []).length;
+    assert.ok(headerRows >= pages, `header repeated on each page (${headerRows} headers, ${pages} pages)`);
+    assert.ok(pdf.includes(`Page ${pages} of ${pages}`), 'last page numbered correctly');
+  });
+
+  await test('Swahili and money survive; glyphs we cannot draw fold instead of corrupting', () => {
+    const d = Pdf.doc({ title: 'Ripoti' });
+    d.heading('Bidhaa zilizouzwa — leo', 'Duka la Baraka');
+    d.table([{ title: 'Bidhaa' }, { title: 'Kiasi', align: 'right' }],
+      [['Chai ya P26', '4'], ['Maziwa — lita moja', '2'], ['Sukari ✓', '7']]);
+    const pdf = readPdf(d.build());
+    assert.ok(pdf.includes('Bidhaa zilizouzwa - leo'), 'em dash folded, sentence intact');
+    assert.ok(pdf.includes('Maziwa - lita moja'), 'a folded glyph does not eat its neighbours');
+    assert.ok(pdf.includes('Sukari Y'), 'a tick becomes a letter, not a broken byte');
+    // every byte the writer emits is ASCII, so the file cannot be corrupted by text
+    const bytes = d.build();
+    assert.ok(bytes.every((b) => b < 256), 'bytes stay in range');
+  });
+
+  // ---------------- a shop's reports must answer, not hang -------------------
+  section('reports & dashboards: every screen the owner can open');
+
+  await test('every report and dashboard endpoint answers (no 500s)', async () => {
+    // Found by walking the routes: eleven of these used to answer 500 because
+    // a query named a column this book does not have.
+    const today = new Date().toISOString().slice(0, 10);
+    const monthAgo = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+    const paths = [
+      '/api/reports/sales', '/api/reports/margin', '/api/reports/cashiers',
+      '/api/reports/discounts', '/api/reports/refunds', '/api/reports/cash-shortages',
+      '/api/reports/slow-moving', '/api/reports/dead-stock', '/api/reports/stock-value',
+      '/api/reports/reorder', '/api/reports/pnl', '/api/reports/daily', '/api/reports/shrinkage',
+      '/api/dashboard/owner', '/api/dashboard/branch-manager', '/api/dashboard/stock-manager',
+      '/api/dashboard/cashier'
+    ];
+    for (const p of paths) {
+      const r = await authJ(`${p}?from=${monthAgo}&to=${today}`);
+      assert.ok(r.status < 500, `${p} answered ${r.status}: ${JSON.stringify(r.body).slice(0, 160)}`);
+    }
+  });
+
+  await test('a report that ends today includes what was sold today', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const prod = await authJ({ path: '/api/products', method: 'POST', body: { name: 'Today Report Item', sku: 'TODAY-1', cost: 100, price: 200 } });
+    assert.strictEqual(prod.status, 200, JSON.stringify(prod.body));
+    // stock it, or the till refuses to sell what is not on the shelf
+    const move = await authJ({ path: '/api/stock/moves', method: 'POST', body: { product_id: prod.body.id, qty: 5, type: 'opening', reason: 'opening', unit_cost: 100 } });
+    assert.strictEqual(move.status, 200, JSON.stringify(move.body));
+    const variants = await authJ(`/api/products/${prod.body.id}/variants`);
+    const sale = await authJ({ path: '/api/sales', method: 'POST', body: { items: [{ variant_id: variants.body[0].id, qty: 1 }], payment: { method: 'cash', amount: 1000 } } });
+    assert.strictEqual(sale.status, 200, JSON.stringify(sale.body));
+    const r = await authJ(`/api/reports/sales?from=${today}&to=${today}&group_by=product`);
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+    assert.ok((r.body.rows || []).some((row) => /Today Report Item/.test(row.product_name || '')),
+      `today's sale missing from today's report: ${JSON.stringify(r.body.rows).slice(0, 200)}`);
+  });
+
+  await test('deleting a category that still holds products answers, and frees them', async () => {
+    const cat = await authJ({ path: '/api/categories', method: 'POST', body: { name: 'Doomed shelf' } });
+    assert.strictEqual(cat.status, 200, JSON.stringify(cat.body));
+    const prod = await authJ({ path: '/api/products', method: 'POST', body: { name: 'On the doomed shelf', sku: 'DOOM-1', cost: 10, price: 20, category_id: cat.body.id } });
+    assert.strictEqual(prod.status, 200, JSON.stringify(prod.body));
+    // This used to return the database driver instead of a response: the shop
+    // clicked Delete and the request never finished.
+    const del = await authJ({ path: `/api/categories/${cat.body.id}`, method: 'DELETE' });
+    assert.strictEqual(del.status, 200, JSON.stringify(del.body).slice(0, 200));
+    assert.strictEqual(del.body.detached, 1, 'the product was set free, not lost');
+    const list = await authJ('/api/products');
+    const survivor = (list.body || []).find((p) => p.sku === 'DOOM-1');
+    assert.ok(survivor, 'the product is still in the catalogue');
+    assert.strictEqual(survivor.category_id, null, 'the product survives without its shelf');
+  });
+
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 
