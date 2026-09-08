@@ -368,7 +368,7 @@
           <div class="grid cols-2" style="gap:14px;margin-top:12px">
             <div data-cap="purchasing"><h4 style="margin:0 0 6px" data-i18n="suppliers_with_balance">Suppliers (with balance in branch)</h4><div style="overflow:auto"><table><thead><tr><th>Supplier</th><th>Owed</th><th>Open PO</th></tr></thead><tbody id="dash-sup"></tbody></table></div></div>
             <div><h4 style="margin:0 0 6px">Expenses (30d: <span id="dash-exp-total"></span>)</h4>
-              <div class="row" style="gap:6px;margin-bottom:6px"><input id="exp-cat" placeholder="category" style="width:100px;padding:4px;border:1px solid #cbd5e1;border-radius:4px"><input id="exp-amt" type="number" placeholder="amount Ksh" style="width:110px;padding:4px;border:1px solid #cbd5e1;border-radius:4px"><input id="exp-note" placeholder="note" style="flex:1;padding:4px;border:1px solid #cbd5e1;border-radius:4px"><button class="btn small" id="exp-add">Add</button></div>
+              <div class="row" style="gap:6px;margin-bottom:6px"><input id="bexp-cat" placeholder="category" style="width:100px;padding:4px;border:1px solid #cbd5e1;border-radius:4px"><input id="bexp-amt" type="number" placeholder="amount Ksh" style="width:110px;padding:4px;border:1px solid #cbd5e1;border-radius:4px"><input id="bexp-note" placeholder="note" style="flex:1;padding:4px;border:1px solid #cbd5e1;border-radius:4px"><button class="btn small" id="bexp-add">Add</button></div>
               <div style="overflow:auto;max-height:180px"><table><thead><tr><th>Date</th><th>Category</th><th>Amount</th><th>Note</th></tr></thead><tbody id="dash-exp"></tbody></table></div>
             </div>
           </div>
@@ -919,6 +919,7 @@
           <select id="pnl-group"><option value="day">Per day</option><option value="branch" data-cap="multi_branch">Per branch</option><option value="consolidated">Consolidated</option></select>
           <select id="pnl-branch" data-cap="multi_branch"><option value="">All branches</option></select>
           <button class="btn small" id="pnl-reload">Run</button>
+          <button class="btn small ghost" id="pnl-pdf">PDF</button>
         </div>
         <div id="pnl-cons" style="margin-bottom:10px"></div>
         <div style="overflow:auto"><table><thead><tr><th>Date<span data-cap="multi_branch">/Branch</span></th><th>Sales (net)</th><th>COGS</th><th>Gross profit</th><th>Expenses</th><th>NOP</th><th>Tie OK?</th></tr></thead><tbody id="pnl-rows"></tbody></table></div>
@@ -934,6 +935,7 @@
             <input id="exp-ref" placeholder="Reference / receipt" style="width:160px" />
             <input id="exp-note" placeholder="Note" style="flex:1;min-width:160px" />
             <button class="btn small" id="exp-add">Add</button>
+            <button class="btn small ghost" id="exp-pdf">PDF</button>
           </div>
           <div style="overflow:auto;max-height:240px"><table><thead><tr><th>Date</th><th data-cap="multi_branch">Branch</th><th>Category</th><th>Method</th><th>Amount</th><th>Ref</th></tr></thead><tbody id="exp-rows"></tbody></table></div>
         </div>
@@ -985,6 +987,7 @@
             <select id="sales-group"><option value="product">Product</option><option value="variant">Variant</option><option value="category">Category</option><option value="branch" data-cap="multi_branch">Branch</option><option value="cashier">Cashier</option><option value="day">Day</option></select>
             <button class="btn small" id="sales-reload">Run</button>
             <button class="btn small ghost" id="sales-csv">CSV</button>
+            <button class="btn small ghost" id="sales-pdf">PDF</button>
           </div>
           <div style="overflow:auto;max-height:360px"><table><thead><tr><th>Item</th><th>Qty</th><th>Orders</th><th>Gross</th><th>Margin</th><th>Action</th></tr></thead><tbody id="sales-rows"></tbody></table></div>
         </div>
@@ -995,6 +998,7 @@
             <label class="check"><input type="checkbox" id="margin-losing"> Losing only</label>
             <button class="btn small" id="margin-reload">Run</button>
             <button class="btn small ghost" id="margin-csv">CSV</button>
+            <button class="btn small ghost" id="margin-pdf">PDF</button>
           </div>
           <div style="overflow:auto;max-height:360px"><table><thead><tr><th>Product</th><th>Qty</th><th>Gross</th><th>COGS</th><th>Margin</th><th>%</th></tr></thead><tbody id="margin-rows"></tbody></table></div>
         </div>
@@ -1003,12 +1007,14 @@
       <div class="grid cols-2" style="margin-top:14px">
         <div class="card">
           <h4 style="margin:0 0 8px">What isn't selling? (slow-moving)</h4>
-          <div class="row" style="gap:6px;margin-bottom:8px"><input id="slow-days" type="number" value="30" style="width:80px" /> days <button class="btn small" id="slow-reload">Run</button></div>
+          <div class="row" style="gap:6px;margin-bottom:8px"><input id="slow-days" type="number" value="30" style="width:80px" /> days <button class="btn small" id="slow-reload">Run</button>
+          <button class="btn small ghost" id="slow-pdf">PDF</button></div>
           <div style="overflow:auto;max-height:260px"><table><thead><tr><th>Product</th><th>Stock</th><th>Value tied</th><th>Last sale</th></tr></thead><tbody id="slow-rows"></tbody></table></div>
         </div>
         <div class="card">
           <h4 style="margin:0 0 8px">What's tied up? Dead stock + stock value</h4>
-          <div class="row" style="gap:6px;margin-bottom:8px"><input id="dead-days" type="number" value="60" style="width:80px" /> days <button class="btn small" id="dead-reload">Run</button></div>
+          <div class="row" style="gap:6px;margin-bottom:8px"><input id="dead-days" type="number" value="60" style="width:80px" /> days <button class="btn small" id="dead-reload">Run</button>
+          <button class="btn small ghost" id="dead-pdf">PDF</button></div>
           <div style="overflow:auto;max-height:260px"><table><thead><tr><th>Product</th><th>Stock</th><th>Value</th><th>Last consumption</th></tr></thead><tbody id="dead-rows"></tbody></table></div>
           <div id="stock-value-total" style="margin-top:8px" class="muted small"></div>
         </div>
@@ -1016,7 +1022,7 @@
 
       <div class="grid cols-2" style="margin-top:14px">
         <div class="card">
-          <h4 style="margin:0 0 8px">Best / worst cashier</h4>
+          <div class="row" style="margin-bottom:8px"><h4 style="margin:0">Best / worst cashier</h4><span class="spacer"></span><button class="btn small ghost" id="cashier-pdf">PDF</button></div>
           <div style="overflow:auto;max-height:260px"><table><thead><tr><th>Cashier</th><th>Orders</th><th>Gross</th><th>Discount %</th><th>Voids</th><th>Returns</th></tr></thead><tbody id="cashier-rows"></tbody></table></div>
         </div>
         <div class="card">
@@ -1032,7 +1038,8 @@
 
       <div class="card" style="margin-top:14px">
         <h4 style="margin:0 0 8px">What to reorder?</h4>
-        <div class="row" style="gap:6px;margin-bottom:8px"><input id="reorder-cover" type="number" value="14" style="width:80px" /> days cover <button class="btn small" id="reorder-reload">Run</button></div>
+        <div class="row" style="gap:6px;margin-bottom:8px"><input id="reorder-cover" type="number" value="14" style="width:80px" /> days cover <button class="btn small" id="reorder-reload">Run</button>
+        <button class="btn small ghost" id="reorder-pdf">PDF</button></div>
         <div style="overflow:auto"><table><thead><tr><th>Product</th><th>Stock</th><th>Velocity/d</th><th>Days cover</th><th>Suggested</th><th data-cap="purchasing">Supplier</th></tr></thead><tbody id="reorder-rows"></tbody></table></div>
       </div>
     </section>
@@ -1565,11 +1572,18 @@
 </div>
 
 <script src="/assets/app.js"></script>
+<script src="/assets/pdf.js"></script>
 <script>
 const { t, setLang, api, fmt, esc, toast, emptyRow, errText, applyCaps } = OP;
 const $ = (s) => document.querySelector(s);
 
-let ME = null, BOOT = null, CATEGORIES = [];
+let ME = null, CATEGORIES = [];
+const EMPTY_BOOT = () => ({
+  branches: [], locations: [], registers: [], products: [], categories: [],
+  variants: [], modules: [], caps: {}, settings: {}, me: null,
+  suggestions: [], openShift: null
+});
+let BOOT = EMPTY_BOOT();
 
 function roleKey(r) { return r === 'staff' ? 'staff_r' : r; }
 function pills(p) {
@@ -1611,8 +1625,8 @@ const TABS = [
 
 function tabVisible(tb) {
   if (tb.always) return true;
-  if (Array.isArray(tb.cap)) return tb.cap.some((c) => BOOT.caps[c]);
-  return !!BOOT.caps[tb.cap];
+  if (Array.isArray(tb.cap)) return tb.cap.some((c) => (BOOT.caps || {})[c]);
+  return !!(BOOT.caps || {})[tb.cap];
 }
 
 function drawTabs() {
@@ -2177,16 +2191,16 @@ async function loadBranchComparison() {
     $('#cmp-run').dataset.wired = '1';
     $('#cmp-run').onclick = drawBranchComparison;
     $('#dash-run').onclick = () => { const id = Number($('#dash-branch').value); if (id) drawBranchDashboard(id); };
-    $('#exp-add').onclick = async () => {
+    $('#bexp-add').onclick = async () => {
       const branchId = Number($('#dash-branch').value);
       if (!branchId) return;
-      const cat = $('#exp-cat').value.trim() || 'other';
-      const amt = Number($('#exp-amt').value);
-      const note = $('#exp-note').value.trim();
+      const cat = $('#bexp-cat').value.trim() || 'other';
+      const amt = Number($('#bexp-amt').value);
+      const note = $('#bexp-note').value.trim();
       if (!amt || amt <= 0) { alert('amount > 0'); return; }
       const r = await api('/api/expenses', { method: 'POST', body: { branch_id: branchId, category: cat, amount: amt, note, expense_date: new Date().toISOString().slice(0,10) } }).catch((e) => ({ error: e.message }));
       if (r && r.error) { alert(r.error); return; }
-      $('#exp-amt').value = ''; $('#exp-note').value = '';
+      $('#bexp-amt').value = ''; $('#bexp-note').value = '';
       drawBranchDashboard(branchId);
     };
     // populate branch selector from BOOT
@@ -2271,8 +2285,9 @@ async function loadCustomersM() {
     } catch (e) { toast($('#tab-customers'), errText(e), false); }
   };
   $('#cu-repay').onclick = () => {
+    if (!CU) return toast($('#tab-customers'), t('pick_customer'), false);
     const amt = Number($('#cu-repay-amt').value);
-    if (!CU || !amt || amt <= 0) return toast($('#tab-customers'), t('fill_amount'), false);
+    if (!amt || amt <= 0) return toast($('#tab-customers'), t('fill_amount'), false);
     const body = { amount: amt, method: $('#cu-repay-method').value };
     if (body.method === 'mpesa') {
       body.phone = $('#cu-repay-phone').value.trim();
@@ -2281,13 +2296,15 @@ async function loadCustomersM() {
     doAction(`/api/customers/${CU}/repayments`, body, `${t('repaid')} ${fmt(amt)}`);
   };
   $('#cu-dep').onclick = () => {
+    if (!CU) return toast($('#tab-customers'), t('pick_customer'), false);
     const amt = Number($('#cu-dep-amt').value);
-    if (!CU || !amt || amt <= 0) return toast($('#tab-customers'), t('fill_amount'), false);
+    if (!amt || amt <= 0) return toast($('#tab-customers'), t('fill_amount'), false);
     doAction(`/api/customers/${CU}/deposits`, { amount: amt, method: 'cash' }, `${t('deposited')} ${fmt(amt)}`);
   };
   $('#cu-sc').onclick = () => {
+    if (!CU) return toast($('#tab-customers'), t('pick_customer'), false);
     const delta = Number($('#cu-sc-amt').value);
-    if (!CU || !delta) return toast($('#tab-customers'), t('fill_amount'), false);
+    if (!delta) return toast($('#tab-customers'), t('fill_amount'), false);
     doAction(`/api/customers/${CU}/store-credit`, { delta }, t('saved_ok'));
   };
   await drawCuList();
@@ -2529,12 +2546,12 @@ async function boot() {
     return;
   }
   $('#m-main').classList.remove('hidden');
-  BOOT = await api('/api/bootstrap');
+  BOOT = Object.assign(EMPTY_BOOT(), (await api('/api/bootstrap')) || {});
   // R-C2: cut everything this shop's capability set does not include, before
   // anything is drawn — a one-till duka never reads the word "warehouse".
-  applyCaps(BOOT.caps);
+  applyCaps(BOOT.caps || {});
   CATEGORIES = await api('/api/categories').catch(() => []);
-  const biz = BOOT.settings.business || {};
+  const biz = (BOOT.settings || {}).business || {};
   $('#m-biz').textContent = `${biz.name || ''} — ${ME.name} (${t(roleKey(ME.role))})`;
   // Load the industry modules' own panels before the tabs are drawn.
   await OP.loadModules((BOOT.modules && BOOT.modules.ui) || []);
@@ -2547,7 +2564,7 @@ async function boot() {
   selectTab(location.hash.replace('#', '') || 'products');
   $('#m-lang').onclick = () => {
     OP.setLang(OP.lang() === 'en' ? 'sw' : 'en');
-    applyCaps(BOOT.caps);
+    applyCaps(BOOT.caps || {});
     $('#m-lang').textContent = OP.lang() === 'en' ? 'SW' : 'EN';
     drawTabs();
   };
@@ -2656,6 +2673,8 @@ async function loadProducts() {
   document.querySelectorAll('#p-rows [data-adjsave]').forEach((b) => {
     b.onclick = async () => {
       const id = Number(b.dataset.adjsave);
+      // the list may have been redrawn since this row was painted
+      if (!$(`#adjq-${id}`)) { loadProducts(); return; }
       try {
         await api('/api/stock/adjust', {
           method: 'POST',
@@ -2667,14 +2686,20 @@ async function loadProducts() {
             note: $(`#adjn-${id}`).value
           }
         });
-        toast($(`#adjm-${id}`), 'Stock adjusted.', true);
+        adjMsg(id, 'Stock adjusted.', true);
         loadProducts();
-      } catch (e) { toast($(`#adjm-${id}`), errText(e), false); }
+      } catch (e) { adjMsg(id, errText(e), false); }
     };
   });
   document.querySelectorAll('#p-rows [data-adjcancel]').forEach((b) => {
-    b.onclick = () => $(`#adj-${b.dataset.adjcancel}`).classList.add('hidden');
+    b.onclick = () => { const row = $(`#adj-${b.dataset.adjcancel}`); if (row) row.classList.add('hidden'); };
   });
+}
+
+/** message under an adjust row — the row may be gone by the time we answer. */
+function adjMsg(id, text, ok) {
+  const el = $(`#adjm-${id}`);
+  if (el) toast(el, text, ok);
 }
 
 // variant list for the adjust-stock row (matters once a product has variants)
@@ -3363,7 +3388,7 @@ $('#c-save').onclick = async () => {
 // ---------- tills ----------
 async function loadTills() {
   const rows = await api('/api/registers');
-  $('#t-loc').innerHTML = BOOT.locations.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
+  $('#t-loc').innerHTML = (BOOT.locations || []).map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
   $('#t-rows').innerHTML = rows.map((r) => `
     <tr class="clickable" data-id="${r.id}">
       <td>${esc(r.name)}</td><td>${esc(r.locationName)}</td>
@@ -3425,12 +3450,12 @@ $('#t-save').onclick = async () => {
 // ---------- staff ----------
 async function loadStaff() {
   const rows = await api('/api/staff');
-  const brName = Object.fromEntries(BOOT.branches.map((b) => [b.id, b.name]));
-  $('#s-branch').innerHTML = `<option value="">All branches</option>` + BOOT.branches
+  const brName = Object.fromEntries((BOOT.branches || []).map((b) => [b.id, b.name]));
+  $('#s-branch').innerHTML = `<option value="">All branches</option>` + (BOOT.branches || [])
     .map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
-  $('#s-loc').innerHTML = `<option value="">Any</option>` + BOOT.locations
+  $('#s-loc').innerHTML = `<option value="">Any</option>` + (BOOT.locations || [])
     .map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
-  $('#s-till').innerHTML = `<option value="">Any</option>` + BOOT.registers
+  $('#s-till').innerHTML = `<option value="">Any</option>` + (BOOT.registers || [])
     .map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join('');
   $('#s-rows').innerHTML = rows.map((s) => `
     <tr class="clickable" data-id="${s.id}">
@@ -3525,8 +3550,8 @@ $('#s-save').onclick = async () => {
 
 // ---------- layout: locations + branches ----------
 async function loadLayout() {
-  const showLoc = BOOT.caps.multi_location;
-  const showBr = BOOT.caps.multi_branch;
+  const showLoc = !!(BOOT.caps && BOOT.caps.multi_location);
+  const showBr = !!(BOOT.caps && BOOT.caps.multi_branch);
   if (showBr) loadBranchComparison();
   $('#lay-empty').style.display = (showLoc || showBr) ? 'none' : '';
   $('#lay-loc-wrap').style.display = showLoc ? '' : 'none';
@@ -4001,7 +4026,7 @@ async function loadSettings() {
       cb.onchange = async () => {
         try {
           await api('/api/capabilities', { method: 'POST', body: { capability: cb.dataset.feat, enabled: cb.checked } });
-          BOOT = await api('/api/bootstrap');
+          BOOT = Object.assign(EMPTY_BOOT(), (await api('/api/bootstrap')) || {});
           drawTabs();
         } catch (e) {
           cb.checked = !cb.checked;
@@ -4211,6 +4236,8 @@ async function loadDailyFinance() {
 }
 
 async function loadPnL() {
+  if (!$('#pnl-from').value) { const d = new Date(); d.setDate(d.getDate() - 7); $('#pnl-from').value = d.toISOString().slice(0, 10); }
+  if (!$('#pnl-to').value) $('#pnl-to').value = new Date().toISOString().slice(0, 10);
   const from = $('#pnl-from').value;
   const to = $('#pnl-to').value;
   const branch = $('#pnl-branch').value;
@@ -4280,18 +4307,68 @@ function repFillBranches() {
 }
 
 async function loadReports() {
-  if (!$('#rep-from').value) { const d=new Date(); d.setDate(d.getDate()-30); $('#rep-from').value=d.toISOString().slice(0,10); }
-  if (!$('#rep-to').value) $('#rep-to').value=new Date().toISOString().slice(0,10);
+  repDefaultDates();
   repFillBranches();
   await Promise.all([loadOwnerDash(), loadBranchDash(), loadStockDash(), loadCashierDash(), loadSalesReport(), loadMarginReport(), loadSlow(), loadDead(), loadStockValue(), loadCashierReport(), loadReorder()]);
   renderQuick();
 }
 
+/** Reports run over a period; if the shop has not picked one, last 30 days. */
+function repDefaultDates() {
+  if (!$('#rep-from') || !$('#rep-to')) return;
+  if (!$('#rep-from').value) { const d = new Date(); d.setDate(d.getDate() - 30); $('#rep-from').value = d.toISOString().slice(0, 10); }
+  if (!$('#rep-to').value) $('#rep-to').value = new Date().toISOString().slice(0, 10);
+}
+
 function repRangeQS() {
+  repDefaultDates();
   const from = $('#rep-from').value;
   const to = $('#rep-to').value;
   const branch = $('#rep-branch').value;
   return `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${branch?`&branch_id=${branch}`:''}`;
+}
+
+// ---------------- reports as PDF ----------------
+// Drawn in the browser: no internet, no round trip, no wait. A shop with a bad
+// connection still walks away with the report in hand.
+function reportMeta() {
+  const from = $('#rep-from').value, to = $('#rep-to').value;
+  const sel = $('#rep-branch');
+  const biz = (BOOT && BOOT.settings && BOOT.settings.business) || {};
+  return {
+    shop: biz.name || '',
+    range: (from && to) ? `${from} to ${to}` : '',
+    branch: sel && sel.value ? ((sel.options[sel.selectedIndex] || {}).textContent || '') : ''
+  };
+}
+
+function pdfReport(title, tbodyId, o) {
+  const opts = o || {};
+  const msg = $('#rep-msg') || $('#fin-msg');
+  if (!OP.pdf) { if (msg) toast(msg, 'The PDF writer did not load', false); return; }
+  const body = document.getElementById(tbodyId);
+  const table = body && body.closest('table');
+  if (!table) { if (msg) toast(msg, 'Nothing to print here', false); return; }
+  const heads = table.querySelectorAll('thead th').length || 1;
+  const real = [...body.querySelectorAll('tr')].filter(
+    (tr) => !tr.querySelector('.empty') && tr.children.length >= Math.max(1, heads - 1));
+  if (!real.length) { if (msg) toast(msg, 'Run the report first — there is nothing to print yet', false); return; }
+  const meta = reportMeta();
+  const extra = [];
+  if (meta.branch) extra.push(['Branch', meta.branch]);
+  const d = OP.pdf.fromTable({
+    table,
+    title,
+    subtitle: opts.subtitle || '',
+    shop: meta.shop,
+    range: opts.range === false ? '' : meta.range,
+    meta: extra,
+    landscape: !!opts.landscape,
+    note: opts.note
+  });
+  const file = `${(opts.file || title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}-${new Date().toISOString().slice(0, 10)}.pdf`;
+  OP.pdf.save(d.build(), file);
+  if (msg) toast(msg, `${title} — PDF saved`, true);
 }
 
 function renderQuick() {
@@ -4518,6 +4595,20 @@ $('#refund-reload').onclick = loadRefundsReport;
 $('#short-reload').onclick = loadShortagesReport;
 $('#sales-csv').onclick = () => { const qs = repRangeQS(); window.open(`/api/reports/export?report=sales${qs.replace('?','&')}&format=csv`, '_blank'); };
 $('#margin-csv').onclick = () => { const qs = repRangeQS(); window.open(`/api/reports/export?report=margin${qs.replace('?','&')}&format=csv`, '_blank'); };
+$('#sales-pdf').onclick = () => pdfReport('What sold', 'sales-rows', {
+  subtitle: `Grouped by ${($('#sales-group') || {}).value || 'product'}`, file: 'what-sold' });
+$('#margin-pdf').onclick = () => pdfReport('Margin by product', 'margin-rows', {
+  subtitle: $('#margin-losing') && $('#margin-losing').checked ? 'Losing margin only' : '', file: 'margin' });
+$('#slow-pdf').onclick = () => pdfReport('Slow-moving stock', 'slow-rows', {
+  subtitle: `No sale in ${($('#slow-days') || {}).value || 30} days`, range: false, file: 'slow-moving' });
+$('#dead-pdf').onclick = () => pdfReport('Dead stock', 'dead-rows', {
+  subtitle: `No movement in ${($('#dead-days') || {}).value || 60} days`, range: false, file: 'dead-stock' });
+$('#cashier-pdf').onclick = () => pdfReport('Cashier performance', 'cashier-rows', { file: 'cashiers' });
+$('#reorder-pdf').onclick = () => pdfReport('What to reorder', 'reorder-rows', {
+  subtitle: `${($('#reorder-cover') || {}).value || 14} days of cover`, range: false, landscape: true, file: 'reorder' });
+$('#pnl-pdf').onclick = () => pdfReport('Profit and loss', 'pnl-rows', {
+  subtitle: `${(($('#pnl-from') || {}).value || '')} to ${(($('#pnl-to') || {}).value || '')}`.trim(), range: false, file: 'pnl' });
+$('#exp-pdf').onclick = () => pdfReport('Expenses', 'exp-rows', { file: 'expenses' });
 
 // ================= INTEGRATIONS Day 22-23 Kenya =================
 async function loadIntegrations() {
@@ -4696,7 +4787,9 @@ $('#et-offline-sim').onclick = async () => {
 
 
 async function loadSync() {
-  if (!$('#sync-reload').dataset.wired) {
+  const reload = $('#sync-reload');
+  if (!reload) return; // the sync card is not on this screen (or was redrawn)
+  if (!reload.dataset.wired) {
     $('#sync-reload').dataset.wired='1';
     $('#sync-reload').onclick = loadSync;
     $('#sync-test-matrix').onclick = runSyncTestMatrix;

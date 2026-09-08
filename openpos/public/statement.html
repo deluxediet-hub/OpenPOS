@@ -62,6 +62,7 @@
 <div class="btnbar">
   <button class="btn ghost" onclick="location.href='/'">← Back</button>
   <button class="btn" onclick="window.print()">Print</button>
+  <button class="btn" id="pdf" disabled>PDF</button>
 </div>
 <div class="page" id="doc">
   <div class="top">
@@ -79,7 +80,9 @@
     <span>OpenPOS — this statement is generated from the customer ledger and reconciles to the shilling.</span>
   </div>
 </div>
+<script src="/assets/pdf.js"></script>
 <script>
+let STMT = null;
 const fmt = (n) => `Ksh ${Number(n || 0).toLocaleString('en-KE')}`;
 const dt = (s) => new Date(s).toLocaleString('en-KE', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -118,7 +121,40 @@ const id = q.get('id');
     <div>Closing balance<b>${fmt(s.closing)}</b></div>`;
   document.getElementById('printed').textContent = `Printed ${new Date().toLocaleString('en-KE')}`;
   document.title = `Statement — ${s.customer.name}`;
+  STMT = s;
+  const pdfBtn = document.getElementById('pdf');
+  if (pdfBtn) { pdfBtn.disabled = false; pdfBtn.onclick = statementPdf; }
 })();
+
+// The same statement as a file the shop can send to the customer — drawn here,
+// so it works with no internet.
+function statementPdf() {
+  if (!STMT || !window.OpenPosPdf) return;
+  const b = STMT.business || {};
+  const d = OpenPosPdf.doc({ title: `Statement — ${STMT.customer.name}` });
+  d.heading('Deni statement', b.name || 'OpenPOS');
+  d.meta([
+    ['Customer', `${STMT.customer.name}${STMT.customer.phone ? ' · ' + STMT.customer.phone : ''}`],
+    ['Period', `${STMT.from || 'beginning'} to ${STMT.to ? dt(STMT.to) : 'today'}`],
+    ['Credit limit', fmt(STMT.customer.credit_limit)],
+    ['Closing balance', fmt(STMT.closing)],
+    ['Printed', new Date().toLocaleString('en-KE')]
+  ]);
+  const rows = [];
+  if (STMT.opening !== 0) rows.push([STMT.from ? dt(STMT.from) : 'before period', 'Opening balance', '', '', fmt(STMT.opening)]);
+  for (const r of STMT.rows) {
+    rows.push([dt(r.date), r.type === 'credit_sale' ? 'Credit sale' : 'Repayment', r.note || r.ref || '',
+      (r.type === 'credit_sale' ? '+' : '-') + fmt(r.amount), fmt(r.balance)]);
+  }
+  d.table([
+    { title: 'Date' }, { title: 'Type' }, { title: 'Note / ref' },
+    { title: 'Amount', align: 'right' }, { title: 'Balance', align: 'right' }
+  ], rows, {
+    totals: ['Totals', '', `Credit ${fmt(STMT.totals.credit_sales)} · Repaid ${fmt(STMT.totals.repayments)}`, '', fmt(STMT.closing)]
+  });
+  const name = `statement-${(STMT.customer.name || 'customer').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${new Date().toISOString().slice(0, 10)}.pdf`;
+  OpenPosPdf.save(d.build(), name);
+}
 </script>
 </body>
 </html>

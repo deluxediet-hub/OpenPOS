@@ -88,6 +88,9 @@ async function waitFor(fn, label, timeout = 8000) {
     // Inline blocks are captured and replayed manually (jsdom would otherwise
     // run them at parse time, before our fetch/cookie stubs exist).
     const inlineBlocks = [...raw.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    // Pages also ship <script src="..."> tags (the PDF writer, for one). A real
+    // browser runs those before the inline code, so the harness does too.
+    const srcFiles = [...raw.matchAll(/<script[^>]*\ssrc="([^"]+)"[^>]*>\s*<\/script>/g)].map((m) => m[1]);
     const html = raw.replace(/<script[\s\S]*?<\/script>/g, '');
     const dom = new JSDOM(html, { url: BASE + '/', pretendToBeVisual: true, runScripts: 'dangerously' });
     const w = dom.window;
@@ -143,6 +146,10 @@ async function waitFor(fn, label, timeout = 8000) {
     patch(w.HTMLHeadElement.prototype);
 
     run(fs.readFileSync(path.join(PUB, 'assets', 'app.js'), 'utf8'), 'app.js');
+    for (const src of srcFiles) {
+      if (/app\.js$/.test(src)) continue;
+      try { run(fs.readFileSync(resolve(src), 'utf8'), src); } catch (e) { errs.push(String(e.message)); }
+    }
     run(inlineBlocks.join('\n'), 'inline');
     return { dom, w, errs, run };
   }
@@ -384,6 +391,45 @@ async function waitFor(fn, label, timeout = 8000) {
       /no-go|go/.test(mw.document.querySelector('#pl-verdict').textContent),
       mw.document.querySelector('#pl-verdict').textContent);
 
+    // ---------------- a report leaves as a PDF, not just as pixels ----------
+    const repTab = [...mw.document.querySelectorAll('#tabs button')].find((b) => /Reports/i.test(b.textContent));
+    ck('the back office has a Reports tab', !!repTab,
+      [...mw.document.querySelectorAll('#tabs button')].map((b) => b.textContent.trim()).join(' | '));
+    if (repTab) {
+      click(mw, repTab);
+      await waitFor(() => mw.document.querySelector('#sales-pdf'), 'the reports toolbar');
+      // A report can only be printed if there is something in it, so ring up a
+      // sale the way a shop would before asking for the file.
+      const prods = await (await fetch(BASE + '/api/products', { headers: { cookie } })).json();
+      const variant = (prods[0] || {}).base_variant_id;
+      const saleRes = await fetch(BASE + '/api/sales', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', cookie },
+        body: JSON.stringify({ items: [{ variant_id: variant, qty: 2 }], payment: { method: 'cash', amount: 5000 } })
+      });
+      ck('a sale is rung up for the report to talk about', saleRes.ok, String(saleRes.status));
+      click(mw, mw.document.querySelector('#sales-reload'));
+      await waitFor(() => {
+        const t = mw.document.querySelector('#sales-rows');
+        return t.querySelectorAll('tr').length && !/no data/i.test(t.textContent);
+      }, 'the sales report', 15000);
+      ck('the sales report runs and fills its table',
+        mw.document.querySelectorAll('#sales-rows tr').length > 0);
+      // The file is built on the page: catch the blob the download would save.
+      let pdf = null;
+      mw.URL.createObjectURL = (b) => { pdf = b; return 'blob:openpos-test'; };
+      mw.URL.revokeObjectURL = () => {};
+      mw.HTMLAnchorElement.prototype.click = function () {};
+      click(mw, mw.document.querySelector('#sales-pdf'));
+      await waitFor(() => pdf, 'the PDF file', 15000);
+      const head = pdf ? (await pdf.text()).slice(0, 8) : '';
+      ck('the PDF button makes a real PDF file, here on the page', head === '%PDF-1.4', head);
+      ck('and it is big enough to hold the report', !!pdf && pdf.size > 700, pdf && String(pdf.size));
+      ck('the report says what it is and when it was printed',
+        !!pdf && /What sold/.test(await pdf.text()), '');
+      ck('the Action buttons do not follow the report onto paper',
+        !!pdf && !/Action/.test((await pdf.text()).split('stream')[1] || ''), '');
+    }
+
     ck('manager page booted without script errors', mgr.errs.length === 0, mgr.errs.join(' | '));
   } catch (e) {
     ck('manager page smoke', false, e.message + ' :: ' + mgr.errs.join(' | '));
@@ -444,6 +490,43 @@ async function waitFor(fn, label, timeout = 8000) {
     const tillText = seenText(pos.w);
     const erp = ['branch', 'warehouse', 'supplier', 'purchase order', 'price level'].filter((w) => tillText.includes(w));
     ck('the till never talks to a one-till shop like it is a chain', erp.length === 0, erp.join(', '));
+
+    // ---------------- the receipt a customer is handed ----------------------
+    // Bought, paid, printed: what the shop hands over must read like a receipt
+    // from that shop — not like a database row.
+    const prods2 = await (await fetch(BASE + '/api/products', { headers: { cookie } })).json();
+    const saleR = await fetch(BASE + '/api/sales', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({ items: [{ variant_id: prods2[0].base_variant_id, qty: 2 }], payment: { method: 'cash', amount: 5000 } })
+    });
+    const made = await saleR.json();
+    const payload = await (await fetch(BASE + `/api/sales/${made.sale.id}`, { headers: { cookie } })).json();
+    pos.w.showReceipt(payload);
+    await waitFor(() => !pos.w.document.querySelector('#receipt-overlay').classList.contains('hidden'), 'the receipt');
+    const slip = pos.w.document.querySelector('#receipt');
+    const slipText = slip.textContent.replace(/\s+/g, ' ');
+    ck('the receipt names the shop first', /Baraka Wines/i.test(slip.querySelector('.rc-name').textContent),
+      slip.querySelector('.rc-name').textContent);
+    ck('it lists what was bought, with the quantity',
+      /2 ×/.test(slipText) && slip.querySelectorAll('.rc-item').length > 0, slipText.slice(0, 120));
+    ck('the money is laid out: subtotal, VAT, total — in that order',
+      (() => {
+        const t = [...slip.querySelectorAll('.rc-totals .rc-kv')].map((r) => r.textContent.replace(/\s+/g, ' ').trim());
+        return t.length >= 3 && /subtotal/i.test(t[0]) && /total/i.test(t[t.length - 1]);
+      })(), [...slip.querySelectorAll('.rc-totals .rc-kv')].map((r) => r.textContent.trim()).join(' / '));
+    ck('the total is the loudest thing on the slip', !!slip.querySelector('.rc-total'), '');
+    ck('it says how the shop was paid', /cash/i.test(slipText), slipText.slice(-160));
+    ck('it ends with the invoice number a customer can quote',
+      (slip.querySelector('.rc-code') || {}).textContent === payload.sale.invoice_no,
+      (slip.querySelector('.rc-code') || {}).textContent);
+    ck('and it keeps the till\'s own bookkeeping off the customer\'s paper',
+      !/client_id|sync_status|etims_status/i.test(slipText), slipText.slice(-200));
+    ck('a receipt for a shop with no internet still reads as a receipt', (() => {
+      pos.w.showOfflineReceipt({ items: [{ product_id: prods2[0].id, qty: 1 }] }, 'offline-client-id-0001');
+      const off = pos.w.document.querySelector('#receipt').textContent.replace(/\s+/g, ' ');
+      return /queued/i.test(off) && /offline/i.test(off) && !/client_id/i.test(off);
+    })(), pos.w.document.querySelector('#receipt').textContent.replace(/\s+/g, ' ').slice(0, 160));
+
     ck('till page booted without script errors', pos.errs.length === 0, pos.errs.join(' | '));
   } catch (e) {
     ck('till page smoke', false, e.message + ' :: ' + pos.errs.join(' | '));

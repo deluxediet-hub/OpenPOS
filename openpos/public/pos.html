@@ -183,10 +183,57 @@
     margin-bottom: 8px; cursor: pointer; transition: border-color .15s ease, background .15s ease;
   }
   .vrow:hover { border-color: var(--brand-500); background: var(--brand-50); }
-  #receipt { font-family: var(--mono); font-size: 13px; }
+  /* ---- the receipt: a slip of paper, on the screen and on the printer ---- */
+  #receipt { font-family: var(--mono); font-size: 13px; line-height: 1.5; color: #10180f; }
   #receipt .ctr { text-align: center; }
-  #receipt hr { border: none; border-top: 1px dashed #999; margin: 8px 0; }
+  #receipt hr { border: none; border-top: 1px dashed #b6c2ba; margin: 9px 0; }
   #receipt .rline { display: flex; justify-content: space-between; gap: 8px; }
+  #receipt-overlay { align-items: flex-start; padding: 26px 16px 40px; }
+  #receipt-box {
+    position: relative; width: 344px; max-width: 94vw; margin: auto;
+    padding: 20px 18px 16px; border: none; border-radius: 3px; background: #fff;
+    box-shadow: 0 18px 40px rgba(6, 26, 16, .34), 0 2px 6px rgba(6, 26, 16, .18);
+  }
+  /* the torn top and bottom of a till roll */
+  #receipt-box::before, #receipt-box::after {
+    content: ""; position: absolute; left: 0; right: 0; height: 6px;
+    background-size: 12px 6px; background-repeat: repeat-x;
+  }
+  #receipt-box::before { top: -6px; background-image: radial-gradient(circle at 6px 6px, #fff 5.4px, transparent 5.8px); }
+  #receipt-box::after { bottom: -6px; background-image: radial-gradient(circle at 6px 0, #fff 5.4px, transparent 5.8px); }
+  .rc-head { text-align: center; }
+  .rc-name { font-size: 16.5px; font-weight: 800; letter-spacing: .01em; text-transform: uppercase; }
+  .rc-sub { font-size: 11.5px; color: #5b6b60; }
+  .rc-status { text-align: center; margin: 6px 0 2px; }
+  .rc-rule { border-top: 1px dashed #b6c2ba; margin: 9px 0; }
+  .rc-rule.dbl { border-bottom: 1px dashed #b6c2ba; height: 3px; }
+  .rc-kv { display: flex; justify-content: space-between; gap: 12px; }
+  .rc-kv > span { color: #5b6b60; }
+  .rc-meta { font-size: 12px; }
+  .rc-items { margin: 2px 0; }
+  .rc-item { padding: 5px 0; }
+  .rc-item + .rc-item { border-top: 1px dotted #e0e7e2; }
+  .rc-item-top { display: flex; gap: 8px; align-items: baseline; }
+  .rc-qty { flex: none; font-weight: 800; min-width: 30px; }
+  .rc-nm { flex: 1 1 auto; }
+  .rc-amt { flex: none; font-weight: 700; }
+  .rc-item-sub { padding-left: 30px; font-size: 11px; color: #6d8076; }
+  .rc-totals { font-size: 12.5px; }
+  .rc-totals .rc-kv { padding: 1px 0; }
+  .rc-total { margin-top: 7px; padding-top: 7px; border-top: 1px solid #10180f; font-size: 15.5px; }
+  .rc-total > span { color: #10180f; font-weight: 800; letter-spacing: .06em; }
+  .rc-total > b { font-weight: 800; }
+  .rc-change { margin-top: 6px; padding: 6px 9px; background: #edf7f1; border-radius: 5px; }
+  .rc-change > span, .rc-change > b { color: var(--brand-800); font-weight: 800; }
+  .rc-foot { text-align: center; margin-top: 10px; }
+  .rc-thanks { font-weight: 750; }
+  .rc-fine { font-size: 10.5px; color: #6d8076; }
+  .rc-code {
+    margin-top: 9px; text-align: center; font-size: 12.5px; letter-spacing: .16em;
+    border: 1px dashed #b6c2ba; border-radius: 4px; padding: 4px 6px;
+  }
+  .rc-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .rc-actions .btn { flex: 1; }
 
   /* ---- offline banner ---- */
   #sync-status {
@@ -259,10 +306,19 @@
   }
 
   @media print {
+    @page { margin: 4mm; }
     body * { visibility: hidden; }
     #receipt, #receipt * { visibility: visible; }
-    #receipt { position: absolute; left: 0; top: 0; width: 72mm; }
-    #receipt-overlay { position: static; background: none; }
+    #receipt { position: absolute; left: 0; top: 0; width: 72mm; color: #000; }
+    #receipt-overlay { position: static; display: block; background: none; padding: 0; }
+    #receipt-box {
+      position: absolute; left: 0; top: 0; width: 72mm; max-width: none;
+      margin: 0; padding: 0; box-shadow: none; background: #fff;
+    }
+    #receipt-box::before, #receipt-box::after { display: none; }
+    /* the pending-payment form is a screen thing, not part of the slip */
+    .rc-actions, .followup, .followup * { display: none !important; }
+    .rc-sub, .rc-kv > span, .rc-fine, .rc-item-sub { color: #444; }
   }
 </style>
 </head>
@@ -444,7 +500,7 @@
 
 <div id="receipt-overlay" class="hidden"><div id="receipt-box">
   <div id="receipt"></div>
-  <div class="row" style="margin-top:14px">
+  <div class="rc-actions">
     <button class="btn" id="rc-print" data-i18n="print">Print</button>
     <button class="btn ghost" id="rc-new" data-i18n="new_sale">New sale</button>
   </div>
@@ -1204,24 +1260,36 @@ async function completeSale() {
 }
 
 function showOfflineReceipt(body, client_id) {
-  const total = body.items.reduce((s,i)=> s + Math.round((PRODUCTS.find(p=>p.id===i.product_id)?.price||0)*i.qty), 0);
-  const cartTotalVal = cartTotal();
-  const f = (n) => `Ksh ${Number(n||0).toLocaleString('en-KE')}`;
-  const itemLines = body.items.map(it=> `<div class="rline"><span>${esc(PRODUCTS.find(p=>p.id===it.product_id)?.name||'Item')} × ${it.qty}</span><span>${f(it.qty * (PRODUCTS.find(p=>p.id===it.product_id)?.price||0))}</span></div>`).join('');
-  $('#receipt').innerHTML = `
-    <div class="ctr"><b>Offline sale queued</b><br><span class="pill">local</span> ${esc(client_id.slice(0,8))}</div>
-    <hr>
-    <div class="rline"><span>Client ID</span><span>${esc(client_id)}</span></div>
-    <div class="rline"><span>When</span><span>${new Date().toLocaleString()}</span></div>
-    <div class="rline"><span>Branch</span><span>${CTX.branchId||''}</span></div>
-    <hr>
-    ${itemLines}
-    <hr>
-    <div class="rline"><b>Total</b><span><b>${f(cartTotalVal)}</b></span></div>
-    <hr>
-    <div class="ctr">Queued offline — will sync when online<br><span style="font-size:11px">eTIMS will transmit within 48h after sync (R-O4 first-ack)</span></div>`;
+  const f = (n) => `Ksh ${Number(n || 0).toLocaleString('en-KE')}`;
+  const priceOf = (id) => Number((PRODUCTS.find((p) => p.id === id) || {}).price || 0);
+  const itemLines = body.items.map((it) => {
+    const nm = (PRODUCTS.find((p) => p.id === it.product_id) || {}).name || 'Item';
+    const unit = priceOf(it.product_id);
+    return `<div class="rc-item">
+      <div class="rc-item-top"><span class="rc-qty">${it.qty} ×</span><span class="rc-nm">${esc(nm)}</span><span class="rc-amt">${f(it.qty * unit)}</span></div>
+      <div class="rc-item-sub">@ ${f(unit)}</div>
+    </div>`;
+  }).join('');
+  const stamp = new Date().toLocaleString([], { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const head = `<div class="rc-head">
+    <div class="rc-name">${esc(($('#p-biz') && $('#p-biz').textContent) || 'OpenPOS')}</div>
+    <div class="rc-status"><span class="pill a">${esc(t('offline'))}</span></div>
+  </div>`;
+  const meta = `<div class="rc-meta">
+    ${rcKv(t('date'), esc(stamp))}
+    ${rcKv('Ref', esc(client_id.slice(0, 8)))}
+    ${CTX.branchName ? rcKv(t('branch') || 'Branch', esc(CTX.branchName)) : ''}
+  </div>`;
+  $('#receipt').innerHTML = head + rcRule(true) + meta + rcRule(true)
+    + `<div class="rc-items">${itemLines}</div>` + rcRule(true)
+    + `<div class="rc-totals">${rcKv(t('total'), f(cartTotal()), 'rc-total')}</div>` + rcRule()
+    + `<div class="rc-foot">
+        <div class="rc-thanks">${esc(t('offline_queued'))}</div>
+        <div class="rc-fine">${esc(t('offline_sync_note'))}</div>
+        <div class="rc-fine">OpenPOS v2 · ${esc(client_id.slice(0, 8))}</div>
+      </div>`;
   $('#receipt-overlay').classList.remove('hidden');
-  CART = []; $('#p-promo').value=''; if (CUST_ID()) $('#p-cust').value=''; drawCart(); $('#p-amount').value=''; updateSyncBanner();
+  CART = []; $('#p-promo').value = ''; if (CUST_ID()) $('#p-cust').value = ''; drawCart(); $('#p-amount').value = ''; updateSyncBanner();
 }
 
 async function loadPayMethods() {
@@ -1316,14 +1384,26 @@ async function resumeSale() {
 }
 
 // ---------------- receipt ----------------
+// One slip, drawn the same way on the screen and on the printer: whose shop
+// it is, what was bought, the money, and the thanks. Nothing internal — a
+// customer should never have to read a sync status to know what they paid.
+const rcKv = (k, v, cls) => `<div class="rc-kv${cls ? ' ' + cls : ''}"><span>${k}</span><b>${v}</b></div>`;
+const rcRule = (dbl) => `<div class="rc-rule${dbl ? ' dbl' : ''}"></div>`;
+
 function showReceipt(data) {
   if (data && data.sale) LAST_SALE_ID = data.sale.id;
   const s = data.sale, rc = data.receipt;
   const sym = rc.symbol || 'Ksh';
   const f = (n) => `${sym} ${Number(n || 0).toLocaleString('en-KE')}`;
-  const itemLines = data.items.map((it) =>
-    `<div class="rline"><span>${esc(it.name)} × ${it.qty}${it.line_discount ? ` (−${f(it.line_discount)})` : ''}</span><span>${f(it.gross)}</span></div>`).join('');
-  const payLines = data.payments.map((p) => `<div class="rline"><span>${esc(p.method)}${p.ref ? ` · ${esc(p.ref)}` : ''}${p.status !== 'confirmed' ? ` <span class="pill">${t(p.status)}</span>` : ''}</span><span>${f(p.amount)}</span></div>`).join('');
+  const stamp = new Date(s.created_at).toLocaleString([], { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const biz = rc.business || {};
+  const itemLines = data.items.map((it) => `<div class="rc-item">
+      <div class="rc-item-top"><span class="rc-qty">${Number(it.qty)} ×</span><span class="rc-nm">${esc(it.name)}</span><span class="rc-amt">${f(it.gross)}</span></div>
+      <div class="rc-item-sub">${[it.unit_price ? `@ ${f(it.unit_price)}` : '', it.line_discount ? `− ${f(it.line_discount)}` : '', it.line_note ? esc(it.line_note) : ''].filter(Boolean).join(' · ')}</div>
+    </div>`).join('');
+  const payLines = data.payments.map((p) => rcKv(
+    `${esc(t(p.method))}${p.ref ? ` · ${esc(p.ref)}` : ''}${p.status !== 'confirmed' ? ` (${esc(t(p.status))})` : ''}`,
+    f(p.amount))).join('');
   const confirmedSum = data.payments.filter((p) => p.status === 'confirmed').reduce((a, p) => a + Number(p.amount), 0);
   const pendingPay = data.payments.find((p) => p.status === 'pending');
   const balance = Math.max(0, s.gross - confirmedSum);
@@ -1357,31 +1437,41 @@ function showReceipt(data) {
       <div class="row" style="margin-top:6px"><button class="btn" id="more-pay">${t('add_payment')}</button></div>
     </div>`;
   }
-  let changeLine = '';
   const tendered = data.payments.reduce((a, p) => a + (JSON.parse(p.raw || '{}').tendered || 0), 0);
-  if (tendered > s.gross) changeLine = `<div class="rline"><b>${t('change')}</b><span><b>${f(tendered - s.gross)}</b></span></div>`;
-  $('#receipt').innerHTML = `
-    <div class="ctr"><b style="font-size:15px">${esc(rc.business.name || 'OpenPOS')}</b><br>
-    ${esc(rc.business.phone || '')}${rc.business.kraPin ? `<br>PIN: ${esc(rc.business.kraPin)}` : ''}${rc.business.address ? `<br>${esc(rc.business.address)}` : ''}</div>
-    <hr>
-    <div class="rline"><span>${t('invoice_no') || 'Invoice'}</span><span>${esc(s.invoice_no)}</span></div>
-    <div class="rline"><span>${new Date(s.created_at).toLocaleString()}</span><span>${esc(s.status)}</span></div>
-    <div class="rline"><span>${esc(s.cashier || '')}</span><span>${CTX.registerName ? esc(CTX.registerName) : ''}</span></div>
-    ${data.customer ? `<div class="rline"><span>${t('customer') || 'Customer'}</span><span>${esc(data.customer.name)}</span></div>` : ''}
-    ${s.client_id ? `<div class="rline"><span>client_id</span><span class="muted small">${esc(s.client_id.slice(0,8))}</span></div>` : ''}
-    <hr>
-    ${itemLines}
-    <hr>
-    <div class="rline"><span>${t('subtotal')}</span><span>${f(s.subtotal)}</span></div>
-    ${s.discount ? `<div class="rline"><span>${t('discount')}</span><span>−${f(s.discount)}</span></div>` : ''}
-    ${s.tax ? `<div class="rline"><span>VAT ${rc.vatRate || 16}%</span><span>${f(s.tax)}</span></div>` : ''}
-    <div class="rline"><b>${t('total')}</b><span><b>${f(s.gross)}</b></span></div>
-    <hr>
-    ${payLines}
-    ${changeLine}
-    ${followup}
-    <hr>
-    <div class="ctr">${esc(rc.footer || 'Asante!')}<br><span style="font-size:11px">OpenPOS v2 · eTIMS: ${esc(s.etims_status)}${s.sync_status ? ` · sync:${esc(s.sync_status)}` : ''}</span></div>`;
+  const changeLine = tendered > s.gross ? rcKv(t('change'), f(tendered - s.gross), 'rc-change') : '';
+
+  const head = `<div class="rc-head">
+    <div class="rc-name">${esc(biz.name || 'OpenPOS')}</div>
+    ${biz.address ? `<div class="rc-sub">${esc(biz.address)}</div>` : ''}
+    ${[biz.phone, biz.kraPin ? `PIN ${esc(biz.kraPin)}` : ''].filter(Boolean).map((x) => `<div class="rc-sub">${x}</div>`).join('')}
+  </div>`;
+  const meta = `<div class="rc-meta">
+    ${rcKv(t('invoice_no'), esc(s.invoice_no))}
+    ${rcKv(t('date'), esc(stamp))}
+    ${rcKv(t('served_by'), esc([s.cashier, CTX.registerName].filter(Boolean).join(' · ')))}
+    ${data.customer ? rcKv(t('customer'), esc(data.customer.name)) : ''}
+    ${s.status && s.status !== 'paid' ? rcKv(t('status'), esc(t(s.status))) : ''}
+  </div>`;
+  const totals = `<div class="rc-totals">
+    ${rcKv(t('subtotal'), f(s.subtotal))}
+    ${s.discount ? rcKv(t('discount'), `− ${f(s.discount)}`) : ''}
+    ${s.tax ? rcKv(`${t('vat')} ${rc.vatRate || 16}% (incl.)`, f(s.tax)) : ''}
+    ${rcKv(t('total'), f(s.gross), 'rc-total')}
+  </div>`;
+  const pays = (payLines || changeLine)
+    ? rcRule() + `<div class="rc-pays">${payLines}${changeLine}</div>` : '';
+  const foot = `<div class="rc-foot">
+    <div class="rc-thanks">${esc(rc.footer || t('thank_you'))}</div>
+    ${s.etims_status ? `<div class="rc-fine">eTIMS: ${esc(s.etims_status)}</div>` : ''}
+    <div class="rc-fine">OpenPOS v2${s.client_id ? ` · ${esc(String(s.client_id).slice(0, 8))}` : ''}</div>
+  </div>`;
+
+  $('#receipt').innerHTML = head + rcRule(true) + meta + rcRule(true)
+    + `<div class="rc-items">${itemLines}</div>` + rcRule(true)
+    + totals + pays
+    + (followup ? rcRule() + followup : '')
+    + rcRule() + foot
+    + `<div class="rc-code">${esc(s.invoice_no)}</div>`;
   $('#receipt-overlay').classList.remove('hidden');
   CART = []; RESUME_SALE = null; $('#p-promo').value = '';
   if (CUST_ID()) $('#p-cust').value = '';

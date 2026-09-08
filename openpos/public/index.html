@@ -295,10 +295,10 @@ function drawNav(caps, me) {
   cards.push(navCard('/pos.html', t('till'), 'Barcode · cash · M-Pesa · hold/resume', null));
   cards.push(navCard('/manager.html#products', t('products'), t('categories'), null));
   cards.push(navCard('/manager.html#tills', t('tills'), 'Printers · drawers', null));
-  cards.push(navCard('/manager.html#customers', 'Customers', t('deni_short'), 'Day 15', 'amber'));
+  cards.push(navCard('/manager.html#customers', t('customers'), t('deni_short'), null));
   if (caps.staff_roles) cards.push(navCard('/manager.html#staff', t('staff'), t('role'), null));
   if (caps.multi_branch || caps.multi_location) cards.push(navCard('/manager.html#layout', t('layout'), t('locations'), null));
-  cards.push(navCard('/reports.html', t('reports'), 'P&L · stock · eTIMS', 'Day 20', 'amber'));
+  cards.push(navCard('/manager.html#reports', t('reports'), 'P&L · stock · eTIMS', null));
   cards.push(navCard('/manager.html#settings', t('settings'), t('features'), null));
   $('#d-nav').innerHTML = cards.join('');
 }
@@ -335,7 +335,7 @@ async function loadDash(bizName) {
     $('#d-shift-sub').textContent = `opened ${new Date(sh.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${fmt(sh.float)}`;
   } else {
     $('#d-shift').textContent = '—';
-    $('#d-shift-sub').textContent = 'opens with the till (Day 13)';
+    $('#d-shift-sub').textContent = t('no_open_shift');
   }
 
   const hour = new Date().getHours();
