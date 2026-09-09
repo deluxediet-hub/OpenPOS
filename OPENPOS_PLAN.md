@@ -1,8 +1,10 @@
 # OpenPOS v2 — Plan & Roadmap
 **"A POS for every Kenyan shop — any number of branches."**
 
-> Status: **Days 7–8 of 60 complete** (Phase 5 — purchasing & suppliers). Roadmap
-> restructured 2026-09-02 to the founder's 35-phase directive. The engineering contract is
+> Status: **Days 24–25 of 60 complete** (Phase 17 — offline-first sync). Engine +
+> compliance + offline layer are built and green (148 tests, 0 failing); production
+> M-Pesa/certification and pilot-facing polish (Phases 18–35) remain. The engineering
+> contract is
 > **`openpos/ARCHITECTURE.md`** — every phase implements it; rule changes go through its
 > change log.
 
@@ -340,7 +342,7 @@ contradicts the doc without a change-log entry.**
   **124 tests green** (was 119) incl. manager override, M-Pesa reconciliation,
   statement-vs-ledger tie; 22-step UI smoke green.
 
-### Phase 12 — Multi-Branch Operating System · Days 16–17 ✅ (Day 16)
+### Phase 12 — Multi-Branch Operating System · Days 16–17 ✅
 - Branch dashboards; branch users/permissions/stock/pricing/expenses/suppliers/customers;
   **inter-branch & inter-location transfers**: request → approve → dispatch → receive,
   partial, discrepancies; transfer history; branch comparison
@@ -359,14 +361,14 @@ contradicts the doc without a change-log entry.**
   transfer UX (scheduled/periodic transfers, transfer cost), supplier/expense branch views as
   Phases 13–14 land.
 
-### Phase 13 — Stock-Taking, Shrinkage & Reconciliation · Day 18
+### Phase 13 — Stock-Taking, Shrinkage & Reconciliation · Day 18 ✅
 - Full / partial / **blind** counts, expected-vs-actual, variance with **reason codes**,
   approval, recount, historical takes, **shrinkage analysis** (by branch/location/variant/
   reason), employee/branch attribution
 - **Acceptance:** blind take of 50 variants → approved → stock adjusted with reasons;
   shrinkage report names top-10 disappearing SKUs per branch; ledger integrity job clean.
 
-### Phase 14 — Expenses & Business Finance · Day 19
+### Phase 14 — Expenses & Business Finance · Day 19 ✅
 - Expenses (categories, branch, register, payment), petty cash, cash movements, supplier
   balances, customer balances; **daily financial summary**: gross sales → discounts → net →
   COGS → gross profit → expenses → **net operating profit**; P&L-lite per branch +
@@ -375,7 +377,7 @@ contradicts the doc without a change-log entry.**
 - **Acceptance:** daily sheet ties (net − COGS − expenses = NOP) against independently
   computed ledger totals; petty cash reconciles.
 
-### Phase 15 — Reporting & Business Intelligence · Days 20–21
+### Phase 15 — Reporting & Business Intelligence · Days 20–21 ✅
 Reports answer business questions, not "Sales Report": what sold · what made money · what
 isn't selling · what's losing margin · best/worst cashier · best/worst branch · what's
 disappearing · what's tied up in slow stock · what to reorder · where discounts/refunds/cash
@@ -383,7 +385,7 @@ shortages are unusually high. Four dashboards — **Owner / Branch Manager / Sto
 Cashier** — with radically different information density. CSV + PDF export.
 - **Acceptance:** every report drills down; dashboards load < 1s on 100k rows.
 
-### Phase 16 — Kenyan Integration Layer · Days 22–23
+### Phase 16 — Kenyan Integration Layer · Days 22–23 ✅ (adapters + sandbox; production approval external)
 **M-Pesa (real Daraja):** STK push, till, paybill (+Pochi), confirmation callbacks
 (idempotent), **automatic matching to sales**, reconciliation report, B2C refunds,
 sandbox→production switch in settings.
@@ -396,7 +398,7 @@ certification) runs against the adapter, not the core.
   CUIN/QR printed; kill network → 2 offline sales → restore → both transmit inside the
   window; M-Pesa recon = zero unmatched.
 
-### Phase 17 — Offline-First Architecture · Days 24–25
+### Phase 17 — Offline-First Architecture · Days 24–25 ✅
 Local transaction storage → local queue (outbox) → synchronization engine → conflict
 detection (single-writer + first-ack rule, R-O4) → retry with backoff → server
 acknowledgement → reconciliation; sync-status banner.
@@ -813,3 +815,64 @@ inline pay + dispute, returns, and suppliers CRUD. EN/SW strings.
 unexplained quantity. Cost is captured per line at the door (not from the product's cost), so
 the purchase-history view shows what a product actually cost per lot. Suggested-PO cover days
 and window are query params (defaults 30/14) so a business can tune its own appetite.
+
+### Day 9 — Pricing Engine (Phase 6) ✅ (2026-09-03)
+Server-side resolution chain (promo/time → customer → branch → pack → tier → default);
+`price_rules` one-primary-scope + combinable time windows; **minimum-margin guard**
+(product → branch → global floor; `pin` or `block`); append-only `price_history`;
+price freeze + re-validation at pay. **83 tests green.**
+
+### Days 10–11 — POS / Checkout Engine (Phase 7) ✅
+Scan/search → variant picker → cart → discounts (permissioned + PIN) → age gate →
+hold/resume → quote → invoice. Sale lines freeze resolution price; sales move stock
+exactly once; held sales keep stock until paid; M-Pesa stays pending until a
+confirmation. **119 tests green.**
+
+### Day 12 — Payment Engine (Phase 8) ✅
+`lib/payments.js` adapters: cash/card/M-Pesa/bank/deni/store-credit; split & partial;
+deposits; refunds-to-original; idempotent callbacks; provider failure fails the payment,
+never the sale.
+
+### Day 13 — Shifts & Till Control (Phase 9) ✅
+Open/close with float; expected cash = float + cash − refunds − payouts − deposits
+(M-Pesa never touches the drawer); variance; handover; timeclock sign-in/out.
+
+### Day 14 — Sales Lifecycle, Returns & Exchanges (Phase 10) ✅
+RET-# documents; restock to same batch / FEFO; refund-to-original-method (newest-first);
+store-credit alternative; exchanges settle the price diff exactly, stock both ways.
+
+### Day 15 — Customers & Deni (Phase 11) ✅
+Phone-first customer profiles; credit limits; cash/M-Pesa repayments; store credit;
+statements that tie to the ledger; customer-specific pricing.
+
+### Days 16–17 — Multi-Branch OS (Phase 12) ✅
+Transfers (requested → approved → shipped → received; partial, discrepancy, batch moves
+with stock); scheduled/template transfers; visibility hierarchy (R-2); branch comparison
+(rank sales + margin + shrinkage, R-3). **131 tests green.**
+
+### Day 18 — Stock-Taking, Shrinkage & Reconciliation (Phase 13) ✅
+Full/partial/blind counts; reason codes (theft/lost/damage/found/correction);
+blind hides expected from non-approvers; recount/second count; variance-only moves on
+approve; approved takes never deleted; shrinkage report by variant/reason/location.
+
+### Day 19 — Expenses & Business Finance (Phase 14) ✅
+Expense categories; branch/register/payment-method expenses; cash movements; petty-cash
+reconciler; daily sheet and P&L-lite (`net − COGS − expenses = NOP` ties).
+
+### Days 20–21 — Reporting & BI (Phase 15) ✅
+Sales (product/variant/branch/cashier/day/category), margin, slow, dead, stock value,
+reorder, cashiers, discounts, refunds/voids, cash shortages, petty cash, shrinkage,
+m-pesa recon; four role dashboards; CSV + PDF export.
+
+### Days 22–23 — Kenyan Integration Layer (Phase 16) ✅ (adapters)
+`lib/etims.js`: manual/sandbox/live VSCU, KRA PIN + item codes, B2B buyer-PIN > 50k,
+48h queue, CUIN + QR, credit notes for void/return. `lib/mpesa.js`: STK, C2B auto-match,
+B2C refund, sandbox simulate, idempotent callback/recon. Production approval is external.
+
+### Days 24–25 — Offline-First Architecture (Phase 17) ✅
+`lib/sync.js`: local outbox, idempotent `client_id` push, first-ack conflict (R-O4),
+retry with backoff, pull/log/status/recon, POS sync banner + conflict modal.
+**148 tests green, 0 failed** — including Phase 13–17 acceptance tests added in this
+polish pass and fixes for schema/report drift they surfaced (`supplier_invoices.branch_id`,
+`sales.voided_at/void_reason`, `line_discount` in reports, stale `returns` aliases,
+HAVING-on-non-aggregate queries).

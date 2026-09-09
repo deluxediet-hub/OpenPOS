@@ -37,7 +37,7 @@ Optional sample products load for the chosen trade.
 ## Test
 
 ```bash
-npm test         # unit (money/VAT) + full API flow on a temp DB (60 tests)
+npm test         # unit (money/VAT) + full API flow on a temp DB (148 tests, Phases 1–17)
 ```
 
 ## Build status
@@ -55,19 +55,19 @@ adapters, branch isolation, auditability, offline rules, core vs modules) plus t
 | 3 | 3–4 | Universal product engine: **variants + axes, packs, multi-barcode, serials, industry attributes, CSV import/export, supplier link & reorder** ✅ |
 | 4 | 5–6 | Stock ledger & inventory: **append-only move engine, FEFO batch allocation, R-S8 oversell guard, integrity job, stocktakes, trace, ageing, dead stock** ✅ |
 | 5 | 7–8 | Purchasing & suppliers: **capability-gated POs, suggested orders (velocity × cover × lead), partial GR with batch/serial capture, receiving discrepancies (auto supplier return), invoices with evidence-backed payments, supplier balances** ✅ |
-| 6 | 9 | Pricing engine (resolution chain, margin guards, history) |
-| 7 | 10–11 | POS / checkout engine |
-| 8 | 12 | Payment engine (adapters: cash/M-Pesa/card/bank/deni) |
-| 9 | 13 | Shifts & till control |
-| 10 | 14 | Sales lifecycle, returns & exchanges |
-| 11 | 15 | Customers & deni (credit) system |
-| 12 | 16–17 | Multi-branch OS (transfers, comparisons, role visibility) |
-| 13 | 18 | Stock-taking, shrinkage & reconciliation |
-| 14 | 19 | Expenses & business finance |
-| 15 | 20–21 | Reporting & BI (4 role dashboards) |
-| 16 | 22–23 | Kenyan integration layer (real M-Pesa + eTIMS VSCU) |
-| 17 | 24–25 | Offline-first sync architecture |
-| 18 | 26–27 | Industry module framework |
+| 6 | 9 | Pricing engine (resolution chain, margin guards, history) ✅ |
+| 7 | 10–11 | POS / checkout engine ✅ |
+| 8 | 12 | Payment engine (adapters: cash/M-Pesa/card/bank/deni) ✅ |
+| 9 | 13 | Shifts & till control ✅ |
+| 10 | 14 | Sales lifecycle, returns & exchanges ✅ |
+| 11 | 15 | Customers & deni (credit) system ✅ |
+| 12 | 16–17 | Multi-branch OS (transfers, comparisons, role visibility) ✅ |
+| 13 | 18 | Stock-taking, shrinkage & reconciliation ✅ |
+| 14 | 19 | Expenses & business finance ✅ |
+| 15 | 20–21 | Reporting & BI (4 role dashboards) ✅ |
+| 16 | 22–23 | Kenyan integration layer (real M-Pesa + eTIMS VSCU) ✅ (adapters + sandbox; production approval is external) |
+| 17 | 24–25 | Offline-first sync architecture ✅ |
+| 18 | 26–27 | Industry module framework ⏳ |
 | 19–23 | 28–34 | Modules: spirits · boutique · pharmacy · mini-mart · hardware/electronics/cosmetics/footwear |
 | 24 | 35 | Promotions, loyalty & marketing |
 | 25 | 36 | WhatsApp & customer commerce |
@@ -130,3 +130,49 @@ adapters, branch isolation, auditability, offline rules, core vs modules) plus t
   invoices/payments → returns → suppliers). Purchases/returns post through the same Phase-4
   move engine, so trace & integrity cover them for free. **71 tests green** (was 60)
   including the full acceptance flow, plus a 47-step UI smoke.
+- **Day 9** — **pricing engine** (R-PR): server-side resolution chain (promo/time →
+  customer → branch → pack → tier → default), one-rule-per-scope `price_rules` with
+  combinable time windows, **minimum-margin guard** (`pin`/`block`, floor precedence
+  product → branch → global), append-only `price_history`, frozen sale-line prices.
+  **83 tests green**.
+- **Days 10–11** — **POS/checkout engine**: scan/search → variant picker → cart →
+  discounts (permissioned + PIN) → age gate → hold/resume → quote→invoice; price frozen
+  at line add and re-validated at pay; stock moves exactly once (FEFO); M-Pesa pending
+  until confirmation. **119 tests green**.
+- **Day 12** — **payment engine** as an independent adapter subsystem (`lib/payments.js`,
+  `lib/mpesa.js`): cash/card/M-Pesa/bank/deni/store-credit, split & partial, deposits,
+  refunds-to-original, idempotent callbacks, provider-failure handling.
+- **Day 13** — **shifts & till control**: open/close with float, expected-cash maths
+  (M-Pesa never touches the drawer), variance, payouts, handover, timeclock.
+- **Day 14** — **returns & exchanges**: RET-# documents, restock to same batch/FEFO,
+  refund-to-original-method (newest-first), store-credit alternative, exchanges with
+  exact price-diff settlement.
+- **Day 15** — **customers & deni**: phone-first profiles, credit limits, cash/M-Pesa
+  repayments, store credit, statements that match the ledger to the shilling.
+- **Days 16–17** — **multi-branch OS**: inter-branch/location transfers (requested →
+  approved → shipped → received, partial, discrepancy, batch lines move with the stock),
+  scheduled/periodic transfer templates, branch visibility hierarchy, branch comparison
+  (rank by sales + margin + shrinkage), branch dashboards. **131 tests green**.
+- **Day 18** — **stock-taking, shrinkage & reconciliation**: full/partial/**blind**
+  counts, reason codes (theft/lost/damage/found/correction…), recount (second count),
+  variance-only moves on approve, approved takes kept as evidence, shrinkage report
+  (by variant/reason/location) with value and top disappearing SKUs.
+- **Day 19** — **expenses & business finance**: expense categories, branch/register/
+  payment-method expenses, cash movements, petty-cash reconciler, **daily sheet and
+  P&L-lite** — `net − COGS − expenses = NOP` ties against independent ledger totals.
+- **Days 20–21** — **reporting & BI**: sales (product/variant/branch/cashier/day/
+  category), margin, slow-moving, dead stock, stock value, reorder (velocity × cover),
+  cashiers, discounts, refunds/voids, cash shortages, petty cash, shrinkage, m-pesa recon;
+  four role dashboards (owner / branch manager / stock manager / cashier); CSV + PDF export.
+- **Days 22–23** — **Kenyan integration layer**: `lib/etims.js` (VSCU adapter —
+  manual/sandbox/live modes, KRA PIN, item-code validation, B2B buyer-PIN > 50k, 48h
+  offline queue, CUIN + QR, credit notes for voids/returns) and `lib/mpesa.js` (Daraja
+  STK, C2B auto-match, B2C refund, sandbox simulate callback, idempotent reconciliation).
+  Production approvals remain external (M-Pesa KYB / KRA certification).
+- **Days 24–25** — **offline-first sync**: `lib/sync.js` — local outbox, idempotent
+  `client_id` pushes, first-ack conflict rule (R-O4), retry with exponential backoff,
+  pull/log/status/recon surfaces, sync-status banner + POS conflict modal.
+  **148 tests green (0 failed)** covering Phases 1–17, including the new Phase 13–17
+  acceptance tests. Also fixed column/schema drift exposed by those tests
+  (`supplier_invoices.branch_id`, `sales.voided_at/void_reason`, sale item `line_discount`
+  in reports, `discount_by`, inactive `returns` aliases, non-aggregate HAVING queries).

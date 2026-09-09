@@ -920,7 +920,11 @@ function migrate(d) {
   // The invoice/payment tables pre-date Phase 5 (Day-1 shape); evolve them additively.
   addCol(d, 'supplier_invoices', 'paid', 'INTEGER NOT NULL DEFAULT 0');
   addCol(d, 'supplier_invoices', 'outstanding', 'INTEGER NOT NULL DEFAULT 0');
+  addCol(d, 'supplier_invoices', 'branch_id', 'INTEGER');
   d.exec("UPDATE supplier_invoices SET outstanding = amount - COALESCE(paid, 0) WHERE status IN ('open', 'partial', 'disputed')");
+  try {
+    d.exec("UPDATE supplier_invoices SET branch_id = (SELECT po.branch_id FROM purchase_orders po WHERE po.id = supplier_invoices.po_id) WHERE branch_id IS NULL");
+  } catch (_) {}
   addCol(d, 'invoice_payments', 'supplier_id', 'INTEGER');
   d.exec(
     `UPDATE invoice_payments SET supplier_id = (SELECT supplier_id FROM supplier_invoices WHERE id = invoice_payments.invoice_id)
@@ -1000,6 +1004,8 @@ function migrate(d) {
   // Phase 7 (Day 10): who approved a discount beyond the cashier's permission on a sale,
   // and the exact variant on each sale line (held sales re-validate + FEFO at payment).
   addCol(d, 'sales', 'discount_by', 'INTEGER');
+  addCol(d, 'sales', 'voided_at', 'TEXT');
+  addCol(d, 'sales', 'void_reason', "TEXT NOT NULL DEFAULT ''");
   addCol(d, 'sale_items', 'variant_id', 'INTEGER');
 
   // Phase 7 (Day 11): sale kind — 'sale' (default), 'quote', or 'invoice' (a quote

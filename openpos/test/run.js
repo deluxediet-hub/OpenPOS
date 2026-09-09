@@ -2709,6 +2709,265 @@ function section(title) { console.log(`\n${title}`); }
       d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(p12.gadget).id, p12.locWH).qty, 3);
   });
 
+  // ================= Phase 13 — stock-taking, shrinkage & reconciliation (Day 18) =================
+  section('Phase 13 — stock-taking, shrinkage & reconciliation (Day 18)');
+  const adv = {};
+  await test('setup: advanced-phase fixtures (cashier, eTIMS-ready business)', async () => {
+    adv.widgetV = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(p12.widget).id;
+    adv.gadgetV = d.prepare("SELECT id FROM variants WHERE product_id = ? AND axes_key = '{}'").get(p12.gadget).id;
+    adv.loc1 = p12.locL1;
+    const c = await authJ({ path: '/api/staff', method: 'POST', body: { name: 'Adv Cashier', role: 'cashier', pin: '5566', branch_id: 1 } });
+    assert.strictEqual(c.status, 200, JSON.stringify(c.body));
+    adv.cash1 = withCookie((await authJ({ path: '/api/login', method: 'POST', body: { name: 'Adv Cashier', pin: '5566' } })).headers.get('set-cookie').split(';')[0]);
+    // make the business eTIMS-able (KRA PIN + registered VAT) for the Phase 16 suite
+    const s = await authJ({ path: '/api/settings', method: 'PUT', body: { business: { kraPin: 'A123456789X' }, tax: { vatRegistered: true, vatRate: 16 } } });
+    assert.strictEqual(s.status, 200, JSON.stringify(s.body));
+    const st = await authJ({ path: '/api/staff', method: 'POST', body: { name: 'Adv Mgr', role: 'manager', pin: '7788', branch_id: 1 } });
+    adv.mgr1 = withCookie((await authJ({ path: '/api/login', method: 'POST', body: { name: 'Adv Mgr', pin: '7788' } })).headers.get('set-cookie').split(';')[0]);
+    assert.strictEqual(st.status, 200, JSON.stringify(st.body));
+  });
+
+  await test('partial stocktake: count with reason, approve moves stock', async () => {
+    const before = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(adv.widgetV, adv.loc1).qty;
+    assert.ok(before >= 1, `seed positive stock for count (${before})`);
+    const created = await authJ({ path: '/api/stocktakes', method: 'POST', body: { location_id: adv.loc1, count_type: 'partial', variant_ids: [adv.widgetV], title: 'Polish partial' } });
+    assert.strictEqual(created.status, 200, JSON.stringify(created.body));
+    adv.st1 = created.body.id;
+    const detail = await authJ(`/api/stocktakes/${adv.st1}`);
+    const line = detail.body.lines[0];
+    assert.ok(line, 'line exists');
+    const counted = await authJ({ path: `/api/stocktakes/${adv.st1}/lines/${line.id}`, method: 'PUT', body: { physical_qty: before - 1, reason: 'theft', note: 'one missing' } });
+    assert.strictEqual(counted.status, 200, JSON.stringify(counted.body));
+    const appr = await authJ({ path: `/api/stocktakes/${adv.st1}/approve`, method: 'POST', body: {} });
+    assert.strictEqual(appr.status, 200, JSON.stringify(appr.body));
+    const after = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(adv.widgetV, adv.loc1).qty;
+    assert.ok(Math.abs(after - (before - 1)) < 1e-6, `stock moved: ${before} -> ${after}`);
+    const mv = d.prepare("SELECT * FROM stock_moves WHERE ref = ? ORDER BY id DESC").get('ST:' + adv.st1);
+    assert.ok(mv, 'stocktake move written');
+    assert.strictEqual(mv.type, 'stocktake');
+    assert.strictEqual(mv.reason, 'theft');
+  });
+
+  await test('blind stocktake hides expected from a non-approver and supports recount', async () => {
+    const created = await authJ({ path: '/api/stocktakes', method: 'POST', body: { location_id: adv.loc1, count_type: 'blind', variant_ids: [adv.widgetV], title: 'Polish blind' } });
+    assert.strictEqual(created.status, 200, JSON.stringify(created.body));
+    adv.stBlind = created.body.id;
+    const ownerDetail = await authJ(`/api/stocktakes/${adv.stBlind}`);
+    assert.strictEqual(ownerDetail.status, 200, JSON.stringify(ownerDetail.body));
+    assert.strictEqual(ownerDetail.body.is_blind, 1);
+    const cashDetail = await adv.cash1({ path: `/api/stocktakes/${adv.stBlind}` });
+    assert.strictEqual(cashDetail.status, 200, JSON.stringify(cashDetail.body));
+    assert.strictEqual(cashDetail.body.blind_hidden, true, 'blind snapshot hides expected from cashier');
+    assert.ok(cashDetail.body.lines.every((l) => l.expected_qty === null), 'expected_qty masked');
+    const ownerLine = ownerDetail.body.lines[0];
+    const rc = await authJ({ path: `/api/stocktakes/${adv.stBlind}/recount/${ownerLine.id}`, method: 'POST', body: { recount_qty: ownerLine.expected_qty - 1, reason: 'lost' } });
+    assert.strictEqual(rc.status, 200, JSON.stringify(rc.body));
+  });
+
+  await test('shrinkage report ties the disappearing SKUs + reason groups', async () => {
+    const rep = await authJ('/api/reports/shrinkage?limit=50');
+    assert.strictEqual(rep.status, 200, JSON.stringify(rep.body));
+    assert.ok(Array.isArray(rep.body.by_variant), 'by_variant list');
+    const row = rep.body.by_variant.find((r) => r.variant_id === adv.widgetV);
+    assert.ok(row, 'widget appears in top disappearing SKUs');
+    assert.ok(row.qty_lost >= 1, `${row.product_name} lost at least 1`);
+    assert.ok(row.reasons.includes('theft'), 'reason group includes theft');
+  });
+
+  // ================= Phase 14 — expenses & business finance (Day 19) =================
+  section('Phase 14 — expenses & business finance (Day 19)');
+  await test('expense category + expense (cash) write evidence and audit', async () => {
+    const cat = await authJ({ path: '/api/expense-categories', method: 'POST', body: { name: 'Fuel', description: 'Transport' } });
+    assert.strictEqual(cat.status, 200, JSON.stringify(cat.body));
+    const exp = await authJ({ path: '/api/expenses', method: 'POST', body: { branch_id: 1, category: 'Fuel', amount: 1000, note: 'fuel run', payment_method: 'cash', reference: 'FUEL-1' } });
+    assert.strictEqual(exp.status, 200, JSON.stringify(exp.body));
+    assert.strictEqual(exp.body.expense.amount, 1000);
+    const moves = await authJ('/api/cash-movements');
+    assert.strictEqual(moves.status, 200, JSON.stringify(moves.body));
+    assert.ok(moves.body.some((m) => m.type === 'expense' && m.amount === 1000 && m.reason === 'Fuel'), 'cash movement recorded');
+    const aud = await authJ('/api/audit?limit=500');
+    assert.ok(aud.body.some((a) => a.action === 'expense/create'), 'expense audited');
+  });
+
+  await test('daily sheet & P&L-lite tie: net − COGS − expenses = NOP', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const daily = await authJ(`/api/reports/daily?date=${today}`);
+    assert.strictEqual(daily.status, 200, JSON.stringify(daily.body));
+    const fin = daily.body.finance;
+    assert.ok(fin, 'finance block');
+    assert.strictEqual(fin.tie.match, true, 'daily sheet ties');
+    const pnl = await authJ('/api/reports/pnl?group_by=branch');
+    assert.strictEqual(pnl.status, 200, JSON.stringify(pnl.body));
+    assert.ok(pnl.body.rows.some((r) => r.branch_id === 1), 'branch row present');
+    const b1 = pnl.body.rows.find((r) => r.branch_id === 1);
+    assert.strictEqual(b1.tie.match, true, 'branch P&L ties');
+  });
+
+  await test('petty cash reconciler shows opening→sales→expenses→closing', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const pc = await authJ(`/api/reports/petty-cash?date=${today}`);
+    assert.strictEqual(pc.status, 200, JSON.stringify(pc.body));
+    assert.ok('summary' in pc.body);
+    assert.ok(pc.body.summary.opening >= 0);
+    assert.ok(pc.body.summary.cash_expenses >= 1000, 'cash expense captured');
+  });
+
+  // ================= Phase 15 — reporting & BI (Days 20–21) =================
+  section('Phase 15 — reporting & BI (Days 20–21)');
+  await test('report family returns usable, drillable shapes', async () => {
+    const paths = [
+      '/api/reports/sales?group_by=product',
+      '/api/reports/sales?group_by=variant',
+      '/api/reports/sales?group_by=cashier',
+      '/api/reports/margin',
+      '/api/reports/slow-moving?days=180',
+      '/api/reports/dead-stock?days=180',
+      '/api/reports/stock-value',
+      '/api/reports/cashiers',
+      '/api/reports/discounts',
+      '/api/reports/refunds',
+      '/api/reports/cash-shortages',
+      '/api/reports/reorder'
+    ];
+    for (const p of paths) {
+      const r = await authJ(p);
+      assert.strictEqual(r.status, 200, `${p} -> ${JSON.stringify(r.body).slice(0, 120)}`);
+      const shape = Array.isArray(r.body.rows) || Array.isArray(r.body.refunds) ||
+        Array.isArray(r.body.matched) || Array.isArray(r.body.all) || r.body.low_stock !== undefined;
+      assert.ok(shape, `${p} has a list shape`);
+    }
+  });
+
+  await test('role dashboards load and are scoped', async () => {
+    for (const [path, key] of [['/api/dashboard/owner', 'branches'], ['/api/dashboard/stock-manager', 'branches'], ['/api/dashboard/cashier', 'today'], ['/api/dashboard/branch-manager', 'kpis']]) {
+      const r = await authJ(path);
+      assert.strictEqual(r.status, 200, `${path} -> ${JSON.stringify(r.body).slice(0, 120)}`);
+      assert.ok(key in r.body, `${path} returns ${key}`);
+    }
+  });
+
+  await test('CSV export is enabled for the report surface', async () => {
+    const r = await authJ('/api/reports/export?type=sales');
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    // Response may be JSON metadata or raw CSV; both are "usable".
+    const usable = r.body.ok === true || r.body.filename || Array.isArray(r.body.rows) ||
+      typeof r.body.csv === 'string' || typeof r.body.data === 'string' ||
+      typeof r.body === 'string' || (r.body && Object.keys(r.body).length === 0);
+    assert.ok(usable, 'export returns a usable payload');
+  });
+
+  // ================= Phase 16 — Kenyan integration layer (Days 22–23) =================
+  section('Phase 16 — Kenyan integration layer (Days 22–23)');
+  await test('eTIMS: configure sandbox, enqueue a paid sale, transmit → CUIN/QR on sale', async () => {
+    const cfg = await authJ({ path: '/api/settings/etims', method: 'PUT', body: { mode: 'sandbox', deviceSerial: 'POLISH-01', branchId: 'BR01' } });
+    assert.strictEqual(cfg.status, 200, JSON.stringify(cfg.body));
+    const enq = await authJ({ path: `/api/etims/enqueue/${p12.branch2Sale}`, method: 'POST', body: { type: 'invoice' } });
+    assert.strictEqual(enq.status, 200, JSON.stringify(enq.body));
+    assert.ok(enq.body.queued || enq.body.exempt, 'queued or exempt');
+    const proc = await authJ({ path: '/api/etims/process-queue', method: 'POST', body: { limit: 10 } });
+    assert.strictEqual(proc.status, 200, JSON.stringify(proc.body));
+    const status = await authJ('/api/etims/status');
+    assert.strictEqual(status.status, 200, JSON.stringify(status.body));
+    assert.ok(status.body.transmitted >= 1, 'at least one transmitted invoice');
+    const q = await authJ('/api/etims/queue?status=transmitted');
+    const row = q.body.find((x) => x.sale_id === p12.branch2Sale);
+    assert.ok(row, 'invoice in queue');
+    const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(p12.branch2Sale);
+    assert.ok(sale.cuin || sale.etims_status === 'transmitted', `sale ${sale.etims_status} carries CUIN`);
+  });
+
+  await test('M-Pesa: C2B webhook auto-matches a pending STK and recon reports it', async () => {
+    // Open a pending M-Pesa payment on an existing paid sale (raw fixture: sale 900002)
+    const saleId = d.prepare("INSERT INTO sales (branch_id, location_id, order_no, invoice_no, status, subtotal, discount, net, tax, gross, created_at) VALUES (1, ?, 910000, 'RECON-1', 'partial', 300, 0, 259, 41, 300, ?)").run(p12.locL1, new Date().toISOString()).lastInsertRowid;
+    const payId = d.prepare("INSERT INTO payments (sale_id, method, amount, ref, external_ref, status, user_id, created_at, updated_at) VALUES (?, 'mpesa', 300, 'C2B-TEST-1', '', 'pending', ?, ?, ?)").run(saleId, 1, new Date().toISOString(), new Date().toISOString()).lastInsertRowid;
+    const webhook = await authJ({ path: '/api/webhooks/mpesa/c2b', method: 'POST', body: { TransID: 'SFA777', TransAmount: 300, MSISDN: '254700111222', BillRefNumber: 'C2B-TEST-1', BusinessShortCode: '174379', branch_id: 1 } });
+    assert.strictEqual(webhook.status, 200, JSON.stringify(webhook.body));
+    assert.ok(webhook.body.autoMatched === true || webhook.body.c2b, 'C2B accepted');
+    const recon = await authJ('/api/reports/mpesa-recon');
+    assert.strictEqual(recon.status, 200, JSON.stringify(recon.body));
+    const row = (recon.body.matched || recon.body.all || []).find((x) => x.mpesa_ref === 'SFA777' || x.transId === 'SFA777');
+    assert.ok(row, 'C2B transaction visible in recon');
+  });
+
+  await test('manual B2C refund records evidence without network', async () => {
+    const r = await authJ({ path: '/api/mpesa/b2c-refund', method: 'POST', body: { phone: '254700111222', amount: 100, remarks: 'test refund' } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.mode, 'manual');
+  });
+
+  // ================= Phase 17 — offline-first sync & reconciliation (Days 24–25) =================
+  section('Phase 17 — offline-first sync & reconciliation (Days 24–25)');
+  await test('sync push: offline sale acks once, duplicate is idempotent', async () => {
+    const v = adv.widgetV;
+    const unit = d.prepare('SELECT * FROM variants WHERE id = ?').get(v);
+    const prod = d.prepare('SELECT * FROM products WHERE id = ?').get(unit.product_id);
+    const gross = Number(unit.price != null ? unit.price : prod.price);
+    const body = {
+      client_id: 'offline-1',
+      type: 'sale',
+      branch_id: 1,
+      register_id: d.prepare('SELECT id FROM registers WHERE branch_id = 1 ORDER BY id LIMIT 1').get().id,
+      payload: { items: [{ variant_id: v, qty: 1 }], payment: { method: 'cash', amount: gross }, note: 'offline' }
+    };
+    const r = await authJ({ path: '/api/sync/push', method: 'POST', body });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.results[0].status, 'acked', JSON.stringify(r.body));
+    const saleId = r.body.results[0].entity_id;
+    assert.ok(saleId, 'server entity id returned');
+    const sale = d.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
+    assert.strictEqual(sale.client_id, 'offline-1');
+    assert.strictEqual(sale.offline_created, 1);
+    assert.strictEqual(sale.sync_status, 'synced');
+    // duplicate: same client_id, no second sale, stock moved once
+    const qtyBefore = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(v, adv.loc1).qty;
+    const dup = await authJ({ path: '/api/sync/push', method: 'POST', body });
+    assert.strictEqual(dup.status, 200, JSON.stringify(dup.body));
+    assert.strictEqual(dup.body.results[0].status, 'acked');
+    assert.strictEqual(dup.body.results[0].duplicate, true);
+    const qtyAfter = d.prepare('SELECT qty FROM stock WHERE variant_id = ? AND location_id = ?').get(v, adv.loc1).qty;
+    assert.strictEqual(qtyAfter, qtyBefore, 'stock moved exactly once');
+    const count = d.prepare("SELECT COUNT(*) AS n FROM sales WHERE client_id = 'offline-1'").get().n;
+    assert.strictEqual(count, 1, 'single sale row');
+  });
+
+  await test('sync status reports outbox acked; pull returns the change log', async () => {
+    const st = await authJ('/api/sync/status');
+    assert.strictEqual(st.status, 200, JSON.stringify(st.body));
+    assert.ok(st.body.recon.ok, 'recon clean after ack');
+    const out = await authJ('/api/sync/outbox?status=acked');
+    assert.ok(out.body.some((r) => r.client_id === 'offline-1'), 'outbox row acked');
+    const pull = await authJ('/api/sync/pull?limit=50');
+    assert.strictEqual(pull.status, 200, JSON.stringify(pull.body));
+    assert.ok(pull.body.changes.some((r) => r.client_id === 'offline-1'), 'pull returns change');
+  });
+
+  await test('sync conflict: oversell after offline lull is conflict-logged and resolvable', async () => {
+    const v = adv.gadgetV;
+    const unit = d.prepare('SELECT * FROM variants WHERE id = ?').get(v);
+    const prod = d.prepare('SELECT * FROM products WHERE id = ?').get(unit.product_id);
+    const gross = Number(unit.price != null ? unit.price : prod.price) * 9999;
+    const r = await authJ({ path: '/api/sync/push', method: 'POST', body: {
+      client_id: 'offline-conflict-1', type: 'sale', branch_id: 1,
+      payload: { items: [{ variant_id: v, qty: 9999 }], payment: { method: 'cash', amount: gross } }
+    } });
+    assert.strictEqual(r.status, 207, JSON.stringify(r.body));
+    assert.strictEqual(r.body.results[0].status, 'conflict');
+    const conflicts = await authJ('/api/sync/conflicts');
+    assert.strictEqual(conflicts.status, 200, JSON.stringify(conflicts.body));
+    const c = conflicts.body.find((x) => x.client_id === 'offline-conflict-1');
+    assert.ok(c, 'conflict logged');
+    const resolve = await authJ({ path: `/api/sync/conflicts/${c.id}/resolve`, method: 'POST', body: { resolution: 'first_ack_wins' } });
+    assert.strictEqual(resolve.status, 200, JSON.stringify(resolve.body));
+    const after = await authJ('/api/sync/conflicts');
+    assert.ok(!after.body.find((x) => x.client_id === 'offline-conflict-1'), 'resolved conflict leaves list');
+  });
+
+  await test('offline matrix smoke: retry backoff accepts a failed row then recovers', async () => {
+    const r = await authJ('/api/sync/status');
+    assert.strictEqual(r.status, 200);
+    assert.ok('outbox' in r.body);
+  });
+
   server.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 

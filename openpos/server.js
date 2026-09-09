@@ -1,8 +1,10 @@
 'use strict';
 // ---------------------------------------------------------------------------
 // OpenPOS v2 — server (Express + built-in SQLite, no build step).
-// Phase 2: business/tenancy foundation — locations, registers, departments,
-// capabilities (R-C), fine-grained permissions, solo-first onboarding.
+// Core engines (product / stock / pricing / sales / payments / shifts /
+// purchases / transfers) plus the Kenyan compliance + offline layer
+// (eTIMS adapter, M-Pesa Daraja adapter, offline-first sync). Everything is
+// capability-gated so a single-till shop never meets an ERP concept (R-C).
 // ---------------------------------------------------------------------------
 const path = require('path');
 const crypto = require('crypto');
@@ -421,7 +423,7 @@ function createApp(d) {
   app.use(express.static(path.join(__dirname, 'public')));
 
   // ---- health / status ------------------------------------------------------
-  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 12 }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'openpos-v2', phase: 17, compliance: 'etims+mpesa', offline: true }));
 
   app.get('/api/setup/status', (req, res) => {
     res.json({
@@ -3819,7 +3821,7 @@ function createApp(d) {
             upsertStock(d, row.variant_id, m.location_id, -m.qty);
           }
         }
-        d.prepare("UPDATE sales SET status = 'voided' WHERE id = ?").run(sale.id);
+        d.prepare("UPDATE sales SET status = 'voided', voided_at = ?, void_reason = ? WHERE id = ?").run(new Date().toISOString(), note, sale.id);
         if (hadStock) {
           d.prepare("UPDATE payments SET status = 'refunded', refunded = amount WHERE sale_id = ? AND status = 'confirmed'").run(sale.id);
           d.prepare("UPDATE payments SET status = 'cancelled', note = 'voided' WHERE sale_id = ? AND status = 'pending'").run(sale.id);
@@ -5983,7 +5985,7 @@ function createApp(d) {
     // Customer balances
     const custOutstanding = d.prepare(
       `SELECT c.id, c.name, c.phone, COALESCE((SELECT SUM(CASE WHEN type='credit_sale' THEN amount WHEN type='repayment' THEN -amount ELSE 0 END) FROM customer_ledger WHERE customer_id = c.id),0) AS outstanding
-         FROM customers c WHERE c.active = 1 AND (c.branch_id IN (${branches.map(() => '?').join(',')}) OR c.branch_id IS NULL)
+         FROM customers c WHERE (c.branch_id IN (${branches.map(() => '?').join(',')}) OR c.branch_id IS NULL)
          ORDER BY outstanding DESC LIMIT 20`
     ).all(...branches).filter((c) => c.outstanding !== 0);
 
@@ -6168,7 +6170,7 @@ function createApp(d) {
       const q = `
         SELECT p.id AS product_id, p.name AS product_name, p.sku,
                SUM(si.qty) AS qty, COUNT(DISTINCT s.id) AS orders,
-               SUM(si.gross) AS gross, SUM(si.discount) AS discount, SUM(si.net) AS net,
+               SUM(si.gross) AS gross, SUM(si.line_discount) AS discount, SUM(si.net) AS net,
                SUM(si.qty * COALESCE(v.cost, p.cost, 0)) AS cogs,
                SUM(si.gross - si.qty * COALESCE(v.cost, p.cost, 0)) AS margin
         FROM sale_items si JOIN sales s ON s.id = si.sale_id
@@ -6188,7 +6190,7 @@ function createApp(d) {
       const q = `
         SELECT v.id AS variant_id, p.id AS product_id, p.name AS product_name, v.name AS variant_name,
                SUM(si.qty) AS qty, COUNT(DISTINCT s.id) AS orders,
-               SUM(si.gross) AS gross, SUM(si.discount) AS discount, SUM(si.net) AS net,
+               SUM(si.gross) AS gross, SUM(si.line_discount) AS discount, SUM(si.net) AS net,
                SUM(si.qty * COALESCE(v.cost, p.cost, 0)) AS cogs,
                SUM(si.gross - si.qty * COALESCE(v.cost, p.cost, 0)) AS margin
         FROM sale_items si JOIN sales s ON s.id = si.sale_id
@@ -6238,7 +6240,7 @@ function createApp(d) {
       const q = `
         SELECT c.id AS category_id, c.name AS category_name,
                SUM(si.qty) AS qty, COUNT(DISTINCT s.id) AS orders,
-               SUM(si.gross) AS gross, SUM(si.discount) AS discount, SUM(si.net) AS net
+               SUM(si.gross) AS gross, SUM(si.line_discount) AS discount, SUM(si.net) AS net
         FROM sale_items si JOIN sales s ON s.id = si.sale_id
         JOIN products p ON p.id = si.product_id
         LEFT JOIN categories c ON c.id = p.category_id
@@ -6249,7 +6251,7 @@ function createApp(d) {
     } else {
       return res.status(400).json({ error: 'group_by must be product|variant|branch|cashier|day|category' });
     }
-    res.json({ from, to, branches, group_by: groupBy, rows, drill: { product_id, cashier_id } });
+    res.json({ from, to, branches, group_by: groupBy, rows, drill: { product_id: productId, cashier_id: cashierId } });
   });
 
   app.get('/api/reports/margin', me, can('reports.view'), (req, res) => {
@@ -6295,13 +6297,14 @@ function createApp(d) {
     const locPh = branches.length ? d.prepare(`SELECT id FROM locations WHERE branch_id IN (${ph})`).all(...branches).map((r)=>r.id) : [];
     const locIn = locPh.length ? locPh.map(() => '?').join(',') : 'SELECT 0 WHERE 0';
     const q = `
-      SELECT p.id AS product_id, p.name AS product_name, p.sku,
-             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
-             COALESCE((SELECT SUM(st.qty * COALESCE(v.cost, p.cost,0)) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_value,
-             COALESCE((SELECT SUM(si.qty) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id AND s.branch_id IN (${ph}) AND s.created_at >= ?),0) AS sold_last_${days}d,
-             (SELECT MAX(s.created_at) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id AND s.branch_id IN (${ph})) AS last_sale_at
-      FROM products p WHERE p.active = 1
-      HAVING stock_qty > 0 AND sold_last_${days}d = 0
+      SELECT * FROM (
+        SELECT p.id AS product_id, p.name AS product_name, p.sku,
+               COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
+               COALESCE((SELECT SUM(st.qty * COALESCE(v.cost, p.cost,0)) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_value,
+               COALESCE((SELECT SUM(si.qty) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id AND s.branch_id IN (${ph}) AND s.created_at >= ?),0) AS sold_last,
+               (SELECT MAX(s.created_at) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id AND s.branch_id IN (${ph})) AS last_sale_at
+        FROM products p WHERE p.active = 1
+      ) WHERE stock_qty > 0 AND sold_last = 0
       ORDER BY stock_value DESC LIMIT 200
     `;
     // Build args: locPh for first subquery, locPh for second, branches for sold, branches for last_sale
@@ -6321,12 +6324,13 @@ function createApp(d) {
     const locIds = d.prepare(`SELECT id FROM locations WHERE branch_id IN (${ph})`).all(...branches).map((r)=>r.id);
     const locIn = locIds.length ? locIds.map(() => '?').join(',') : 'SELECT 0 WHERE 0';
     const q = `
-      SELECT p.id AS product_id, p.name AS product_name,
-             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
-             COALESCE((SELECT SUM(st.qty * COALESCE(v.cost, p.cost,0)) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_value,
-             (SELECT MAX(sm.created_at) FROM stock_moves sm WHERE sm.product_id = p.id AND sm.branch_id IN (${ph}) AND sm.type = 'sale') AS last_consumption_at
-      FROM products p WHERE p.active = 1
-      HAVING stock_qty > 0 AND (last_consumption_at IS NULL OR last_consumption_at < ?)
+      SELECT * FROM (
+        SELECT p.id AS product_id, p.name AS product_name,
+               COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
+               COALESCE((SELECT SUM(st.qty * COALESCE(v.cost, p.cost,0)) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_value,
+               (SELECT MAX(sm.created_at) FROM stock_moves sm WHERE sm.product_id = p.id AND sm.branch_id IN (${ph}) AND sm.type = 'sale') AS last_consumption_at
+        FROM products p WHERE p.active = 1
+      ) WHERE stock_qty > 0 AND (last_consumption_at IS NULL OR last_consumption_at < ?)
       ORDER BY stock_value DESC LIMIT 200
     `;
     const args = [...locIds, ...locIds, ...branches, cutoff];
@@ -6367,7 +6371,7 @@ function createApp(d) {
              COUNT(DISTINCT s.id) AS orders, SUM(s.gross) AS gross, SUM(s.discount) AS discount, SUM(s.net) AS net,
              SUM(CASE WHEN s.status = 'voided' THEN 1 ELSE 0 END) AS voids,
              COALESCE((SELECT COUNT(*) FROM returns r JOIN sales rs ON rs.id = r.sale_id WHERE rs.cashier_id = s.cashier_id AND r.created_at >= ? AND r.created_at <= ?),0) AS returns_count,
-             COALESCE((SELECT SUM(r.refund_amount) FROM returns r JOIN sales rs ON rs.id = r.sale_id WHERE rs.cashier_id = s.cashier_id AND r.created_at >= ? AND r.created_at <= ?),0) AS refunds
+             COALESCE((SELECT SUM(r.total) FROM returns r JOIN sales rs ON rs.id = r.sale_id WHERE rs.cashier_id = s.cashier_id AND r.created_at >= ? AND r.created_at <= ?),0) AS refunds
       FROM sales s LEFT JOIN users u ON u.id = s.cashier_id
       WHERE s.branch_id IN (${ph}) AND s.created_at >= ? AND s.created_at <= ?
       GROUP BY s.cashier_id ORDER BY gross DESC
@@ -6389,7 +6393,7 @@ function createApp(d) {
       SELECT s.id AS sale_id, s.branch_id, b.name AS branch_name, s.cashier_id, u.name AS cashier_name,
              s.gross, s.discount, s.net, s.created_at,
              CASE WHEN s.gross > 0 THEN (s.discount*100.0/s.gross) ELSE 0 END AS discount_pct,
-             s.discount_approver_id
+             s.discount_by
       FROM sales s JOIN branches b ON b.id = s.branch_id LEFT JOIN users u ON u.id = s.cashier_id
       WHERE s.branch_id IN (${ph}) AND s.status IN ('paid','partial') AND s.discount > 0 AND s.created_at >= ? AND s.created_at <= ?
       ORDER BY discount_pct DESC LIMIT 200
@@ -6412,9 +6416,9 @@ function createApp(d) {
     const { from, to } = parseRange(req);
     const ph = branches.map(() => '?').join(',');
     const rows = d.prepare(`
-      SELECT r.id, r.sale_id, r.refund_amount, r.reason, r.created_at, r.created_by, u.name AS created_by_name,
+      SELECT r.id, r.sale_id, r.total, r.reason, r.created_at, r.user_id AS created_by, u.name AS created_by_name,
              s.branch_id, s.cashier_id
-      FROM returns r JOIN sales s ON s.id = r.sale_id LEFT JOIN users u ON u.id = r.created_by
+      FROM returns r JOIN sales s ON s.id = r.sale_id LEFT JOIN users u ON u.id = r.user_id
       WHERE s.branch_id IN (${ph}) AND r.created_at >= ? AND r.created_at <= ?
       ORDER BY r.created_at DESC LIMIT 200
     `).all(...branches, from, to);
@@ -6463,12 +6467,13 @@ function createApp(d) {
     // velocity from last 30 days
     const from30 = new Date(Date.now() - 30*86400000).toISOString();
     const rows = d.prepare(`
-      SELECT p.id AS product_id, p.name AS product_name, p.reorder_level, p.supplier_id, s.name AS supplier_name,
-             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
-             COALESCE((SELECT SUM(si.qty) FROM sale_items si JOIN sales sa ON sa.id = si.sale_id WHERE si.product_id = p.id AND sa.branch_id IN (${ph}) AND sa.created_at >= ?),0) / 30.0 AS velocity_per_day
-      FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
-      WHERE p.active = 1
-      HAVING stock_qty <= COALESCE(p.reorder_level, 0) OR stock_qty < velocity_per_day * ?
+      SELECT * FROM (
+        SELECT p.id AS product_id, p.name AS product_name, p.reorder_level, p.supplier_id, s.name AS supplier_name,
+               COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
+               COALESCE((SELECT SUM(si.qty) FROM sale_items si JOIN sales sa ON sa.id = si.sale_id WHERE si.product_id = p.id AND sa.branch_id IN (${ph}) AND sa.created_at >= ?),0) / 30.0 AS velocity_per_day
+        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
+        WHERE p.active = 1
+      ) WHERE stock_qty <= reorder_level OR stock_qty < velocity_per_day * ?
       ORDER BY velocity_per_day DESC LIMIT 100
     `).all(...locIds, ...branches, from30, daysCover);
     const enriched = rows.map((r) => ({
@@ -6553,10 +6558,11 @@ function createApp(d) {
       GROUP BY p.id ORDER BY gross DESC LIMIT 10
     `).all(branchId, from, to);
     const lowStock = d.prepare(`
-      SELECT p.id, p.name, p.reorder_level,
-             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (SELECT id FROM locations WHERE branch_id = ?)),0) AS stock
-      FROM products p WHERE p.active = 1 AND p.reorder_level > 0
-      HAVING stock <= p.reorder_level ORDER BY stock ASC LIMIT 15
+      SELECT * FROM (
+        SELECT p.id, p.name, p.reorder_level,
+               COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (SELECT id FROM locations WHERE branch_id = ?)),0) AS stock
+        FROM products p WHERE p.active = 1 AND p.reorder_level > 0
+      ) WHERE stock <= reorder_level ORDER BY stock ASC LIMIT 15
     `).all(branchId);
     res.json({
       branch_id: branchId,
@@ -6576,18 +6582,20 @@ function createApp(d) {
     const locIn = locIds.length ? locIds.map(() => '?').join(',') : 'SELECT 0 WHERE 0';
     const stockValue = locIds.length ? d.prepare(`SELECT COALESCE(SUM(st.qty * COALESCE(v.cost,p.cost,0)),0) AS v, COALESCE(SUM(st.qty),0) AS qty FROM stock st JOIN variants v ON v.id = st.variant_id JOIN products p ON p.id = v.product_id WHERE st.location_id IN (${locIn})`).get(...locIds) : { v: 0, qty: 0 };
     const lowStock = d.prepare(`
-      SELECT p.id, p.name, p.reorder_level,
-             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock
-      FROM products p WHERE p.active = 1 AND p.reorder_level > 0
-      HAVING stock <= p.reorder_level ORDER BY stock ASC LIMIT 20
+      SELECT * FROM (
+        SELECT p.id, p.name, p.reorder_level,
+               COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock
+        FROM products p WHERE p.active = 1 AND p.reorder_level > 0
+      ) WHERE stock <= reorder_level ORDER BY stock ASC LIMIT 20
     `).all(...locIds);
     const deadStock = d.prepare(`
-      SELECT p.id, p.name,
-             COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
-             COALESCE((SELECT SUM(st.qty * COALESCE(v.cost,p.cost,0)) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_value,
-             (SELECT MAX(sm.created_at) FROM stock_moves sm WHERE sm.product_id = p.id AND sm.branch_id IN (${ph}) AND sm.type='sale') AS last_sale
-      FROM products p WHERE p.active = 1
-      HAVING stock_qty > 0 AND (last_sale IS NULL OR last_sale < ?)
+      SELECT * FROM (
+        SELECT p.id, p.name,
+               COALESCE((SELECT SUM(st.qty) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_qty,
+               COALESCE((SELECT SUM(st.qty * COALESCE(v.cost,p.cost,0)) FROM variants v JOIN stock st ON st.variant_id = v.id WHERE v.product_id = p.id AND st.location_id IN (${locIn})),0) AS stock_value,
+               (SELECT MAX(sm.created_at) FROM stock_moves sm WHERE sm.product_id = p.id AND sm.branch_id IN (${ph}) AND sm.type='sale') AS last_sale
+        FROM products p WHERE p.active = 1
+      ) WHERE stock_qty > 0 AND (last_sale IS NULL OR last_sale < ?)
       ORDER BY stock_value DESC LIMIT 20
     `).all(...locIds, ...locIds, ...branches, new Date(Date.now() - 60*86400000).toISOString());
     const shrinkage30 = d.prepare(`SELECT COALESCE(SUM(-qty*unit_cost),0) AS total, COUNT(*) AS moves FROM stock_moves WHERE branch_id IN (${ph}) AND (type='damage' OR type='expiry_writeoff' OR (type='adjustment' AND qty<0)) AND created_at >= ?`).get(...branches, new Date(Date.now() - 30*86400000).toISOString());
@@ -6597,9 +6605,9 @@ function createApp(d) {
                   WHEN julianday('now') - julianday(b.expiry_date) < -30 THEN 'mid'
                   WHEN julianday('now') - julianday(b.expiry_date) < 0 THEN 'near_expiry'
                   ELSE 'expired' END AS bucket,
-             COUNT(*) AS lots, SUM(bl.qty) AS qty, SUM(bl.qty * COALESCE(v.cost,p.cost,0)) AS value
-      FROM batch_lots bl JOIN batches b ON b.id = bl.batch_id JOIN variants v ON v.id = bl.variant_id JOIN products p ON p.id = v.product_id
-      WHERE bl.location_id IN (${locIn}) AND bl.qty > 0
+             COUNT(*) AS lots, SUM(b.qty) AS qty, SUM(b.qty * COALESCE(v.cost,p.cost,0)) AS value
+      FROM batches b JOIN variants v ON v.id = b.variant_id JOIN products p ON p.id = v.product_id
+      WHERE b.location_id IN (${locIn}) AND b.qty > 0
       GROUP BY bucket
     `).all(...locIds);
     res.json({ branches, stock_value: stockValue, low_stock: lowStock, dead_stock: deadStock, shrinkage_30d: shrinkage30, pending_transfers: pendingTransfers, ageing });
@@ -6610,12 +6618,12 @@ function createApp(d) {
     const todayIso = new Date(new Date().setHours(0,0,0,0)).toISOString();
     const mySales = d.prepare(`SELECT COUNT(*) AS orders, COALESCE(SUM(gross),0) AS gross, COALESCE(SUM(net),0) AS net, COALESCE(SUM(discount),0) AS discount FROM sales WHERE cashier_id = ? AND status IN ('paid','partial') AND created_at >= ?`).get(user.id, todayIso);
     const myVoids = d.prepare(`SELECT COUNT(*) AS n FROM sales WHERE cashier_id = ? AND status='voided' AND voided_at >= ?`).get(user.id, todayIso).n;
-    const myReturns = d.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(r.refund_amount),0) AS total FROM returns r JOIN sales s ON s.id = r.sale_id WHERE s.cashier_id = ? AND r.created_at >= ?`).get(user.id, todayIso);
+    const myReturns = d.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(r.total),0) AS total FROM returns r JOIN sales s ON s.id = r.sale_id WHERE s.cashier_id = ? AND r.created_at >= ?`).get(user.id, todayIso);
     const openShift = d.prepare(`SELECT * FROM shifts WHERE cashier_id = ? AND status='open' ORDER BY opened_at DESC LIMIT 1`).get(user.id);
     let expected = null;
     if (openShift) {
       const cashIn = d.prepare(`SELECT COALESCE(SUM(p.amount),0) AS total FROM payments p JOIN sales s ON s.id = p.sale_id WHERE s.shift_id = ? AND p.method='cash' AND p.status='confirmed'`).get(openShift.id).total;
-      const refunds = d.prepare(`SELECT COALESCE(SUM(r.refund_amount),0) AS total FROM returns r JOIN sales s ON s.id = r.sale_id WHERE s.shift_id = ?`).get(openShift.id).total;
+      const refunds = d.prepare(`SELECT COALESCE(SUM(r.total),0) AS total FROM returns r JOIN sales s ON s.id = r.sale_id WHERE s.shift_id = ?`).get(openShift.id).total;
       const payouts = d.prepare(`SELECT COALESCE(SUM(amount),0) AS total FROM shift_payouts WHERE shift_id = ?`).get(openShift.id).total;
       const deposits = d.prepare(`SELECT COALESCE(SUM(amount),0) AS total FROM deposits WHERE shift_id = ?`).get(openShift.id).total;
       expected = openShift.float_open + cashIn - refunds - payouts - deposits;
@@ -6677,7 +6685,7 @@ function createApp(d) {
       columns = ['product_id','product_name','qty','orders','gross','discount','net','cogs','margin'];
       rows = d.prepare(`
         SELECT p.id AS product_id, p.name AS product_name, SUM(si.qty) AS qty, COUNT(DISTINCT s.id) AS orders,
-               SUM(si.gross) AS gross, SUM(si.discount) AS discount, SUM(si.net) AS net,
+               SUM(si.gross) AS gross, SUM(si.line_discount) AS discount, SUM(si.net) AS net,
                SUM(si.qty * COALESCE(v.cost,p.cost,0)) AS cogs,
                SUM(si.gross - si.qty * COALESCE(v.cost,p.cost,0)) AS margin
         FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN products p ON p.id = si.product_id LEFT JOIN variants v ON v.id = si.variant_id
@@ -7616,7 +7624,7 @@ if (require.main === module) {
   auth.pruneSessions(db);
   app.listen(PORT, '0.0.0.0', () => {
     const s = dbm.getSetting(db, 'business', {});
-    console.log(`OpenPOS v2 (Phase 12 — multi-branch)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
+    console.log(`OpenPOS v2 (Phase 17 — offline-first + eTIMS/M-Pesa)  ·  ${s.name || 'fresh install — run onboarding'}  ·  http://0.0.0.0:${PORT}`);
   });
 }
 
